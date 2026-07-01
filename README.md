@@ -1,33 +1,60 @@
 # WireSockUI
 
-> **Planned Archival Notice**  
-> This repository is no longer actively maintained and will soon be archived. No further updates or support are planned.  
-> We recommend transitioning to [WireSock Secure Connect](https://wiresock.net/wiresock-vpn-client/download), which includes a new UI offering all the features previously available in WireSockUI (plus additional enhancements).  
->
-> Thank you for your continued support!
+WireSockUI is a lightweight WinForms interface for managing WireSock tunnels through the WireSock SDK `wgbooster.dll` API. It is intended for installations that provide the driver, the C++ CLI/service components, and `wgbooster.dll` directly.
 
-## Introduction
-WireSockUI is a graphical user interface (GUI) designed to simplify the setup and management of the WireSock VPN Client. It provides a convenient way to configure tunnels, manage connections, and monitor status without the need to interact with command-line tools directly.
+WireSockUI does not talk to the newer WireSock Secure Connect service API. Keep using this project when you need the direct SDK/DLL integration model.
 
-## Features
-- **Easy Setup**: Quickly configure WireSock VPN tunnels and settings.
-- **Connection Management**: Enable or disable tunnels with a single click.
-- **Logging & Status**: View real-time connection logs and current status information.
-- **Minimal Resource Usage**: Designed to be lightweight and efficient.
+## Requirements
 
-## Getting Started
-1. **Download the latest release** from the [Releases](https://github.com/wiresock/WireSockUI/releases) page.
-2. **Install & Run**: Follow the installation prompts. Once installed, run the application to access the WireSockUI dashboard.
-3. **Configure**: Provide your VPN server details, credentials, and any custom settings. Save your configuration, then start or stop tunnels as needed.
+- Windows with a matching-architecture WireSock SDK installation.
+- `wgbooster.dll` available next to `WireSockUI.exe` or installed through the WireSock SDK/minimal installer.
+- The WireSock driver installed and usable by the current system.
+- Administrator privileges when the selected tunnel mode or driver operations require elevation.
 
-## Transition to WireSock Secure Connect
-Since WireSockUI is no longer maintained, we recommend moving to [WireSock Secure Connect], which offers:
-- A modern, user-friendly interface.
-- Continued development and support.
-- All existing WireSockUI features, plus additional enhancements and improvements.
+At startup WireSockUI looks for `wgbooster.dll` in this order:
 
-## Contributing
-While new contributions are no longer being merged into this project, we appreciate all previous community involvement. If you have any suggestions or improvements, please consider directing them to [WireSock Secure Connect].
+1. The application directory.
+2. Directories already present on the process `PATH`.
+3. WireSock Secure Connect SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect`.
+4. WireSock Secure Connect Pro SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect Pro`.
+5. The legacy WireSock VPN Client registry location under `HKLM\SOFTWARE\NTKernelResources\WinpkFilterForVPNClient`.
+
+For each registered install location it checks `sdk`, `bin`, and the install root. The discovered directory is added to the process `PATH` so the native library can be loaded without changing the machine-wide environment.
+
+## Configuration Notes
+
+WireSock-specific directives may use the current SDK comment-extension syntax:
+
+```ini
+#@ws:AllowedApps = app.exe
+#@ws:DisallowedIPs = 192.168.1.0/24
+#@ws:VirtualAdapterMode = false
+#@ws:BypassLanTraffic = false
+#@ws:Socks5ProxyAllTraffic = false
+```
+
+Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK fields such as script hooks, masking parameters, SOCKS5 settings, `BypassLanTraffic`, and profile-level `VirtualAdapterMode` while preserving the file-based profile workflow.
+
+## Compatibility Notes
+
+- The native `wgbooster.dll` ABI is expected to match the current SDK headers, including log levels and `drop_tunnel(..., preserve_network_lock)`.
+- `Any CPU` builds disable 32-bit preference, and the solution includes x64 mappings for direct use with the common 64-bit SDK install.
+- WireSockUI uses the same global direct-client event name as the C++ CLI/service to avoid running side by side with another direct SDK tunnel owner.
+- The newer WireSock Secure Connect service stack is intentionally out of scope for this project.
+
+## Building
+
+```powershell
+dotnet build WireSockUI.sln
+dotnet build WireSockUI.sln -p:Platform=x64
+```
+
+## Remaining Runtime Risks
+
+- A clean build does not prove that the installed driver and SDK DLL are present or compatible on the target machine.
+- Tunnel start/stop still depends on driver state, Windows networking permissions, and elevation.
+- There is no automated test project in this repository yet; compatibility is currently guarded by build checks and focused validation logic.
 
 ## License
-This project is licensed under the [MIT License](LICENSE). Please see the LICENSE file for more details.
+
+This project is licensed under the [MIT License](LICENSE).

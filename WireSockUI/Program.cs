@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -114,25 +115,140 @@ namespace WireSockUI
         /// <returns><c>true</c> if installed, otherwise <c>false</c></returns>
         private static bool IsWireSockInstalled()
         {
-            using (var key = Registry.LocalMachine.OpenSubKey("SOFTWARE\\NTKernelResources\\WinpkFilterForVPNClient"))
+            string libraryDirectory;
+            if (!TryFindWireSockLibraryDirectory(out libraryDirectory))
+                return false;
+
+            AddDirectoryToProcessPath(libraryDirectory);
+            return true;
+        }
+
+        private static bool TryFindWireSockLibraryDirectory(out string libraryDirectory)
+        {
+            libraryDirectory = null;
+
+            var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            if (ContainsWireSockLibrary(localDirectory))
             {
-                if (key == null) return false;
-                var wiresockLocation = key.GetValue("InstallLocation") + "bin\\wiresock-client.exe";
-
-                // Add the directory containing the wgbooster.dll to the system's path if it is not added
-                var installPath = key.GetValue("InstallLocation").ToString();
-                var binPath = Path.Combine(installPath, "bin");
-
-                var environmentPath = Environment.GetEnvironmentVariable("PATH");
-
-                if (environmentPath == null || environmentPath.Contains(binPath))
-                    return File.Exists(wiresockLocation);
-
-                environmentPath = $"{binPath};{environmentPath}";
-                Environment.SetEnvironmentVariable("PATH", environmentPath);
-
-                return File.Exists(wiresockLocation);
+                libraryDirectory = localDirectory;
+                return true;
             }
+
+            foreach (var pathDirectory in GetPathDirectories())
+            {
+                if (!ContainsWireSockLibrary(pathDirectory))
+                    continue;
+
+                libraryDirectory = pathDirectory;
+                return true;
+            }
+
+            foreach (var installLocation in GetInstallLocations())
+            {
+                foreach (var candidate in GetLibraryDirectories(installLocation))
+                {
+                    if (!ContainsWireSockLibrary(candidate))
+                        continue;
+
+                    libraryDirectory = candidate;
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool ContainsWireSockLibrary(string directory)
+        {
+            return !string.IsNullOrWhiteSpace(directory) &&
+                   File.Exists(Path.Combine(directory, "wgbooster.dll"));
+        }
+
+        private static string[] GetLibraryDirectories(string installLocation)
+        {
+            if (string.IsNullOrWhiteSpace(installLocation))
+                return new string[0];
+
+            return new[]
+            {
+                Path.Combine(installLocation, "sdk"),
+                Path.Combine(installLocation, "bin"),
+                installLocation
+            };
+        }
+
+        private static string[] GetInstallLocations()
+        {
+            var locations = new List<string>();
+            var registryPaths = new[]
+            {
+                "SOFTWARE\\WireSock Foundation\\WireSock Secure Connect",
+                "SOFTWARE\\WireSock Foundation\\WireSock Secure Connect Pro",
+                "SOFTWARE\\NTKernelResources\\WinpkFilterForVPNClient"
+            };
+
+            var registryViews = new[] { RegistryView.Registry64, RegistryView.Registry32 };
+            foreach (var view in registryViews)
+            {
+                RegistryKey baseKey = null;
+                try
+                {
+                    baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                using (baseKey)
+                {
+                    foreach (var registryPath in registryPaths)
+                    {
+                        using (var key = baseKey.OpenSubKey(registryPath))
+                        {
+                            var value = key?.GetValue("InstallLocation") as string;
+                            if (string.IsNullOrWhiteSpace(value))
+                                continue;
+
+                            if (!locations.Exists(path =>
+                                    string.Equals(path, value, StringComparison.OrdinalIgnoreCase)))
+                                locations.Add(value);
+                        }
+                    }
+                }
+            }
+
+            return locations.ToArray();
+        }
+
+        private static IEnumerable<string> GetPathDirectories()
+        {
+            var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+            foreach (var item in environmentPath.Split(Path.PathSeparator))
+            {
+                var directory = item.Trim().Trim('"');
+                if (!string.IsNullOrWhiteSpace(directory))
+                    yield return directory;
+            }
+        }
+
+        private static void AddDirectoryToProcessPath(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+                return;
+
+            var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);
+            var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+            foreach (var item in environmentPath.Split(Path.PathSeparator))
+            {
+                if (string.Equals(item.Trim().TrimEnd(Path.DirectorySeparatorChar), fullDirectory,
+                        StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
+            Environment.SetEnvironmentVariable("PATH", $"{fullDirectory}{Path.PathSeparator}{environmentPath}");
         }
 
         /// <summary>

@@ -11,7 +11,8 @@ namespace WireSockUI.Native
     {
         public class Section
         {
-            public Dictionary<string, List<string>> KeyValues { get; } = new Dictionary<string, List<string>>();
+            public Dictionary<string, List<string>> KeyValues { get; } =
+                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 
             public bool Contains(string key)
             {
@@ -27,7 +28,8 @@ namespace WireSockUI.Native
 
         public class ConfigParser
         {
-            public Dictionary<string, Section> Sections { get; } = new Dictionary<string, Section>();
+            public Dictionary<string, Section> Sections { get; } =
+                new Dictionary<string, Section>(StringComparer.OrdinalIgnoreCase);
 
             public ConfigParser(string filePath)
             {
@@ -51,8 +53,10 @@ namespace WireSockUI.Native
                 while ((line = reader.ReadLine()) != null)
                 {
                     line = line.Trim();
-                    if (string.IsNullOrWhiteSpace(line) || line.StartsWith("#") || line.StartsWith(";"))
+                    if (string.IsNullOrWhiteSpace(line) || IsComment(line))
                         continue;
+
+                    line = StripWireSockPrefix(line);
 
                     if (line.StartsWith("[") && line.EndsWith("]"))
                     {
@@ -82,7 +86,28 @@ namespace WireSockUI.Native
 
             public Dictionary<string, string> GetSection(string sectionName)
             {
-                return Sections.TryGetValue(sectionName, out var section) ? section.KeyValues.ToDictionary(kv => kv.Key, kv => string.Join(", ", kv.Value)) : new Dictionary<string, string>();
+                return Sections.TryGetValue(sectionName, out var section)
+                    ? section.KeyValues.ToDictionary(kv => kv.Key, kv => string.Join(", ", kv.Value),
+                        StringComparer.OrdinalIgnoreCase)
+                    : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            }
+
+            private static bool IsComment(string line)
+            {
+                return line.StartsWith(";") ||
+                       (line.StartsWith("#") && !line.StartsWith("#@ws", StringComparison.OrdinalIgnoreCase));
+            }
+
+            private static string StripWireSockPrefix(string line)
+            {
+                if (!line.StartsWith("#@ws", StringComparison.OrdinalIgnoreCase))
+                    return line;
+
+                var value = line.Substring(4).Trim();
+                if (value.StartsWith(":"))
+                    value = value.Substring(1).Trim();
+
+                return value;
             }
         }
     }

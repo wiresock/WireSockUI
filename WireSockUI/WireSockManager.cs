@@ -48,6 +48,7 @@ namespace WireSockUI
         private volatile IntPtr _handle = IntPtr.Zero;
         private WgbLogLevel _logLevel;
         private GCHandle _logPrinterHandle;
+        private bool _disposed;
 
         /// <summary>
         ///     Initializes a new instance of the <see cref="WireSockManager" />.
@@ -122,6 +123,8 @@ namespace WireSockUI
                 {
                     case "Info":
                         return WgbLogLevel.Info;
+                    case "Warning":
+                        return WgbLogLevel.Warning;
                     case "Debug":
                         return WgbLogLevel.Debug;
                     case "All":
@@ -140,7 +143,7 @@ namespace WireSockUI
                 _logLevel = value;
 
                 // Update loglevel directly if instantiated
-                if (_handle != IntPtr.Zero)
+                if (_handle != IntPtr.Zero && _setLogLevel != null)
                     _setLogLevel(_handle, value);
             }
         }
@@ -153,7 +156,16 @@ namespace WireSockUI
             get
             {
                 if (_handle != IntPtr.Zero)
-                    return _tunnelActive(_handle);
+                {
+                    try
+                    {
+                        return _tunnelActive(_handle);
+                    }
+                    catch (Exception ex)
+                    {
+                        PrintLog($"Failed to query tunnel state: {ex.Message}");
+                    }
+                }
 
                 return false;
             }
@@ -169,13 +181,25 @@ namespace WireSockUI
         /// </summary>
         public void Dispose()
         {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        private void Dispose(bool disposing)
+        {
+            if (_disposed)
+                return;
+
             if (_handle != IntPtr.Zero)
                 Disconnect();
 
             if (_logPrinterHandle.IsAllocated)
                 _logPrinterHandle.Free();
 
-            _logQueue.CompleteAdding();
+            if (disposing && !_logQueue.IsAddingCompleted)
+                _logQueue.CompleteAdding();
+
+            _disposed = true;
         }
 
         /// <summary>
@@ -184,7 +208,17 @@ namespace WireSockUI
         /// <param name="message">The message to append to the log queue.</param>
         private void PrintLog(string message)
         {
-            _logQueue.Add(new LogMessage { Message = message });
+            if (_disposed || _logQueue.IsAddingCompleted)
+                return;
+
+            try
+            {
+                _logQueue.Add(new LogMessage { Message = message });
+            }
+            catch (InvalidOperationException)
+            {
+                // The native logger can race with shutdown; dropping late messages is safer than crashing.
+            }
         }
 
         /// <summary>
@@ -203,18 +237,14 @@ namespace WireSockUI
 
             worker.DoWork += (s, e) =>
             {
-                // Exit when the logQueue is done adding and empty
-                while (!_logQueue.IsCompleted)
-                {
-                    var message = _logQueue.Take();
+                foreach (var message in _logQueue.GetConsumingEnumerable())
                     worker.ReportProgress(0, message);
-                }
             };
 
             worker.ProgressChanged += (s, e) =>
             {
                 if (e.UserState is LogMessage message)
-                    logMessageCallback(message);
+                    logMessageCallback?.Invoke(message);
             };
 
             return worker;
@@ -222,7 +252,7 @@ namespace WireSockUI
 
         ~WireSockManager()
         {
-            Dispose();
+            Dispose(false);
         }
 
         /// <summary>
@@ -267,36 +297,53 @@ namespace WireSockUI
         {
             var profilePath = Profile.GetProfilePath(profile);
 
-            if (_handle == IntPtr.Zero)
-                _handle = _getHandle(_logPrinter, _logLevel, false);
-
-            if (_handle == IntPtr.Zero)
+            try
             {
-                MessageBox.Show(Resources.TunnelErrorManager, Resources.TunnelErrorTitle,
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return false;
+                if (_handle == IntPtr.Zero)
+                    _handle = _getHandle(_logPrinter, _logLevel, false);
+
+                if (_handle == IntPtr.Zero)
+                    return ShowTunnelError(Resources.TunnelErrorManager);
+
+                if (!_createTunnelFromFile(_handle, profilePath))
+                {
+                    ShowTunnelError(Resources.TunnelErrorCreate);
+
+                    DropCurrentHandle();
+                    return false;
+                }
+
+                if (TunnelMode == Mode.VirtualAdapter)
+                    ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
+
+                if (!_startTunnel(_handle))
+                {
+                    ShowTunnelError(Resources.TunnelErrorStart);
+
+                    _dropTunnel(_handle, false);
+                    _handle = IntPtr.Zero;
+                    return false;
+                }
             }
-
-            if (!_createTunnelFromFile(_handle, profilePath))
+            catch (DllNotFoundException ex)
             {
-                MessageBox.Show(Resources.TunnelErrorCreate,
-                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-                _handle = IntPtr.Zero;
-                return false;
+                DropCurrentHandle();
+                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
             }
-
-            if (TunnelMode == Mode.VirtualAdapter)
-                ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
-
-            if (!_startTunnel(_handle))
+            catch (EntryPointNotFoundException ex)
             {
-                MessageBox.Show(Resources.TunnelErrorStart, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-
-                _dropTunnel(_handle);
-                _handle = IntPtr.Zero;
-                return false;
+                DropCurrentHandle();
+                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
+            }
+            catch (BadImageFormatException ex)
+            {
+                DropCurrentHandle();
+                return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                DropCurrentHandle();
+                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
             }
 
             // Update connected profile
@@ -312,8 +359,15 @@ namespace WireSockUI
         {
             if (_handle != IntPtr.Zero)
             {
-                _stopTunnel(_handle);
-                _dropTunnel(_handle);
+                try
+                {
+                    _stopTunnel(_handle);
+                    _dropTunnel(_handle, false);
+                }
+                catch (Exception ex)
+                {
+                    PrintLog($"Failed to disconnect tunnel cleanly: {ex.Message}");
+                }
 
                 _handle = IntPtr.Zero;
                 ProfileName = null;
@@ -329,7 +383,16 @@ namespace WireSockUI
         public WgbStats GetState()
         {
             if (_handle != IntPtr.Zero)
-                return _tunnelState(_handle);
+            {
+                try
+                {
+                    return _tunnelState(_handle);
+                }
+                catch (Exception ex)
+                {
+                    PrintLog($"Failed to read tunnel statistics: {ex.Message}");
+                }
+            }
 
             return new WgbStats();
         }
@@ -354,6 +417,48 @@ namespace WireSockUI
             }
         }
 
+        private bool ShowTunnelError(string message, string details = null)
+        {
+            var diagnostic = string.IsNullOrWhiteSpace(details) ? GetLastNativeError() : details;
+
+            if (!string.IsNullOrWhiteSpace(diagnostic))
+            {
+                PrintLog($"{message} {diagnostic}");
+                message = $"{message}{Environment.NewLine}{Environment.NewLine}{diagnostic}";
+            }
+
+            MessageBox.Show(message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return false;
+        }
+
+        private static string GetLastNativeError()
+        {
+            var error = Marshal.GetLastWin32Error();
+            if (error == 0)
+                return null;
+
+            return $"Native error {error}: {new Win32Exception(error).Message}";
+        }
+
+        private void DropCurrentHandle()
+        {
+            if (_handle == IntPtr.Zero || _dropTunnel == null)
+                return;
+
+            try
+            {
+                _dropTunnel(_handle, false);
+            }
+            catch (Exception ex)
+            {
+                PrintLog($"Failed to release tunnel handle: {ex.Message}");
+            }
+            finally
+            {
+                _handle = IntPtr.Zero;
+            }
+        }
+
         #region Wireguard Boost Library
 
         private delegate IntPtr GetHandle(LogPrinter logPrinter, WgbLogLevel logLevel, bool enableTrafficCapture);
@@ -364,6 +469,8 @@ namespace WireSockUI
 
         private delegate bool TunnelAction(IntPtr handle);
 
+        private delegate bool DropTunnelAction(IntPtr handle, bool preserveNetworkLock);
+
         private delegate WgbStats TunnelState(IntPtr handle);
 
         private GetHandle _getHandle;
@@ -371,7 +478,7 @@ namespace WireSockUI
         private CreateTunnelFromFile _createTunnelFromFile;
         private TunnelAction _startTunnel;
         private TunnelAction _stopTunnel;
-        private TunnelAction _dropTunnel;
+        private DropTunnelAction _dropTunnel;
         private TunnelAction _tunnelActive;
         private TunnelState _tunnelState;
 

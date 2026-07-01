@@ -9,6 +9,7 @@
     <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
     <RootNamespace>WireSockUI</RootNamespace>
     <WarningLevel>4</WarningLevel>
+    <Prefer32Bit>false</Prefer32Bit>
   </PropertyGroup>
 
   <PropertyGroup Condition=" $(Configuration.StartsWith('Debug')) ">
