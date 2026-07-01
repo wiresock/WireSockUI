@@ -484,7 +484,7 @@ namespace WireSockUI.Forms
             // "DisallowedApps = app1,app2, "
             // "DisallowedApps = app 1,app2"
             // "DisallowedApps     "
-            var newValue = $"\n{key} = {value}";
+            var newValue = $"\n#@ws:{key} = {value}";
 
             foreach (Match m in possibleKeyValueMatch.Matches(txtEditor.Text))
             {

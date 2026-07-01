@@ -190,14 +190,17 @@ namespace WireSockUI
             if (_disposed)
                 return;
 
-            if (_handle != IntPtr.Zero)
-                Disconnect();
+            if (disposing)
+            {
+                if (_handle != IntPtr.Zero)
+                    Disconnect();
+
+                if (!_logQueue.IsAddingCompleted)
+                    _logQueue.CompleteAdding();
+            }
 
             if (_logPrinterHandle.IsAllocated)
                 _logPrinterHandle.Free();
-
-            if (!_logQueue.IsAddingCompleted)
-                _logQueue.CompleteAdding();
 
             _disposed = true;
         }
