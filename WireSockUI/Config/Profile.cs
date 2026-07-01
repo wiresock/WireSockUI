@@ -76,8 +76,6 @@ namespace WireSockUI.Config
             PrivateKey = section.Get("PrivateKey");
             Address = section.Get("Address");
             Dns = section.Get("DNS");
-            if (string.IsNullOrEmpty(Dns))
-                Dns = section.Get("Dns");
             Mtu = section.Get("MTU");
             ListenPort = section.Get("ListenPort");
             Table = section.Get("Table");
@@ -110,8 +108,6 @@ namespace WireSockUI.Config
 
             PeerKey = section.Get("PublicKey");
             PresharedKey = section.Get("PresharedKey");
-            if (string.IsNullOrEmpty(PresharedKey))
-                PresharedKey = section.Get("PreSharedKey");
             AllowedIPs = section.Get("AllowedIPs");
             Endpoint = section.Get("Endpoint");
             PersistentKeepAlive = section.Get("PersistentKeepalive");
