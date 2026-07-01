@@ -198,8 +198,7 @@ namespace WireSockUI
                     DropCurrentHandle(false);
             }
 
-            if (disposing && !_logQueue.IsAddingCompleted)
-                _logQueue.CompleteAdding();
+            CompleteLogQueue();
 
             if (_logPrinterHandle.IsAllocated)
                 _logPrinterHandle.Free();
@@ -235,6 +234,7 @@ namespace WireSockUI
         /// </returns>
         private BackgroundWorker InitializeLogWorker(LogMessageCallback logMessageCallback)
         {
+            var logQueue = _logQueue;
             var worker = new BackgroundWorker
             {
                 WorkerReportsProgress = true
@@ -242,7 +242,7 @@ namespace WireSockUI
 
             worker.DoWork += (s, e) =>
             {
-                foreach (var message in _logQueue.GetConsumingEnumerable())
+                foreach (var message in logQueue.GetConsumingEnumerable())
                     worker.ReportProgress(0, message);
             };
 
@@ -253,6 +253,23 @@ namespace WireSockUI
             };
 
             return worker;
+        }
+
+        private void CompleteLogQueue()
+        {
+            try
+            {
+                if (!_logQueue.IsAddingCompleted)
+                    _logQueue.CompleteAdding();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Queue shutdown races are harmless; the goal is only to unblock the worker.
+            }
+            catch (InvalidOperationException)
+            {
+                // CompleteAdding can race with another shutdown path after IsAddingCompleted is checked.
+            }
         }
 
         ~WireSockManager()

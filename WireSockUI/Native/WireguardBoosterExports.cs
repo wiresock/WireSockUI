@@ -36,12 +36,6 @@ namespace WireSockUI.Native
 
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool wgb_create_tunnel(IntPtr wgboosterHandle,
-            [MarshalAs(UnmanagedType.LPWStr)] string configName, ref WgbInterface interfaceSettings,
-            ref WgbPeer peerSettings, ref WgbExtra extra);
-
-        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_drop_tunnel(IntPtr wgboosterHandle, bool preserveNetworkLock);
 
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
@@ -79,12 +73,6 @@ namespace WireSockUI.Native
 
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool wgbp_create_tunnel(IntPtr wgboosterHandle,
-            [MarshalAs(UnmanagedType.LPWStr)] string configName, ref WgbInterface interfaceSettings,
-            ref WgbPeer peerSettings, ref WgbExtra extra);
-
-        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_drop_tunnel(IntPtr wgboosterHandle, bool preserveNetworkLock);
 
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
@@ -112,32 +100,5 @@ namespace WireSockUI.Native
             public int estimated_rtt; // rtt estimated on time it took to complete latest initiated handshake in ms
         }
 
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-        public struct WgbInterface
-        {
-            [MarshalAs(UnmanagedType.LPStr)] public string private_key; // required
-            [MarshalAs(UnmanagedType.LPStr)] public string address; // required
-            [MarshalAs(UnmanagedType.LPStr)] public string dns; // optional
-            [MarshalAs(UnmanagedType.LPStr)] public string mtu; // optional
-            [MarshalAs(UnmanagedType.LPStr)] public string listen_port; // optional
-        }
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
-        public struct WgbPeer
-        {
-            [MarshalAs(UnmanagedType.LPStr)] public string public_key; // required
-            [MarshalAs(UnmanagedType.LPStr)] public string preshared_key; // optional
-            [MarshalAs(UnmanagedType.LPStr)] public string allowed_ips; // required
-            [MarshalAs(UnmanagedType.LPStr)] public string endpoint; // required
-            public uint persistent_keep_alive; // optional
-        }
-
-        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-        public struct WgbExtra
-        {
-            [MarshalAs(UnmanagedType.LPWStr)] public string allowed_apps; // optional
-            [MarshalAs(UnmanagedType.LPStr)] public string ignored_ips; // optional
-            [MarshalAs(UnmanagedType.LPStr)] public string socks5_proxy; // optional
-        }
     }
 }

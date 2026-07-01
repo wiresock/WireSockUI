@@ -95,12 +95,12 @@ namespace WireSockUI.Native
             private static bool IsComment(string line)
             {
                 return line.StartsWith(";") ||
-                       (line.StartsWith("#") && !line.StartsWith("#@ws", StringComparison.OrdinalIgnoreCase));
+                       (line.StartsWith("#") && !IsWireSockDirective(line));
             }
 
             private static string StripWireSockPrefix(string line)
             {
-                if (!line.StartsWith("#@ws", StringComparison.OrdinalIgnoreCase))
+                if (!IsWireSockDirective(line))
                     return line;
 
                 var value = line.Substring(4).Trim();
@@ -108,6 +108,14 @@ namespace WireSockUI.Native
                     value = value.Substring(1).Trim();
 
                 return value;
+            }
+
+            private static bool IsWireSockDirective(string line)
+            {
+                if (!line.StartsWith("#@ws", StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                return line.Length == 4 || line[4] == ':' || char.IsWhiteSpace(line[4]);
             }
         }
     }
