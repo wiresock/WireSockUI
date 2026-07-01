@@ -454,12 +454,15 @@ namespace WireSockUI
 
         private void DropCurrentHandle(bool logFailure)
         {
-            if (_handle == IntPtr.Zero || _dropTunnel == null)
+            if (_handle == IntPtr.Zero)
                 return;
 
             try
             {
-                _dropTunnel(_handle, false);
+                if (_dropTunnel != null)
+                    _dropTunnel(_handle, false);
+                else if (logFailure)
+                    PrintLog("Failed to release tunnel handle: drop_tunnel export is unavailable.");
             }
             catch (Exception ex)
             {
