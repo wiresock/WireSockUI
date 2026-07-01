@@ -17,7 +17,6 @@ At startup WireSockUI looks for `wgbooster.dll` in this order:
 2. WireSock Secure Connect SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect`.
 3. WireSock Secure Connect Pro SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect Pro`.
 4. The legacy WireSock VPN Client registry location under `HKLM\SOFTWARE\NTKernelResources\WinpkFilterForVPNClient`.
-5. Directories already present on the process `PATH` as a fallback.
 
 For each registered install location it checks `sdk`, `bin`, and the install root. The discovered directory is added to the process `PATH` so the native library can be loaded without changing the machine-wide environment.
 

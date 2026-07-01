@@ -146,15 +146,6 @@ namespace WireSockUI
                 }
             }
 
-            foreach (var pathDirectory in GetPathDirectories())
-            {
-                if (!ContainsWireSockLibrary(pathDirectory))
-                    continue;
-
-                libraryDirectory = pathDirectory;
-                return true;
-            }
-
             return false;
         }
 
@@ -265,7 +256,7 @@ namespace WireSockUI
 
             var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
-            foreach (var item in environmentPath.Split(Path.PathSeparator))
+            foreach (var item in GetPathDirectories())
             {
                 var existingDirectory = NormalizePathDirectory(item);
                 if (existingDirectory == null)

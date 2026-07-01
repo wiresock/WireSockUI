@@ -535,7 +535,7 @@ namespace WireSockUI.Forms
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, Resources.EditProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                File.Delete(tmpProfile);
+                TryDeleteTemporaryProfile(tmpProfile);
 
                 DialogResult = DialogResult.None;
                 return;
@@ -546,7 +546,7 @@ namespace WireSockUI.Forms
             {
                 MessageBox.Show(Resources.EditProfileNameError, Resources.EditProfileError, MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
-                File.Delete(tmpProfile);
+                TryDeleteTemporaryProfile(tmpProfile);
 
                 DialogResult = DialogResult.None;
                 return;
@@ -564,8 +564,7 @@ namespace WireSockUI.Forms
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, Resources.EditProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                if (File.Exists(tmpProfile))
-                    File.Delete(tmpProfile);
+                TryDeleteTemporaryProfile(tmpProfile);
 
                 DialogResult = DialogResult.None;
                 return;
@@ -574,6 +573,19 @@ namespace WireSockUI.Forms
             ReturnValue = txtProfileName.Text;
 
             Close();
+        }
+
+        private static void TryDeleteTemporaryProfile(string tmpProfile)
+        {
+            try
+            {
+                if (File.Exists(tmpProfile))
+                    File.Delete(tmpProfile);
+            }
+            catch
+            {
+                // Best-effort cleanup must not hide the original save or validation failure.
+            }
         }
 
         private void OnProfileChanged(object sender, EventArgs e)

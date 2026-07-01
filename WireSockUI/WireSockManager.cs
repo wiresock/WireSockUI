@@ -365,7 +365,16 @@ namespace WireSockUI
             {
                 try
                 {
-                    _stopTunnel(_handle);
+                    if (_stopTunnel != null)
+                    {
+                        if (!_stopTunnel(_handle))
+                            PrintLog(
+                                $"Failed to stop tunnel cleanly: {GetLastNativeErrorOrDefault("native stop_tunnel returned false.")}");
+                    }
+                    else
+                    {
+                        PrintLog("Failed to stop tunnel cleanly: stop_tunnel export is unavailable.");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -374,7 +383,16 @@ namespace WireSockUI
 
                 try
                 {
-                    _dropTunnel(_handle, false);
+                    if (_dropTunnel != null)
+                    {
+                        if (!_dropTunnel(_handle, false))
+                            PrintLog(
+                                $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
+                    }
+                    else
+                    {
+                        PrintLog("Failed to release tunnel handle: drop_tunnel export is unavailable.");
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -452,6 +470,12 @@ namespace WireSockUI
             return $"Native error {error}: {new Win32Exception(error).Message}";
         }
 
+        private static string GetLastNativeErrorOrDefault(string fallback)
+        {
+            var diagnostic = GetLastNativeError();
+            return string.IsNullOrWhiteSpace(diagnostic) ? fallback : diagnostic;
+        }
+
         private void DropCurrentHandle(bool logFailure)
         {
             if (_handle == IntPtr.Zero)
@@ -460,9 +484,15 @@ namespace WireSockUI
             try
             {
                 if (_dropTunnel != null)
-                    _dropTunnel(_handle, false);
+                {
+                    if (!_dropTunnel(_handle, false) && logFailure)
+                        PrintLog(
+                            $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
+                }
                 else if (logFailure)
+                {
                     PrintLog("Failed to release tunnel handle: drop_tunnel export is unavailable.");
+                }
             }
             catch (Exception ex)
             {
