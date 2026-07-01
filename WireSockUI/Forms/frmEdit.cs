@@ -228,7 +228,7 @@ namespace WireSockUI.Forms
                             break;
                         // IPv4, IPv6 or DNS value
                         case "endpoint":
-                            if (!IpHelper.IsValidAddress(value))
+                            if (!IpHelper.IsValidAddress(value.Trim()))
                             {
                                 txtEditor.UnderlineSelection();
                                 hasErrors = true;
@@ -526,10 +526,10 @@ namespace WireSockUI.Forms
         private void OnSaveClick(object sender, EventArgs e)
         {
             var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
-            File.WriteAllText(tmpProfile, txtEditor.Text);
 
             try
             {
+                File.WriteAllText(tmpProfile, txtEditor.Text);
                 var profile = new Profile(tmpProfile);
             }
             catch (Exception ex)

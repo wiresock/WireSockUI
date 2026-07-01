@@ -102,11 +102,11 @@ namespace WireSockUI.Config
 
             if (!section.ContainsKey("Endpoint"))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have a \"Endpoint\" defined.");
+                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have an \"Endpoint\" defined.");
 
             if (!section.ContainsKey("AllowedIPs"))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have a \"AllowedIPs\" defined.");
+                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have an \"AllowedIPs\" defined.");
 
             PeerKey = section.Get("PublicKey");
             PresharedKey = section.Get("PresharedKey");
