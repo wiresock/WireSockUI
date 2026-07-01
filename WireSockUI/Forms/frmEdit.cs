@@ -423,7 +423,7 @@ namespace WireSockUI.Forms
             if (string.IsNullOrWhiteSpace(value))
                 return true;
 
-            var parts = value.Split(new[] { '-' }, StringSplitOptions.RemoveEmptyEntries);
+            var parts = value.Split('-');
             if (parts.Length == 0 || parts.Length > 2)
                 return false;
 

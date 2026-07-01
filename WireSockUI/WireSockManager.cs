@@ -196,7 +196,7 @@ namespace WireSockUI
             if (_logPrinterHandle.IsAllocated)
                 _logPrinterHandle.Free();
 
-            if (disposing && !_logQueue.IsAddingCompleted)
+            if (!_logQueue.IsAddingCompleted)
                 _logQueue.CompleteAdding();
 
             _disposed = true;
@@ -320,8 +320,7 @@ namespace WireSockUI
                 {
                     ShowTunnelError(Resources.TunnelErrorStart);
 
-                    _dropTunnel(_handle, false);
-                    _handle = IntPtr.Zero;
+                    DropCurrentHandle();
                     return false;
                 }
             }

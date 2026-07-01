@@ -140,7 +140,6 @@ namespace WireSockUI.Forms
 
                 if (createdNew) return false;
 
-                Global.AlreadyRunning.Set();
                 Global.AlreadyRunning.Dispose();
                 Global.AlreadyRunning = null;
                 return true;

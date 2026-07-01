@@ -160,8 +160,15 @@ namespace WireSockUI
 
         private static bool ContainsWireSockLibrary(string directory)
         {
-            return !string.IsNullOrWhiteSpace(directory) &&
-                   File.Exists(Path.Combine(directory, "wgbooster.dll"));
+            try
+            {
+                return !string.IsNullOrWhiteSpace(directory) &&
+                       File.Exists(Path.Combine(directory, "wgbooster.dll"));
+            }
+            catch (Exception)
+            {
+                return false;
+            }
         }
 
         private static string[] GetLibraryDirectories(string installLocation)
@@ -169,12 +176,23 @@ namespace WireSockUI
             if (string.IsNullOrWhiteSpace(installLocation))
                 return new string[0];
 
-            return new[]
+            var directories = new List<string>();
+            AddLibraryDirectory(directories, installLocation, "sdk");
+            AddLibraryDirectory(directories, installLocation, "bin");
+            directories.Add(installLocation);
+
+            return directories.ToArray();
+        }
+
+        private static void AddLibraryDirectory(List<string> directories, string path1, string path2)
+        {
+            try
             {
-                Path.Combine(installLocation, "sdk"),
-                Path.Combine(installLocation, "bin"),
-                installLocation
-            };
+                directories.Add(Path.Combine(path1, path2));
+            }
+            catch (Exception)
+            {
+            }
         }
 
         private static string[] GetInstallLocations()
@@ -238,17 +256,44 @@ namespace WireSockUI
             if (string.IsNullOrWhiteSpace(directory))
                 return;
 
-            var fullDirectory = Path.GetFullPath(directory).TrimEnd(Path.DirectorySeparatorChar);
+            var fullDirectory = NormalizePathDirectory(directory);
+            if (fullDirectory == null)
+                return;
+
             var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
 
             foreach (var item in environmentPath.Split(Path.PathSeparator))
             {
-                if (string.Equals(item.Trim().TrimEnd(Path.DirectorySeparatorChar), fullDirectory,
-                        StringComparison.OrdinalIgnoreCase))
+                var existingDirectory = NormalizePathDirectory(item);
+                if (existingDirectory == null)
+                    continue;
+
+                if (string.Equals(existingDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase))
                     return;
             }
 
-            Environment.SetEnvironmentVariable("PATH", $"{fullDirectory}{Path.PathSeparator}{environmentPath}");
+            try
+            {
+                Environment.SetEnvironmentVariable("PATH", $"{fullDirectory}{Path.PathSeparator}{environmentPath}");
+            }
+            catch (Exception)
+            {
+            }
+        }
+
+        private static string NormalizePathDirectory(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+                return null;
+
+            try
+            {
+                return Path.GetFullPath(directory.Trim().Trim('"')).TrimEnd(Path.DirectorySeparatorChar);
+            }
+            catch (Exception)
+            {
+                return null;
+            }
         }
 
         /// <summary>
