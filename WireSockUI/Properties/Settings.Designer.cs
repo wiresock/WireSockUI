@@ -85,7 +85,7 @@ namespace WireSockUI.Properties {
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("None")]
+        [global::System.Configuration.DefaultSettingValueAttribute("Error")]
         public string LogLevel {
             get {
                 return ((string)(this["LogLevel"]));

@@ -124,7 +124,7 @@
     <value>Import error</value>
   </data>
   <data name="AppNoWireSockMessage" xml:space="preserve">
-    <value>WireSock VPN Client needs to be installed for WireSockUI to function.</value>
+    <value>WireSock SDK or WireSock VPN Client with wgbooster.dll needs to be installed for WireSockUI to function.</value>
   </data>
   <data name="AppUnsupportedArchMessage" xml:space="preserve">
     <value>It looks like you are trying to run a version of WireSockUI that is not compatible with your system. Please use WireSockUI with the appropriate architecture instead.</value>
@@ -133,7 +133,7 @@
     <value>Already Running</value>
   </data>
   <data name="AlreadyRunningMessage" xml:space="preserve">
-    <value>Another instance of WireSockUI or Wiresock VPN Client Service is already running.</value>
+    <value>Another WireSockUI instance or WireSock direct client/service is already running.</value>
   </data>
   <data name="AppNoWireSockTitle" xml:space="preserve">
     <value>WireSock not found</value>

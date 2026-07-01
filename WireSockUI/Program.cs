@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -114,24 +115,181 @@ namespace WireSockUI
         /// <returns><c>true</c> if installed, otherwise <c>false</c></returns>
         private static bool IsWireSockInstalled()
         {
-            using (var key = Registry.LocalMachine.OpenSubKey("SOFTWARE\\NTKernelResources\\WinpkFilterForVPNClient"))
+            string libraryDirectory;
+            if (!TryFindWireSockLibraryDirectory(out libraryDirectory))
+                return false;
+
+            AddDirectoryToProcessPath(libraryDirectory);
+            return true;
+        }
+
+        private static bool TryFindWireSockLibraryDirectory(out string libraryDirectory)
+        {
+            libraryDirectory = null;
+
+            var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            if (ContainsWireSockLibrary(localDirectory))
             {
-                if (key == null) return false;
-                var wiresockLocation = key.GetValue("InstallLocation") + "bin\\wiresock-client.exe";
+                libraryDirectory = localDirectory;
+                return true;
+            }
 
-                // Add the directory containing the wgbooster.dll to the system's path if it is not added
-                var installPath = key.GetValue("InstallLocation").ToString();
-                var binPath = Path.Combine(installPath, "bin");
+            foreach (var installLocation in GetInstallLocations())
+            {
+                foreach (var candidate in GetLibraryDirectories(installLocation))
+                {
+                    if (!ContainsWireSockLibrary(candidate))
+                        continue;
 
-                var environmentPath = Environment.GetEnvironmentVariable("PATH");
+                    libraryDirectory = candidate;
+                    return true;
+                }
+            }
 
-                if (environmentPath == null || environmentPath.Contains(binPath))
-                    return File.Exists(wiresockLocation);
+            return false;
+        }
 
-                environmentPath = $"{binPath};{environmentPath}";
-                Environment.SetEnvironmentVariable("PATH", environmentPath);
+        private static bool ContainsWireSockLibrary(string directory)
+        {
+            try
+            {
+                return !string.IsNullOrWhiteSpace(directory) &&
+                       File.Exists(Path.Combine(directory, "wgbooster.dll"));
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Skipping invalid WireSock library directory '{directory}': {ex.Message}");
+                return false;
+            }
+        }
 
-                return File.Exists(wiresockLocation);
+        private static string[] GetLibraryDirectories(string installLocation)
+        {
+            if (string.IsNullOrWhiteSpace(installLocation))
+                return new string[0];
+
+            var directories = new List<string>();
+            AddLibraryDirectory(directories, installLocation, "sdk");
+            AddLibraryDirectory(directories, installLocation, "bin");
+            directories.Add(installLocation);
+
+            return directories.ToArray();
+        }
+
+        private static void AddLibraryDirectory(List<string> directories, string path1, string path2)
+        {
+            try
+            {
+                directories.Add(Path.Combine(path1, path2));
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Skipping invalid WireSock library candidate '{path1}{Path.DirectorySeparatorChar}{path2}': {ex.Message}");
+            }
+        }
+
+        private static string[] GetInstallLocations()
+        {
+            var locations = new List<string>();
+            var registryPaths = new[]
+            {
+                "SOFTWARE\\WireSock Foundation\\WireSock Secure Connect",
+                "SOFTWARE\\WireSock Foundation\\WireSock Secure Connect Pro",
+                "SOFTWARE\\NTKernelResources\\WinpkFilterForVPNClient"
+            };
+
+            var registryViews = new[] { RegistryView.Registry64, RegistryView.Registry32 };
+            foreach (var view in registryViews)
+            {
+                RegistryKey baseKey = null;
+                try
+                {
+                    baseKey = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, view);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                using (baseKey)
+                {
+                    foreach (var registryPath in registryPaths)
+                    {
+                        using (var key = baseKey.OpenSubKey(registryPath))
+                        {
+                            var value = key?.GetValue("InstallLocation") as string;
+                            if (string.IsNullOrWhiteSpace(value))
+                                continue;
+
+                            if (!locations.Exists(path =>
+                                    string.Equals(path, value, StringComparison.OrdinalIgnoreCase)))
+                                locations.Add(value);
+                        }
+                    }
+                }
+            }
+
+            return locations.ToArray();
+        }
+
+        private static IEnumerable<string> GetPathDirectories()
+        {
+            var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+            foreach (var item in environmentPath.Split(Path.PathSeparator))
+            {
+                var directory = item.Trim().Trim('"');
+                if (!string.IsNullOrWhiteSpace(directory))
+                    yield return directory;
+            }
+        }
+
+        private static void AddDirectoryToProcessPath(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+                return;
+
+            var fullDirectory = NormalizePathDirectory(directory);
+            if (fullDirectory == null)
+                return;
+
+            var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+            foreach (var item in GetPathDirectories())
+            {
+                var existingDirectory = NormalizePathDirectory(item);
+                if (existingDirectory == null)
+                    continue;
+
+                if (string.Equals(existingDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase))
+                    return;
+            }
+
+            try
+            {
+                Environment.SetEnvironmentVariable("PATH", $"{fullDirectory}{Path.PathSeparator}{environmentPath}");
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to add WireSock library directory to process PATH: {ex.Message}");
+            }
+        }
+
+        private static string NormalizePathDirectory(string directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory))
+                return null;
+
+            try
+            {
+                return Path.GetFullPath(directory.Trim().Trim('"'))
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
+                return null;
             }
         }
 

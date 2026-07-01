@@ -26,6 +26,8 @@ namespace WireSockUI.Forms
             chkNotify.Checked = Settings.Default.EnableNotifications;
             chkDisableAutoAdmin.Checked = Settings.Default.DisableAutoAdmin;
             ddlLogLevel.SelectedItem = Settings.Default.LogLevel;
+            if (ddlLogLevel.SelectedItem == null)
+                ddlLogLevel.SelectedItem = "Error";
 
             if (!IsCurrentProcessElevated())
             {

@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using WireSockUI.Extensions;
@@ -22,6 +23,10 @@ namespace WireSockUI.Config
         private string _listenport;
         private string _mtu;
         private string _persistentKeepAlive;
+        private string _scriptExecTimeout;
+        private string _disallowedIPs;
+        private string _bypassLanTraffic;
+        private string _virtualAdapterMode;
 
         private string _presharedKey;
 
@@ -31,6 +36,7 @@ namespace WireSockUI.Config
         // Peer values
         private string _publicKey;
         private string _socks5Proxy;
+        private string _socks5ProxyAllTraffic;
 
         /// <summary>
         ///     Create an empty profile from scratch
@@ -52,7 +58,7 @@ namespace WireSockUI.Config
             var sections = parser.GetSectionNames();
 
             var configESections = sections as string[] ?? sections.ToArray();
-            if (!configESections.Contains("Interface"))
+            if (!configESections.Contains("Interface", StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException(
                     $"Profile {Path.GetFileName(profilePath)} does not contain an \"Interface\" section.");
 
@@ -71,10 +77,19 @@ namespace WireSockUI.Config
             Address = section.Get("Address");
             Dns = section.Get("DNS");
             Mtu = section.Get("MTU");
+            ListenPort = section.Get("ListenPort");
+            Table = section.Get("Table");
+            ScriptExecTimeout = section.Get("ScriptExecTimeout");
+            PreUpScript = section.Get("PreUp");
+            PostUpScript = section.Get("PostUp");
+            PreDownScript = section.Get("PreDown");
+            PostDownScript = section.Get("PostDown");
+            BypassLanTraffic = section.Get("BypassLanTraffic");
+            VirtualAdapterMode = section.Get("VirtualAdapterMode");
 
-            if (!configESections.Contains("Peer"))
+            if (!configESections.Contains("Peer", StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)} does not contain an \"Peer\" section.");
+                    $"Profile {Path.GetFileName(profilePath)} does not contain a \"Peer\" section.");
 
             section = parser.GetSection("Peer");
 
@@ -85,20 +100,27 @@ namespace WireSockUI.Config
 
             if (!section.ContainsKey("Endpoint"))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have a \"Endpoint\" defined.");
+                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have an \"Endpoint\" defined.");
+
+            if (!section.ContainsKey("AllowedIPs"))
+                throw new ArgumentException(
+                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have an \"AllowedIPs\" defined.");
 
             PeerKey = section.Get("PublicKey");
             PresharedKey = section.Get("PresharedKey");
             AllowedIPs = section.Get("AllowedIPs");
             Endpoint = section.Get("Endpoint");
-            PersistentKeepAlive = section.Get("PersistentKeepAlive");
+            PersistentKeepAlive = section.Get("PersistentKeepalive");
 
             AllowedApps = section.Get("AllowedApps");
             DisallowedApps = section.Get("DisallowedApps");
             DisallowedIPs = section.Get("DisallowedIPs");
             Socks5Proxy = section.Get("Socks5Proxy");
-            Socks5ProxyUsername = section.Get("Socks5Username");
+            Socks5ProxyUsername = section.Get("Socks5ProxyUsername");
+            if (string.IsNullOrEmpty(Socks5ProxyUsername))
+                Socks5ProxyUsername = section.Get("Socks5Username");
             Socks5ProxyPassword = section.Get("Socks5ProxyPassword");
+            Socks5ProxyAllTraffic = section.Get("Socks5ProxyAllTraffic");
         }
 
         /// <summary>
@@ -210,6 +232,58 @@ namespace WireSockUI.Config
         }
 
         /// <summary>
+        ///     Interface routing table setting.
+        /// </summary>
+        public string Table { get; set; }
+
+        /// <summary>
+        ///     Timeout for Pre/Post up/down scripts.
+        /// </summary>
+        public string ScriptExecTimeout
+        {
+            get => _scriptExecTimeout;
+            set
+            {
+                ValidateInt("Interface", "ScriptExecTimeout", value, 0, 65535);
+                _scriptExecTimeout = string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+
+        public string PreUpScript { get; set; }
+
+        public string PostUpScript { get; set; }
+
+        public string PreDownScript { get; set; }
+
+        public string PostDownScript { get; set; }
+
+        /// <summary>
+        ///     Exclude local LAN traffic from the tunnel when supported by the SDK.
+        /// </summary>
+        public string BypassLanTraffic
+        {
+            get => _bypassLanTraffic;
+            set
+            {
+                ValidateBool("Interface", "BypassLanTraffic", value);
+                _bypassLanTraffic = string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+
+        /// <summary>
+        ///     Profile-level virtual adapter preference when supported by the SDK.
+        /// </summary>
+        public string VirtualAdapterMode
+        {
+            get => _virtualAdapterMode;
+            set
+            {
+                ValidateBool("Interface", "VirtualAdapterMode", value);
+                _virtualAdapterMode = string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
+
+        /// <summary>
         ///     Peer public key
         /// </summary>
         public string PeerKey
@@ -243,7 +317,7 @@ namespace WireSockUI.Config
             get => _allowedIPs;
             set
             {
-                ValidateAddresses("Peer", "AllowedIPs", value, IpHelper.IsValidIpNetwork);
+                ValidateAddresses("Peer", "AllowedIPs", value, IpHelper.IsValidSubnetOrSingleIpAddress);
                 _allowedIPs = value;
             }
         }
@@ -306,7 +380,15 @@ namespace WireSockUI.Config
         ///     Peer disallowed IP addresses
         /// </summary>
         /// <remarks>WireSock specific extension</remarks>
-        public string DisallowedIPs { get; set; }
+        public string DisallowedIPs
+        {
+            get => _disallowedIPs;
+            set
+            {
+                ValidateAddresses("Peer", "DisallowedIPs", value, IpHelper.IsValidSubnetOrSingleIpAddress);
+                _disallowedIPs = string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
 
         /// <summary>
         ///     Peer SOCKS5 proxy
@@ -321,7 +403,7 @@ namespace WireSockUI.Config
                 {
                     if (!IpHelper.IsValidAddress(value))
                         throw new FormatException(
-                            "\"Endpoint\" in \"Peer\", is not a valid IPv4, IPv6 or domain address.");
+                            "\"Socks5Proxy\" in \"Peer\", is not a valid IPv4, IPv6 or domain address.");
 
                     _socks5Proxy = value;
                 }
@@ -343,6 +425,20 @@ namespace WireSockUI.Config
         /// </summary>
         /// <remarks>WireSock specific extension</remarks>
         public string Socks5ProxyPassword { get; set; }
+
+        /// <summary>
+        ///     Route all WireGuard traffic through the configured SOCKS5 proxy.
+        /// </summary>
+        /// <remarks>WireSock specific extension</remarks>
+        public string Socks5ProxyAllTraffic
+        {
+            get => _socks5ProxyAllTraffic;
+            set
+            {
+                ValidateBool("Peer", "Socks5ProxyAllTraffic", value);
+                _socks5ProxyAllTraffic = string.IsNullOrWhiteSpace(value) ? null : value;
+            }
+        }
 
         internal static void ValidateKey(string section, string key, string keyValue)
         {
@@ -373,6 +469,29 @@ namespace WireSockUI.Config
             foreach (var value in keyValue.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
                 if (!validator(value.Trim()))
                     throw new FormatException($"\"{key}\" in \"{section}\", invalid address \"{value}\".");
+        }
+
+        internal static void ValidateInt(string section, string key, string keyValue, int minValue, int maxValue)
+        {
+            if (string.IsNullOrWhiteSpace(keyValue)) return;
+
+            var trimmedValue = keyValue.Trim();
+            if (!int.TryParse(trimmedValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue))
+                throw new FormatException($"\"{key}\" in \"{section}\", is not a numerical value.");
+
+            if (intValue < minValue || intValue > maxValue)
+                throw new FormatException(
+                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue}.");
+        }
+
+        internal static void ValidateBool(string section, string key, string keyValue)
+        {
+            if (string.IsNullOrWhiteSpace(keyValue)) return;
+
+            var trimmedValue = keyValue.Trim();
+            if (!string.Equals(trimmedValue, "true", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(trimmedValue, "false", StringComparison.OrdinalIgnoreCase))
+                throw new FormatException($"\"{key}\" in \"{section}\", must be true or false.");
         }
 
         public static IEnumerable<string> GetProfiles()

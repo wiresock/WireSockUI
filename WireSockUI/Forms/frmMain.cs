@@ -126,19 +126,32 @@ namespace WireSockUI.Forms
         ///     and false if the current instance is the only one running.
         /// </returns>
         /// <remarks>
-        ///     This function uses a named Mutex (a synchronization primitive) to check if it has been
-        ///     created before. If the Mutex is not new, that means another instance of the application
-        ///     is already running.
+        ///     This function uses the same named event as the direct WireSock C++ CLI/service so only one
+        ///     direct SDK tunnel owner is active at a time.
         /// </remarks>
         private static bool IsApplicationAlreadyRunning()
         {
-            const string mutexName = "Global\\WiresockClientService";
-            Global.AlreadyRunning = new Mutex(true, mutexName, out var createdNew);
+            const string eventName = "Global\\WiresockClientService";
 
-            if (createdNew) return false;
+            try
+            {
+                Global.AlreadyRunning =
+                    new EventWaitHandle(false, EventResetMode.AutoReset, eventName, out var createdNew);
 
-            Global.AlreadyRunning.Dispose();
-            return true;
+                if (createdNew) return false;
+
+                Global.AlreadyRunning.Dispose();
+                Global.AlreadyRunning = null;
+                return true;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return true;
+            }
+            catch (IOException)
+            {
+                return true;
+            }
         }
 
         /// <summary>
@@ -593,16 +606,31 @@ namespace WireSockUI.Forms
                 UpdateState(ConnectionState.Disconnected, false);
             }
 
+            // Get the selected profile.
+            var profile = lstProfiles.SelectedItems[0].Text;
+            Profile profileSettings;
+
+            try
+            {
+                profileSettings = Profile.LoadProfile(profile);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            var useAdapter = Settings.Default.UseAdapter;
+            if (bool.TryParse(profileSettings.VirtualAdapterMode, out var profileUseAdapter))
+                useAdapter = profileUseAdapter;
+
             if (IsCurrentProcessElevated())
-                // Set the tunnel mode based on the application settings.
-                _wiresock.TunnelMode = Settings.Default.UseAdapter
+                // Set the tunnel mode based on the application settings and profile override.
+                _wiresock.TunnelMode = useAdapter
                     ? WireSockManager.Mode.VirtualAdapter
                     : WireSockManager.Mode.Transparent;
             else
                 _wiresock.TunnelMode = WireSockManager.Mode.Transparent;
-
-            // Get the selected profile.
-            var profile = lstProfiles.SelectedItems[0].Text;
 
             // Connect to the selected profile and update the state to connecting if successful.
             if (_wiresock.Connect(profile))

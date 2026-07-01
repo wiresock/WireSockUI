@@ -9,6 +9,6 @@ namespace WireSockUI
             $"{Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData)}\\WireSockUI";
 
         public static string ConfigsFolder = MainFolder + "\\Configs";
-        public static Mutex AlreadyRunning;
+        public static EventWaitHandle AlreadyRunning;
     }
 }

@@ -103,9 +103,10 @@
             this.ddlLogLevel.DropDownStyle = System.Windows.Forms.ComboBoxStyle.DropDownList;
             this.ddlLogLevel.FormattingEnabled = true;
             this.ddlLogLevel.Items.AddRange(new object[] {
-            "None",
-            "Info",
             "Error",
+            "Warning",
+            "Info",
+            "Debug",
             "All"});
             this.ddlLogLevel.Location = new System.Drawing.Point(12, 217);
             this.ddlLogLevel.Name = "ddlLogLevel";
