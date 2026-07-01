@@ -91,7 +91,7 @@ namespace WireSockUI.Config
 
             if (!configESections.Contains("Peer", StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)} does not contain an \"Peer\" section.");
+                    $"Profile {Path.GetFileName(profilePath)} does not contain a \"Peer\" section.");
 
             section = parser.GetSection("Peer");
 
