@@ -364,11 +364,19 @@ namespace WireSockUI
                 try
                 {
                     _stopTunnel(_handle);
+                }
+                catch (Exception ex)
+                {
+                    PrintLog($"Failed to stop tunnel cleanly: {ex.Message}");
+                }
+
+                try
+                {
                     _dropTunnel(_handle, false);
                 }
                 catch (Exception ex)
                 {
-                    PrintLog($"Failed to disconnect tunnel cleanly: {ex.Message}");
+                    PrintLog($"Failed to release tunnel handle: {ex.Message}");
                 }
 
                 _handle = IntPtr.Zero;
