@@ -134,15 +134,6 @@ namespace WireSockUI
                 return true;
             }
 
-            foreach (var pathDirectory in GetPathDirectories())
-            {
-                if (!ContainsWireSockLibrary(pathDirectory))
-                    continue;
-
-                libraryDirectory = pathDirectory;
-                return true;
-            }
-
             foreach (var installLocation in GetInstallLocations())
             {
                 foreach (var candidate in GetLibraryDirectories(installLocation))
@@ -155,6 +146,15 @@ namespace WireSockUI
                 }
             }
 
+            foreach (var pathDirectory in GetPathDirectories())
+            {
+                if (!ContainsWireSockLibrary(pathDirectory))
+                    continue;
+
+                libraryDirectory = pathDirectory;
+                return true;
+            }
+
             return false;
         }
 
@@ -165,8 +165,9 @@ namespace WireSockUI
                 return !string.IsNullOrWhiteSpace(directory) &&
                        File.Exists(Path.Combine(directory, "wgbooster.dll"));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Trace.TraceWarning($"Skipping invalid WireSock library directory '{directory}': {ex.Message}");
                 return false;
             }
         }
@@ -190,8 +191,10 @@ namespace WireSockUI
             {
                 directories.Add(Path.Combine(path1, path2));
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Trace.TraceWarning(
+                    $"Skipping invalid WireSock library candidate '{path1}{Path.DirectorySeparatorChar}{path2}': {ex.Message}");
             }
         }
 
@@ -276,8 +279,9 @@ namespace WireSockUI
             {
                 Environment.SetEnvironmentVariable("PATH", $"{fullDirectory}{Path.PathSeparator}{environmentPath}");
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Trace.TraceWarning($"Failed to add WireSock library directory to process PATH: {ex.Message}");
             }
         }
 
@@ -290,8 +294,9 @@ namespace WireSockUI
             {
                 return Path.GetFullPath(directory.Trim().Trim('"')).TrimEnd(Path.DirectorySeparatorChar);
             }
-            catch (Exception)
+            catch (Exception ex)
             {
+                Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
                 return null;
             }
         }
