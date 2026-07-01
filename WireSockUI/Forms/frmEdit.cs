@@ -236,7 +236,7 @@ namespace WireSockUI.Forms
 
                             break;
                         case "socks5proxy":
-                            if (!string.IsNullOrWhiteSpace(value) && !IpHelper.IsValidAddress(value))
+                            if (!string.IsNullOrWhiteSpace(value) && !IpHelper.IsValidAddress(value.Trim()))
                             {
                                 txtEditor.UnderlineSelection();
                                 hasErrors = true;

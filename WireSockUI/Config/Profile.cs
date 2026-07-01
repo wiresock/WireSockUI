@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using WireSockUI.Extensions;
@@ -478,7 +479,8 @@ namespace WireSockUI.Config
         {
             if (string.IsNullOrWhiteSpace(keyValue)) return;
 
-            if (!int.TryParse(keyValue, out var intValue))
+            var trimmedValue = keyValue.Trim();
+            if (!int.TryParse(trimmedValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue))
                 throw new FormatException($"\"{key}\" in \"{section}\", is not a numerical value.");
 
             if (intValue < minValue || intValue > maxValue)
@@ -490,8 +492,9 @@ namespace WireSockUI.Config
         {
             if (string.IsNullOrWhiteSpace(keyValue)) return;
 
-            if (!string.Equals(keyValue, "true", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(keyValue, "false", StringComparison.OrdinalIgnoreCase))
+            var trimmedValue = keyValue.Trim();
+            if (!string.Equals(trimmedValue, "true", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(trimmedValue, "false", StringComparison.OrdinalIgnoreCase))
                 throw new FormatException($"\"{key}\" in \"{section}\", must be true or false.");
         }
 

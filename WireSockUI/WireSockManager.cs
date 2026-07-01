@@ -190,14 +190,16 @@ namespace WireSockUI
             if (_disposed)
                 return;
 
-            if (disposing)
+            if (_handle != IntPtr.Zero)
             {
-                if (_handle != IntPtr.Zero)
+                if (disposing)
                     Disconnect();
-
-                if (!_logQueue.IsAddingCompleted)
-                    _logQueue.CompleteAdding();
+                else
+                    DropCurrentHandle(false);
             }
+
+            if (disposing && !_logQueue.IsAddingCompleted)
+                _logQueue.CompleteAdding();
 
             if (_logPrinterHandle.IsAllocated)
                 _logPrinterHandle.Free();
@@ -312,7 +314,7 @@ namespace WireSockUI
                 {
                     ShowTunnelError(Resources.TunnelErrorCreate);
 
-                    DropCurrentHandle();
+                    DropCurrentHandle(true);
                     return false;
                 }
 
@@ -323,28 +325,28 @@ namespace WireSockUI
                 {
                     ShowTunnelError(Resources.TunnelErrorStart);
 
-                    DropCurrentHandle();
+                    DropCurrentHandle(true);
                     return false;
                 }
             }
             catch (DllNotFoundException ex)
             {
-                DropCurrentHandle();
+                DropCurrentHandle(true);
                 return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
             }
             catch (EntryPointNotFoundException ex)
             {
-                DropCurrentHandle();
+                DropCurrentHandle(true);
                 return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
             }
             catch (BadImageFormatException ex)
             {
-                DropCurrentHandle();
+                DropCurrentHandle(true);
                 return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
             }
             catch (Exception ex)
             {
-                DropCurrentHandle();
+                DropCurrentHandle(true);
                 return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
             }
 
@@ -450,7 +452,7 @@ namespace WireSockUI
             return $"Native error {error}: {new Win32Exception(error).Message}";
         }
 
-        private void DropCurrentHandle()
+        private void DropCurrentHandle(bool logFailure)
         {
             if (_handle == IntPtr.Zero || _dropTunnel == null)
                 return;
@@ -461,7 +463,8 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                PrintLog($"Failed to release tunnel handle: {ex.Message}");
+                if (logFailure)
+                    PrintLog($"Failed to release tunnel handle: {ex.Message}");
             }
             finally
             {
