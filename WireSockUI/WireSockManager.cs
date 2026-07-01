@@ -382,16 +382,13 @@ namespace WireSockUI
             {
                 try
                 {
-                    if (_stopTunnel != null)
-                    {
-                        if (!_stopTunnel(_handle))
-                            PrintLog(
-                                $"Failed to stop tunnel cleanly: {GetLastNativeErrorOrDefault("native stop_tunnel returned false.")}");
-                    }
-                    else
-                    {
-                        PrintLog("Failed to stop tunnel cleanly: stop_tunnel export is unavailable.");
-                    }
+                    if (!_stopTunnel(_handle))
+                        PrintLog(
+                            $"Failed to stop tunnel cleanly: {GetLastNativeErrorOrDefault("native stop_tunnel returned false.")}");
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    PrintLog($"Failed to stop tunnel cleanly: stop_tunnel export is unavailable. {ex.Message}");
                 }
                 catch (Exception ex)
                 {
@@ -400,16 +397,13 @@ namespace WireSockUI
 
                 try
                 {
-                    if (_dropTunnel != null)
-                    {
-                        if (!_dropTunnel(_handle, false))
-                            PrintLog(
-                                $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
-                    }
-                    else
-                    {
-                        PrintLog("Failed to release tunnel handle: drop_tunnel export is unavailable.");
-                    }
+                    if (!_dropTunnel(_handle, false))
+                        PrintLog(
+                            $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    PrintLog($"Failed to release tunnel handle: drop_tunnel export is unavailable. {ex.Message}");
                 }
                 catch (Exception ex)
                 {
@@ -500,16 +494,14 @@ namespace WireSockUI
 
             try
             {
-                if (_dropTunnel != null)
-                {
-                    if (!_dropTunnel(_handle, false) && logFailure)
-                        PrintLog(
-                            $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
-                }
-                else if (logFailure)
-                {
-                    PrintLog("Failed to release tunnel handle: drop_tunnel export is unavailable.");
-                }
+                if (!_dropTunnel(_handle, false) && logFailure)
+                    PrintLog(
+                        $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                if (logFailure)
+                    PrintLog($"Failed to release tunnel handle: drop_tunnel export is unavailable. {ex.Message}");
             }
             catch (Exception ex)
             {

@@ -148,7 +148,7 @@ namespace WireSockUI.Forms
             {
                 return true;
             }
-            catch (WaitHandleCannotBeOpenedException)
+            catch (IOException)
             {
                 return true;
             }

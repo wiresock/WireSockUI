@@ -283,7 +283,8 @@ namespace WireSockUI
 
             try
             {
-                return Path.GetFullPath(directory.Trim().Trim('"')).TrimEnd(Path.DirectorySeparatorChar);
+                return Path.GetFullPath(directory.Trim().Trim('"'))
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             }
             catch (Exception ex)
             {
