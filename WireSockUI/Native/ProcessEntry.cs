@@ -44,7 +44,7 @@ namespace WireSockUI.Native
 
             public int GetHashCode(ProcessEntry p)
             {
-                return p.Name != null ? p.Name.GetHashCode() : 0;
+                return p?.Name != null ? StringComparer.OrdinalIgnoreCase.GetHashCode(p.Name) : 0;
             }
         }
     }

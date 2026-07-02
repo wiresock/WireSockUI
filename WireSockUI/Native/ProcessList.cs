@@ -7,6 +7,8 @@ namespace WireSockUI.Native
 {
     internal class ProcessList
     {
+        private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
+
         [DllImport("advapi32", SetLastError = true)]
         private static extern bool OpenProcessToken(IntPtr processHandle, int desiredAccess, out IntPtr tokenHandle);
 
@@ -40,10 +42,17 @@ namespace WireSockUI.Native
             if (!OpenProcessToken(handle, tokenQuery, out var tokenHandle))
                 return null;
 
-            using (var wi = new WindowsIdentity(tokenHandle))
+            try
             {
-                CloseHandle(tokenHandle);
-                return wi.Name;
+                using (var wi = new WindowsIdentity(tokenHandle))
+                {
+                    return wi.Name;
+                }
+            }
+            finally
+            {
+                if (tokenHandle != IntPtr.Zero)
+                    CloseHandle(tokenHandle);
             }
         }
 
@@ -68,25 +77,41 @@ namespace WireSockUI.Native
             const int processQueryLimitedInformation = 0x00001000;
 
             var snap = CreateToolhelp32Snapshot(th32CsSnapprocess, 0);
+            if (snap == IntPtr.Zero || snap == InvalidHandleValue)
+                yield break;
 
-            var entry = new Processentry32 { dwSize = Marshal.SizeOf<Processentry32>() };
+            try
+            {
+                var entry = new Processentry32 { dwSize = Marshal.SizeOf<Processentry32>() };
 
-            if (Process32First(snap, ref entry))
-                do
-                {
-                    var handle = OpenProcess(processQueryLimitedInformation, false, entry.th32ProcessID);
+                if (Process32First(snap, ref entry))
+                    do
+                    {
+                        var handle = OpenProcess(processQueryLimitedInformation, false, entry.th32ProcessID);
+                        ProcessEntry processEntry;
 
-                    yield return new ProcessEntry(
-                        entry.th32ProcessID,
-                        entry.szExeFile,
-                        GetProcessImage(handle),
-                        GetProcessUser(handle));
+                        try
+                        {
+                            processEntry = new ProcessEntry(
+                                entry.th32ProcessID,
+                                entry.szExeFile,
+                                GetProcessImage(handle),
+                                GetProcessUser(handle));
+                        }
+                        finally
+                        {
+                            if (handle != IntPtr.Zero)
+                                CloseHandle(handle);
+                        }
 
-                    if (handle != IntPtr.Zero)
-                        CloseHandle(handle);
-                } while (Process32Next(snap, ref entry));
-
-            CloseHandle(snap);
+                        yield return processEntry;
+                    } while (Process32Next(snap, ref entry));
+            }
+            finally
+            {
+                if (snap != IntPtr.Zero && snap != InvalidHandleValue)
+                    CloseHandle(snap);
+            }
         }
 
         [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]

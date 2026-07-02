@@ -194,16 +194,14 @@ namespace WireSockUI.Forms
         {
             try
             {
-                var appPath = System.AppContext.BaseDirectory;
+                var appPath = Application.ExecutablePath;
                 var startupFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
                 var shortcutPath = Path.Combine(startupFolderPath, GetAppName() + ".lnk");
 
                 using (var link = new ShellLink())
                 {
                     link.TargetPath = appPath;
-                    // Optionally set other properties like arguments, working directory, etc.
-                    // link.Arguments = "<YourArguments>";
-                    // link.WorkingDirectory = "<YourWorkingDirectory>";
+                    link.WorkingDirectory = AppContext.BaseDirectory;
 
                     link.Save(shortcutPath);
                 }

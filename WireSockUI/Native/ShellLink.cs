@@ -306,6 +306,17 @@ namespace WireSockUI.Native
             set => VerifySucceeded(_shellLinkW.SetArguments(value));
         }
 
+        public string WorkingDirectory
+        {
+            get
+            {
+                var workingDirectory = new StringBuilder(MaxPath);
+                VerifySucceeded(_shellLinkW.GetWorkingDirectory(workingDirectory, workingDirectory.Capacity));
+                return workingDirectory.ToString();
+            }
+            set => VerifySucceeded(_shellLinkW.SetWorkingDirectory(value));
+        }
+
         // AppUserModelID to be used for Windows 7 or later.
         public string AppUserModelId
         {

@@ -3,7 +3,6 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Management;
 using System.Runtime.InteropServices;
-using System.Windows.Forms;
 using WireSockUI.Config;
 using WireSockUI.Properties;
 using static WireSockUI.Native.WireguardBoosterExports;
@@ -44,11 +43,12 @@ namespace WireSockUI
         private readonly LogPrinter _logPrinter;
 
         private readonly BlockingCollection<LogMessage> _logQueue;
+        private readonly object _syncRoot = new object();
 
         private volatile IntPtr _handle = IntPtr.Zero;
         private WgbLogLevel _logLevel;
         private GCHandle _logPrinterHandle;
-        private bool _disposed;
+        private volatile bool _disposed;
 
         /// <summary>
         ///     Initializes a new instance of the <see cref="WireSockManager" />.
@@ -75,40 +75,52 @@ namespace WireSockUI
         /// </summary>
         public Mode TunnelMode
         {
-            get => _adapterMode;
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _adapterMode;
+                }
+            }
             set
             {
-                if (value == _adapterMode)
-                    return;
-
-                if (_handle != IntPtr.Zero)
-                    throw new InvalidOperationException("Adapter mode cannot be changed while in instantiated state.");
-
-                switch (value)
+                lock (_syncRoot)
                 {
-                    case Mode.VirtualAdapter:
-                        _getHandle = wgbp_get_handle;
-                        _setLogLevel = wgbp_set_log_level;
-                        _createTunnelFromFile = wgbp_create_tunnel_from_file_w;
-                        _startTunnel = wgbp_start_tunnel;
-                        _stopTunnel = wgbp_stop_tunnel;
-                        _dropTunnel = wgbp_drop_tunnel;
-                        _tunnelActive = wgbp_get_tunnel_active;
-                        _tunnelState = wgbp_get_tunnel_state;
-                        break;
-                    default:
-                        _getHandle = wgb_get_handle;
-                        _setLogLevel = wgb_set_log_level;
-                        _createTunnelFromFile = wgb_create_tunnel_from_file_w;
-                        _startTunnel = wgb_start_tunnel;
-                        _stopTunnel = wgb_stop_tunnel;
-                        _dropTunnel = wgb_drop_tunnel;
-                        _tunnelActive = wgb_get_tunnel_active;
-                        _tunnelState = wgb_get_tunnel_state;
-                        break;
-                }
+                    ThrowIfDisposed();
 
-                _adapterMode = value;
+                    if (value == _adapterMode)
+                        return;
+
+                    if (_handle != IntPtr.Zero)
+                        throw new InvalidOperationException(
+                            "Adapter mode cannot be changed while a tunnel handle is still allocated. Disconnect and retry.");
+
+                    switch (value)
+                    {
+                        case Mode.VirtualAdapter:
+                            _getHandle = wgbp_get_handle;
+                            _setLogLevel = wgbp_set_log_level;
+                            _createTunnelFromFile = wgbp_create_tunnel_from_file_w;
+                            _startTunnel = wgbp_start_tunnel;
+                            _stopTunnel = wgbp_stop_tunnel;
+                            _dropTunnel = wgbp_drop_tunnel;
+                            _tunnelActive = wgbp_get_tunnel_active;
+                            _tunnelState = wgbp_get_tunnel_state;
+                            break;
+                        default:
+                            _getHandle = wgb_get_handle;
+                            _setLogLevel = wgb_set_log_level;
+                            _createTunnelFromFile = wgb_create_tunnel_from_file_w;
+                            _startTunnel = wgb_start_tunnel;
+                            _stopTunnel = wgb_stop_tunnel;
+                            _dropTunnel = wgb_drop_tunnel;
+                            _tunnelActive = wgb_get_tunnel_active;
+                            _tunnelState = wgb_get_tunnel_state;
+                            break;
+                    }
+
+                    _adapterMode = value;
+                }
             }
         }
 
@@ -140,11 +152,16 @@ namespace WireSockUI
             get => _logLevel;
             set
             {
-                _logLevel = value;
+                lock (_syncRoot)
+                {
+                    ThrowIfDisposed();
 
-                // Update loglevel directly if instantiated
-                if (_handle != IntPtr.Zero && _setLogLevel != null)
-                    _setLogLevel(_handle, value);
+                    _logLevel = value;
+
+                    // Update loglevel directly if instantiated
+                    if (_handle != IntPtr.Zero && _setLogLevel != null)
+                        _setLogLevel(_handle, value);
+                }
             }
         }
 
@@ -155,19 +172,33 @@ namespace WireSockUI
         {
             get
             {
-                if (_handle != IntPtr.Zero)
+                lock (_syncRoot)
                 {
-                    try
+                    if (_handle != IntPtr.Zero)
                     {
-                        return _tunnelActive(_handle);
+                        try
+                        {
+                            return _tunnelActive(_handle);
+                        }
+                        catch (Exception ex)
+                        {
+                            PrintLog($"Failed to query tunnel state: {ex.Message}");
+                        }
                     }
-                    catch (Exception ex)
-                    {
-                        PrintLog($"Failed to query tunnel state: {ex.Message}");
-                    }
-                }
 
-                return false;
+                    return false;
+                }
+            }
+        }
+
+        public bool HasTunnelHandle
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _handle != IntPtr.Zero;
+                }
             }
         }
 
@@ -175,6 +206,8 @@ namespace WireSockUI
         ///     Current active profile, if any
         /// </summary>
         public string ProfileName { get; private set; }
+
+        public string LastError { get; private set; }
 
         /// <summary>
         ///     Disposes the GCHandle for the log printer delegate.
@@ -187,23 +220,34 @@ namespace WireSockUI
 
         private void Dispose(bool disposing)
         {
-            if (_disposed)
-                return;
-
-            if (_handle != IntPtr.Zero)
+            lock (_syncRoot)
             {
-                if (disposing)
-                    Disconnect();
-                else
-                    DropCurrentHandle(false);
+                if (_disposed)
+                    return;
+
+                if (_handle != IntPtr.Zero)
+                {
+                    if (disposing)
+                    {
+                        if (!Disconnect() && _handle != IntPtr.Zero)
+                        {
+                            PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
+                            DropCurrentHandle(true, true);
+                        }
+                    }
+                    else
+                    {
+                        DropCurrentHandle(false, true);
+                    }
+                }
+
+                CompleteLogQueue();
+
+                if (_logPrinterHandle.IsAllocated)
+                    _logPrinterHandle.Free();
+
+                _disposed = true;
             }
-
-            CompleteLogQueue();
-
-            if (_logPrinterHandle.IsAllocated)
-                _logPrinterHandle.Free();
-
-            _disposed = true;
         }
 
         /// <summary>
@@ -319,67 +363,80 @@ namespace WireSockUI
         {
             var profilePath = Profile.GetProfilePath(profile);
 
-            try
+            lock (_syncRoot)
             {
-                if (_handle == IntPtr.Zero)
-                    _handle = _getHandle(_logPrinter, _logLevel, false);
+                ThrowIfDisposed();
+                LastError = null;
 
-                if (_handle == IntPtr.Zero)
-                    return ShowTunnelError(Resources.TunnelErrorManager);
-
-                if (!_createTunnelFromFile(_handle, profilePath))
+                try
                 {
-                    ShowTunnelError(Resources.TunnelErrorCreate);
+                    if (_handle != IntPtr.Zero && !DropCurrentHandle(true))
+                        return ShowTunnelError(
+                            "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");
 
+                    if (_handle == IntPtr.Zero)
+                        _handle = _getHandle(_logPrinter, _logLevel, false);
+
+                    if (_handle == IntPtr.Zero)
+                        return ShowTunnelError(Resources.TunnelErrorManager);
+
+                    if (!_createTunnelFromFile(_handle, profilePath))
+                    {
+                        ShowTunnelError(Resources.TunnelErrorCreate);
+
+                        DropCurrentHandle(true);
+                        return false;
+                    }
+
+                    if (_adapterMode == Mode.VirtualAdapter)
+                        ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
+
+                    if (!_startTunnel(_handle))
+                    {
+                        ShowTunnelError(Resources.TunnelErrorStart);
+
+                        DropCurrentHandle(true);
+                        return false;
+                    }
+                }
+                catch (DllNotFoundException ex)
+                {
                     DropCurrentHandle(true);
-                    return false;
+                    return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    DropCurrentHandle(true);
+                    return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
+                }
+                catch (BadImageFormatException ex)
+                {
+                    DropCurrentHandle(true);
+                    return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
+                }
+                catch (Exception ex)
+                {
+                    DropCurrentHandle(true);
+                    return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
                 }
 
-                if (TunnelMode == Mode.VirtualAdapter)
-                    ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
+                // Update connected profile
+                ProfileName = profile;
 
-                if (!_startTunnel(_handle))
-                {
-                    ShowTunnelError(Resources.TunnelErrorStart);
-
-                    DropCurrentHandle(true);
-                    return false;
-                }
+                return true;
             }
-            catch (DllNotFoundException ex)
-            {
-                DropCurrentHandle(true);
-                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
-            }
-            catch (EntryPointNotFoundException ex)
-            {
-                DropCurrentHandle(true);
-                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
-            }
-            catch (BadImageFormatException ex)
-            {
-                DropCurrentHandle(true);
-                return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
-            }
-            catch (Exception ex)
-            {
-                DropCurrentHandle(true);
-                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
-            }
-
-            // Update connected profile
-            ProfileName = profile;
-
-            return true;
         }
 
         /// <summary>
         ///     Stops and disconnects from the Wireguard tunnel asynchronously.
         /// </summary>
-        public void Disconnect()
+        public bool Disconnect()
         {
-            if (_handle != IntPtr.Zero)
+            lock (_syncRoot)
             {
+                if (_handle == IntPtr.Zero)
+                    return true;
+
                 try
                 {
                     if (!_stopTunnel(_handle))
@@ -395,23 +452,7 @@ namespace WireSockUI
                     PrintLog($"Failed to stop tunnel cleanly: {ex.Message}");
                 }
 
-                try
-                {
-                    if (!_dropTunnel(_handle, false))
-                        PrintLog(
-                            $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
-                }
-                catch (EntryPointNotFoundException ex)
-                {
-                    PrintLog($"Failed to release tunnel handle: drop_tunnel export is unavailable. {ex.Message}");
-                }
-                catch (Exception ex)
-                {
-                    PrintLog($"Failed to release tunnel handle: {ex.Message}");
-                }
-
-                _handle = IntPtr.Zero;
-                ProfileName = null;
+                return DropCurrentHandle(true);
             }
         }
 
@@ -423,19 +464,22 @@ namespace WireSockUI
         /// </returns>
         public WgbStats GetState()
         {
-            if (_handle != IntPtr.Zero)
+            lock (_syncRoot)
             {
-                try
+                if (_handle != IntPtr.Zero)
                 {
-                    return _tunnelState(_handle);
+                    try
+                    {
+                        return _tunnelState(_handle);
+                    }
+                    catch (Exception ex)
+                    {
+                        PrintLog($"Failed to read tunnel statistics: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    PrintLog($"Failed to read tunnel statistics: {ex.Message}");
-                }
-            }
 
-            return new WgbStats();
+                return new WgbStats();
+            }
         }
 
         /// <summary>
@@ -468,7 +512,7 @@ namespace WireSockUI
                 message = $"{message}{Environment.NewLine}{Environment.NewLine}{diagnostic}";
             }
 
-            MessageBox.Show(message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            LastError = message;
             return false;
         }
 
@@ -487,14 +531,23 @@ namespace WireSockUI
             return string.IsNullOrWhiteSpace(diagnostic) ? fallback : diagnostic;
         }
 
-        private void DropCurrentHandle(bool logFailure)
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(WireSockManager));
+        }
+
+        private bool DropCurrentHandle(bool logFailure, bool clearOnFailure = false)
         {
             if (_handle == IntPtr.Zero)
-                return;
+                return true;
+
+            var dropped = false;
 
             try
             {
-                if (!_dropTunnel(_handle, false) && logFailure)
+                dropped = _dropTunnel(_handle, false);
+                if (!dropped && logFailure)
                     PrintLog(
                         $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
             }
@@ -510,8 +563,14 @@ namespace WireSockUI
             }
             finally
             {
-                _handle = IntPtr.Zero;
+                if (dropped || clearOnFailure)
+                {
+                    _handle = IntPtr.Zero;
+                    ProfileName = null;
+                }
             }
+
+            return dropped;
         }
 
         #region Wireguard Boost Library

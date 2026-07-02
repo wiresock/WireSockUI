@@ -22,6 +22,9 @@ namespace WireSockUI.Forms
 
         private volatile bool _highlighting;
 
+        private Font _editorBoldFont;
+        private Font _editorItalicFont;
+        private Font _editorRegularFont;
         private string _targetConfigurationKeyName;
 
         public FrmEdit() : this(null)
@@ -75,9 +78,7 @@ namespace WireSockUI.Forms
             txtEditor.SelectionLength = txtEditor.Text.Length;
             txtEditor.SelectionColor = originalColor;
 
-            txtEditor.SelectionFont = txtEditor.SelectionFont != null ? new Font(txtEditor.SelectionFont, FontStyle.Regular) :
-                // Handle the null case, e.g., set to a default font
-                new Font("Courier New", 10, FontStyle.Regular);
+            txtEditor.SelectionFont = _editorRegularFont;
           
             foreach (Match m in ProfileMatch.Matches(txtEditor.Text))
             {
@@ -85,7 +86,7 @@ namespace WireSockUI.Forms
                 {
                     txtEditor.SelectionStart = m.Groups["comment"].Index;
                     txtEditor.SelectionLength = m.Groups["comment"].Length;
-                    txtEditor.SelectionFont = new Font(txtEditor.SelectionFont, FontStyle.Italic);
+                    txtEditor.SelectionFont = _editorItalicFont;
 
                     switch (m.Groups["comment"].Value[0])
                     {
@@ -105,7 +106,7 @@ namespace WireSockUI.Forms
                     txtEditor.SelectionStart = m.Groups["section"].Index;
                     txtEditor.SelectionLength = m.Groups["section"].Length;
                     txtEditor.SelectionColor = Color.DarkBlue;
-                    txtEditor.SelectionFont = new Font(txtEditor.SelectionFont, FontStyle.Bold);
+                    txtEditor.SelectionFont = _editorBoldFont;
 
                     switch (m.Groups["section"].Value.ToLowerInvariant())
                     {
@@ -515,12 +516,15 @@ namespace WireSockUI.Forms
         private void Initialize()
         {
             InitializeComponent();
+            _editorRegularFont = new Font(txtEditor.Font, FontStyle.Regular);
+            _editorItalicFont = new Font(txtEditor.Font, FontStyle.Italic);
+            _editorBoldFont = new Font(txtEditor.Font, FontStyle.Bold);
 
             Icon = Resources.ico;
             txtProfileName.SetCueBanner(Resources.EditProfileCue);
-            toolStripMenuItemByProcName.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.ProcessList, 16).ToBitmap();
-            toolStripMenuItemByDirPath.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.OpenTunnel, 16).ToBitmap();
-            toolStripMenuItemByFilePath.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.NewTunnel, 16).ToBitmap();
+            toolStripMenuItemByProcName.Image = GetWindowsIconBitmap(WindowsIcons.Icons.ProcessList, 16);
+            toolStripMenuItemByDirPath.Image = GetWindowsIconBitmap(WindowsIcons.Icons.OpenTunnel, 16);
+            toolStripMenuItemByFilePath.Image = GetWindowsIconBitmap(WindowsIcons.Icons.NewTunnel, 16);
         }
 
         private void OnSaveClick(object sender, EventArgs e)
@@ -541,8 +545,7 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(txtProfileName.Text) ||
-                txtProfileName.Text.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            if (!Profile.IsValidProfileName(txtProfileName.Text))
             {
                 MessageBox.Show(Resources.EditProfileNameError, Resources.EditProfileError, MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -634,6 +637,23 @@ namespace WireSockUI.Forms
             {
                 if (openFileDialog.ShowDialog() != DialogResult.OK) return;
                 InsertOrAppendConfigurationValue(_targetConfigurationKeyName, openFileDialog.FileName);
+            }
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _editorRegularFont?.Dispose();
+            _editorItalicFont?.Dispose();
+            _editorBoldFont?.Dispose();
+
+            base.OnFormClosed(e);
+        }
+
+        private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
+        {
+            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+            {
+                return windowsIcon?.ToBitmap();
             }
         }
     }
