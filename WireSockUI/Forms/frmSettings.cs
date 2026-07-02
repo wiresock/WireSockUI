@@ -34,7 +34,9 @@ namespace WireSockUI.Forms
             {
                 chkUseAdapter.Enabled = false;
                 chkUseAdapter.Checked = false;
-                chkEnableKillSwitch.Enabled = false;
+
+                // Non-elevated users may turn an already-enabled Kill Switch off, but cannot enable it.
+                chkEnableKillSwitch.Enabled = chkEnableKillSwitch.Checked;
 
                 // If autorun is enabled for admin users while we are not an admin, disable the checkbox
                 if (chkAutorun.Checked && !IsAutoRunForNonAdminEnabled())

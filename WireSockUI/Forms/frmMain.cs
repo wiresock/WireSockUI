@@ -729,7 +729,9 @@ namespace WireSockUI.Forms
             {
                 if (_wiresock.HasTunnelHandle)
                 {
-                    _wiresock.KillSwitchEnabled = Settings.Default.EnableKillSwitch;
+                    if (Settings.Default.EnableKillSwitch || _wiresock.KillSwitchEnabled)
+                        _wiresock.KillSwitchEnabled = Settings.Default.EnableKillSwitch;
+
                     return;
                 }
 
