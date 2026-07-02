@@ -284,7 +284,7 @@ namespace WireSockUI.Forms
 
                         // Under Administrator ensure that non-admin AutoRun is also disabled
                         if (autoRunUpdated && IsAutoRunForNonAdminEnabled())
-                            autoRunUpdated = DisableAutoRunForNonAdmin();
+                            DisableAutoRunForNonAdmin();
                     }
                     else
                     {
@@ -299,7 +299,7 @@ namespace WireSockUI.Forms
 
                         // Under Administrator ensure that non-admin AutoRun is disabled
                         if (autoRunUpdated && IsAutoRunForNonAdminEnabled())
-                            autoRunUpdated = DisableAutoRunForNonAdmin();
+                            DisableAutoRunForNonAdmin();
                     }
                     else
                     {

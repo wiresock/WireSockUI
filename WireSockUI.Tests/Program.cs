@@ -206,6 +206,16 @@ namespace WireSockUI.Tests
             finally
             {
                 Global.ConfigsFolder = originalConfigsFolder;
+
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
             }
         }
 

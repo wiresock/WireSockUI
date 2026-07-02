@@ -183,6 +183,17 @@ namespace WireSockUI.Forms
                 btnActivate.Enabled = enabled;
         }
 
+        private bool TryGetProfileItem(string profileName, out ListViewItem profileItem)
+        {
+            profileItem = null;
+
+            if (string.IsNullOrWhiteSpace(profileName) || !lstProfiles.Items.ContainsKey(profileName))
+                return false;
+
+            profileItem = lstProfiles.Items[profileName];
+            return profileItem != null;
+        }
+
         private int CurrentTunnelGeneration()
         {
             return Volatile.Read(ref _tunnelGeneration);
@@ -207,7 +218,7 @@ namespace WireSockUI.Forms
 
         private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true)
         {
-            UpdateState(ConnectionState.Disconnected, notify, false);
+            UpdateState(ConnectionState.Disconnected, notify);
             return await DisconnectNativeTunnelAsync();
         }
 
@@ -511,7 +522,7 @@ namespace WireSockUI.Forms
         ///     <c>true</c> if a toast notification should be triggered, otherwise <c>false</c>
         /// </param>
         /// <remarks>This updates both the actual tunnel state and all related UI elements.</remarks>
-        private void UpdateState(ConnectionState state, bool notify = true, bool disconnectTunnel = true)
+        private void UpdateState(ConnectionState state, bool notify = true)
         {
             _currentState = state;
 
@@ -533,8 +544,8 @@ namespace WireSockUI.Forms
 
                     cmiDeactivateTunnel.Enabled = true;
 
-                    if (lstProfiles.Items.ContainsKey(_wiresock.ProfileName))
-                        lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Connecting.ToString();
+                    if (TryGetProfileItem(_wiresock.ProfileName, out var connectingProfile))
+                        connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
 
                     trayIcon.Text = Resources.TrayActivating;
 
@@ -569,8 +580,8 @@ namespace WireSockUI.Forms
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
                             menuItem.Checked = menuItem.Text == _wiresock.ProfileName;
 
-                    if (lstProfiles.Items.ContainsKey(_wiresock.ProfileName))
-                        lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Connected.ToString();
+                    if (TryGetProfileItem(_wiresock.ProfileName, out var connectedProfile))
+                        connectedProfile.ImageKey = ConnectionState.Connected.ToString();
 
                     Settings.Default.LastProfile = _wiresock.ProfileName;
                     Settings.Default.Save();
@@ -616,8 +627,8 @@ namespace WireSockUI.Forms
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
                             menuItem.Checked = false;
 
-                    if (lstProfiles.Items.ContainsKey(_wiresock.ProfileName))
-                        lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Disconnected.ToString();
+                    if (TryGetProfileItem(_wiresock.ProfileName, out var disconnectedProfile))
+                        disconnectedProfile.ImageKey = ConnectionState.Disconnected.ToString();
 
                     gbxState.Visible = false;
                     _tunnelConnectionWorker.CancelAsync();
@@ -628,11 +639,6 @@ namespace WireSockUI.Forms
                         Notifications.Notifications.Notify(Resources.ToastInactiveTitle,
                             string.Format(Resources.ToastInactiveMessage, _wiresock.ProfileName));
 #endif
-
-                    if (disconnectTunnel && !_wiresock.Disconnect())
-                        MessageBox.Show(
-                            "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
-                            Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     break;
             }
 
@@ -850,7 +856,7 @@ namespace WireSockUI.Forms
                     if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
                     {
                         MessageBox.Show(
-                            $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
+                            $"Unable to query the current Kill Switch network lock state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }

@@ -247,9 +247,8 @@ namespace WireSockUI
 
                 if (_getNetworkLockMode == null)
                 {
-                    diagnostic = "The loaded wgbooster.dll does not expose network lock query support.";
-                    PrintLog($"Failed to query kill switch network lock mode: {diagnostic}");
-                    return false;
+                    enabled = false;
+                    return true;
                 }
 
                 try
@@ -257,9 +256,10 @@ namespace WireSockUI
                     enabled = _getNetworkLockMode(_handle) == WgbNetworkLockMode.Enabled;
                     return true;
                 }
-                catch (EntryPointNotFoundException ex)
+                catch (EntryPointNotFoundException)
                 {
-                    diagnostic = $"The loaded wgbooster.dll does not expose network lock query support. {ex.Message}";
+                    enabled = false;
+                    return true;
                 }
                 catch (Exception ex)
                 {
@@ -683,10 +683,10 @@ namespace WireSockUI
                 active = wg_is_network_lock_active();
                 return true;
             }
-            catch (EntryPointNotFoundException ex)
+            catch (EntryPointNotFoundException)
             {
-                diagnostic = $"The loaded wgbooster.dll does not expose network lock query support. {ex.Message}";
-                return false;
+                active = false;
+                return true;
             }
             catch (Exception ex)
             {
