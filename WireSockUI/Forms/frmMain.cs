@@ -736,7 +736,7 @@ namespace WireSockUI.Forms
                 if (!Settings.Default.EnableKillSwitch && WireSockManager.IsNetworkLockActive() &&
                     !WireSockManager.ResetNetworkLock())
                     MessageBox.Show(
-                        "Kill Switch network lock is active, but WireSockUI could not reset it. Disconnect or restart WireSock UI and try again.",
+                        Resources.KillSwitchResetError,
                         Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
             catch (Exception ex)

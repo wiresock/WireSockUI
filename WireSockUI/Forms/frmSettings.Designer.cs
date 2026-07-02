@@ -177,7 +177,7 @@
             this.chkEnableKillSwitch.AutoSize = true;
             this.chkEnableKillSwitch.Location = new System.Drawing.Point(12, 194);
             this.chkEnableKillSwitch.Name = "chkEnableKillSwitch";
-            this.resControls.SetResourceKey(this.chkEnableKillSwitch, null);
+            this.resControls.SetResourceKey(this.chkEnableKillSwitch, "SettingsEnableKillSwitch");
             this.chkEnableKillSwitch.Size = new System.Drawing.Size(185, 17);
             this.chkEnableKillSwitch.TabIndex = 12;
             this.chkEnableKillSwitch.Text = "Enable Kill Switch (network lock)";

@@ -35,7 +35,6 @@ namespace WireSockUI.Forms
                 chkUseAdapter.Enabled = false;
                 chkUseAdapter.Checked = false;
                 chkEnableKillSwitch.Enabled = false;
-                chkEnableKillSwitch.Checked = false;
 
                 // If autorun is enabled for admin users while we are not an admin, disable the checkbox
                 if (chkAutorun.Checked && !IsAutoRunForNonAdminEnabled())

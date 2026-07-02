@@ -422,7 +422,7 @@ namespace WireSockUI
 
                     if (Settings.Default.EnableKillSwitch && !SetNetworkLockMode(true))
                     {
-                        DropCurrentHandle(true);
+                        DropCurrentHandle(true, true);
                         return false;
                     }
 
@@ -617,7 +617,7 @@ namespace WireSockUI
             }
             catch (EntryPointNotFoundException)
             {
-                return true;
+                return false;
             }
             catch
             {

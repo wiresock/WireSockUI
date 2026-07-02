@@ -256,6 +256,9 @@
   <data name="LastProfileNotFound" xml:space="preserve">
     <value>Last saved config not found.</value>
   </data>
+  <data name="KillSwitchResetError" xml:space="preserve">
+    <value>Kill Switch network lock is active, but WireSockUI could not reset it. Disconnect or restart WireSock UI and try again.</value>
+  </data>
   <data name="LogTimestampFormat" xml:space="preserve">
     <value>yyyy-MM-dd HH:mm:ss.fff</value>
   </data>
@@ -339,6 +342,9 @@
   </data>
   <data name="SettingsAutoUpdate" xml:space="preserve">
     <value>Check online for updates</value>
+  </data>
+  <data name="SettingsEnableKillSwitch" xml:space="preserve">
+    <value>Enable Kill Switch (network lock)</value>
   </data>
   <data name="SettingsLogLevel" xml:space="preserve">
     <value>Log level</value>

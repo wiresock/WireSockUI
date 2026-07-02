@@ -458,6 +458,15 @@ namespace WireSockUI.Properties {
                 return ResourceManager.GetString("LastProfileNotFound", resourceCulture);
             }
         }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Kill Switch network lock is active, but WireSockUI could not reset it. Disconnect or restart WireSock UI and try again..
+        /// </summary>
+        internal static string KillSwitchResetError {
+            get {
+                return ResourceManager.GetString("KillSwitchResetError", resourceCulture);
+            }
+        }
         
         /// <summary>
         ///   Looks up a localized string similar to yyyy-MM-dd HH:mm:ss.fff.
@@ -708,6 +717,15 @@ namespace WireSockUI.Properties {
         internal static string SettingsAutoUpdate {
             get {
                 return ResourceManager.GetString("SettingsAutoUpdate", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Enable Kill Switch (network lock).
+        /// </summary>
+        internal static string SettingsEnableKillSwitch {
+            get {
+                return ResourceManager.GetString("SettingsEnableKillSwitch", resourceCulture);
             }
         }
         
