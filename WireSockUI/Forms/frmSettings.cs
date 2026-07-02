@@ -270,6 +270,11 @@ namespace WireSockUI.Forms
             }
         }
 
+        private static bool DisableAutoRunForNonAdminIfPresent()
+        {
+            return !IsAutoRunForNonAdminEnabled() || DisableAutoRunForNonAdmin();
+        }
+
         private void OnSaveClick(object sender, EventArgs e)
         {
             if (Settings.Default.AutoRun != chkAutorun.Checked)
@@ -280,11 +285,8 @@ namespace WireSockUI.Forms
                 {
                     if (IsCurrentProcessElevated())
                     {
-                        autoRunUpdated = DisableAutoRunForAdmin();
-
                         // Under Administrator ensure that non-admin AutoRun is also disabled
-                        if (autoRunUpdated && IsAutoRunForNonAdminEnabled())
-                            DisableAutoRunForNonAdmin();
+                        autoRunUpdated = DisableAutoRunForNonAdminIfPresent() && DisableAutoRunForAdmin();
                     }
                     else
                     {
@@ -295,11 +297,8 @@ namespace WireSockUI.Forms
                 {
                     if (IsCurrentProcessElevated())
                     {
-                        autoRunUpdated = EnableAutoRunForAdmin();
-
                         // Under Administrator ensure that non-admin AutoRun is disabled
-                        if (autoRunUpdated && IsAutoRunForNonAdminEnabled())
-                            DisableAutoRunForNonAdmin();
+                        autoRunUpdated = DisableAutoRunForNonAdminIfPresent() && EnableAutoRunForAdmin();
                     }
                     else
                     {

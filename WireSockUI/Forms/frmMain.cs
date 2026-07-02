@@ -222,21 +222,24 @@ namespace WireSockUI.Forms
             return await DisconnectNativeTunnelAsync();
         }
 
-        private async Task<bool> DisconnectNativeTunnelAsync()
+        private async Task<bool> DisconnectNativeTunnelAsync(long? connectionSequence = null, bool showWarning = true)
         {
             bool disconnected;
 
             try
             {
-                disconnected = await Task.Run(() => _wiresock.Disconnect());
+                disconnected = await Task.Run(() => connectionSequence.HasValue
+                    ? _wiresock.DisconnectIfConnectionSequence(connectionSequence.Value)
+                    : _wiresock.Disconnect());
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                if (showWarning)
+                    MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return false;
             }
 
-            if (!disconnected)
+            if (!disconnected && showWarning)
                 MessageBox.Show(
                     "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
                     Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
@@ -959,9 +962,15 @@ namespace WireSockUI.Forms
             {
                 var connectGeneration = CurrentTunnelGeneration();
                 var connected = await Task.Run(() => _wiresock.Connect(profile));
+                var connectionSequence = connected ? _wiresock.ConnectionSequence : 0;
 
                 if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
+                {
+                    if (connected)
+                        await DisconnectNativeTunnelAsync(connectionSequence, false);
+
                     return;
+                }
 
                 if (connected)
                     UpdateState(ConnectionState.Connecting);

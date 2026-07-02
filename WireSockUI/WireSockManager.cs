@@ -48,6 +48,7 @@ namespace WireSockUI
         private volatile IntPtr _handle = IntPtr.Zero;
         private WgbLogLevel _logLevel;
         private GCHandle _logPrinterHandle;
+        private long _connectionSequence;
         private volatile bool _disposed;
 
         /// <summary>
@@ -231,6 +232,17 @@ namespace WireSockUI
                     if (!SetNetworkLockMode(value))
                         throw new InvalidOperationException(
                             LastError ?? "Failed to update Kill Switch network lock mode.");
+                }
+            }
+        }
+
+        public long ConnectionSequence
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    return _connectionSequence;
                 }
             }
         }
@@ -498,8 +510,20 @@ namespace WireSockUI
 
                 // Update connected profile
                 ProfileName = profile;
+                _connectionSequence++;
 
                 return true;
+            }
+        }
+
+        public bool DisconnectIfConnectionSequence(long connectionSequence)
+        {
+            lock (_syncRoot)
+            {
+                if (_connectionSequence != connectionSequence)
+                    return true;
+
+                return Disconnect();
             }
         }
 

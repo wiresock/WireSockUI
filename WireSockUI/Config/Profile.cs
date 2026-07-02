@@ -483,7 +483,7 @@ namespace WireSockUI.Config
             try
             {
                 Directory.CreateDirectory(Global.ConfigsFolder);
-                files = Directory.GetFiles(Global.ConfigsFolder, "*.conf");
+                files = Directory.GetFiles(Global.ConfigsFolder);
             }
             catch (Exception ex)
             {
