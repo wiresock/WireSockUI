@@ -460,7 +460,7 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Kill Switch network lock is active, but WireSockUI could not reset it. Disconnect or restart WireSock UI and try again..
+        ///   Looks up a localized string similar to Kill Switch network lock is active, but WireSock UI could not reset it. Disconnect or restart WireSock UI and try again..
         /// </summary>
         internal static string KillSwitchResetError {
             get {

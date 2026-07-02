@@ -37,6 +37,8 @@ namespace WireSockUI.Forms
 
                 // Non-elevated users may turn an already-enabled Kill Switch off, but cannot enable it.
                 chkEnableKillSwitch.Enabled = chkEnableKillSwitch.Checked;
+                if (chkEnableKillSwitch.Enabled)
+                    chkEnableKillSwitch.CheckedChanged += OnKillSwitchCheckedChanged;
 
                 // If autorun is enabled for admin users while we are not an admin, disable the checkbox
                 if (chkAutorun.Checked && !IsAutoRunForNonAdminEnabled())
@@ -49,6 +51,12 @@ namespace WireSockUI.Forms
             chkAutorun.Checked =
                 IsCurrentProcessElevated() ? IsAutoRunForAdminEnabled() : IsAutoRunForNonAdminEnabled();
             Settings.Default.AutoRun = chkAutorun.Checked;
+        }
+
+        private void OnKillSwitchCheckedChanged(object sender, EventArgs e)
+        {
+            if (!chkEnableKillSwitch.Checked)
+                chkEnableKillSwitch.Enabled = false;
         }
 
         private static bool IsCurrentProcessElevated()
