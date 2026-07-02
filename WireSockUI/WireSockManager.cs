@@ -217,21 +217,7 @@ namespace WireSockUI
         {
             get
             {
-                lock (_syncRoot)
-                {
-                    if (_handle == IntPtr.Zero || _getNetworkLockMode == null)
-                        return false;
-
-                    try
-                    {
-                        return _getNetworkLockMode(_handle) == WgbNetworkLockMode.Enabled;
-                    }
-                    catch (Exception ex)
-                    {
-                        PrintLog($"Failed to query kill switch network lock mode: {ex.Message}");
-                        return false;
-                    }
-                }
+                return TryGetKillSwitchEnabled(out var enabled, out _) && enabled;
             }
             set
             {
@@ -246,6 +232,42 @@ namespace WireSockUI
                         throw new InvalidOperationException(
                             LastError ?? "Failed to update Kill Switch network lock mode.");
                 }
+            }
+        }
+
+        public bool TryGetKillSwitchEnabled(out bool enabled, out string diagnostic)
+        {
+            lock (_syncRoot)
+            {
+                enabled = false;
+                diagnostic = null;
+
+                if (_handle == IntPtr.Zero)
+                    return true;
+
+                if (_getNetworkLockMode == null)
+                {
+                    diagnostic = "The loaded wgbooster.dll does not expose network lock query support.";
+                    PrintLog($"Failed to query kill switch network lock mode: {diagnostic}");
+                    return false;
+                }
+
+                try
+                {
+                    enabled = _getNetworkLockMode(_handle) == WgbNetworkLockMode.Enabled;
+                    return true;
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    diagnostic = $"The loaded wgbooster.dll does not expose network lock query support. {ex.Message}";
+                }
+                catch (Exception ex)
+                {
+                    diagnostic = ex.Message;
+                }
+
+                PrintLog($"Failed to query kill switch network lock mode: {diagnostic}");
+                return false;
             }
         }
 
@@ -379,20 +401,28 @@ namespace WireSockUI
         /// </example>
         private static void ChangeNetConnectionIdByAdapterName(string adapterFriendlyName, string newName)
         {
-            var query = new SelectQuery("Win32_NetworkAdapter", $"Name = '{adapterFriendlyName}'");
+            var query = new SelectQuery("Win32_NetworkAdapter", $"Name = '{EscapeWqlString(adapterFriendlyName)}'");
             using (var searcher = new ManagementObjectSearcher(query))
+            using (var results = searcher.Get())
             {
-                foreach (var o in searcher.Get())
+                foreach (ManagementObject obj in results)
                 {
-                    var obj = (ManagementObject)o;
-                    // Check if NetConnectionID is not null or empty
-                    if (obj["NetConnectionID"] != null && !string.IsNullOrEmpty(obj["NetConnectionID"].ToString()))
+                    using (obj)
                     {
-                        obj["NetConnectionID"] = newName;
-                        obj.Put(); // Save changes
+                        // Check if NetConnectionID is not null or empty
+                        if (obj["NetConnectionID"] != null && !string.IsNullOrEmpty(obj["NetConnectionID"].ToString()))
+                        {
+                            obj["NetConnectionID"] = newName;
+                            obj.Put(); // Save changes
+                        }
                     }
                 }
             }
+        }
+
+        private static string EscapeWqlString(string value)
+        {
+            return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "''");
         }
 
         /// <summary>
@@ -430,7 +460,7 @@ namespace WireSockUI
                     {
                         ShowTunnelError(Resources.TunnelErrorCreate);
 
-                        DropCurrentHandle(true);
+                        DropFailedConnectHandle();
                         return false;
                     }
 
@@ -441,28 +471,28 @@ namespace WireSockUI
                     {
                         ShowTunnelError(Resources.TunnelErrorStart);
 
-                        DropCurrentHandle(true);
+                        DropFailedConnectHandle();
                         return false;
                     }
                 }
                 catch (DllNotFoundException ex)
                 {
-                    DropCurrentHandle(true);
+                    DropFailedConnectHandle();
                     return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
                 }
                 catch (EntryPointNotFoundException ex)
                 {
-                    DropCurrentHandle(true);
+                    DropFailedConnectHandle();
                     return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
                 }
                 catch (BadImageFormatException ex)
                 {
-                    DropCurrentHandle(true);
+                    DropFailedConnectHandle();
                     return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
                 }
                 catch (Exception ex)
                 {
-                    DropCurrentHandle(true);
+                    DropFailedConnectHandle();
                     return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
                 }
 
@@ -611,30 +641,67 @@ namespace WireSockUI
 
         public static bool ResetNetworkLock()
         {
+            return TryResetNetworkLock(out _);
+        }
+
+        public static bool TryResetNetworkLock(out string diagnostic)
+        {
+            diagnostic = null;
+
             try
             {
-                return wg_reset_network_lock();
-            }
-            catch (EntryPointNotFoundException)
-            {
+                if (wg_reset_network_lock())
+                    return true;
+
+                diagnostic = GetLastNativeErrorOrDefault("native reset_network_lock returned false.");
                 return false;
             }
-            catch
+            catch (EntryPointNotFoundException ex)
             {
+                diagnostic = $"The loaded wgbooster.dll does not expose network lock reset support. {ex.Message}";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                diagnostic = ex.Message;
                 return false;
             }
         }
 
         public static bool IsNetworkLockActive()
         {
+            return TryIsNetworkLockActive(out var active, out _) && active;
+        }
+
+        public static bool TryIsNetworkLockActive(out bool active, out string diagnostic)
+        {
+            active = false;
+            diagnostic = null;
+
             try
             {
-                return wg_is_network_lock_active();
+                active = wg_is_network_lock_active();
+                return true;
             }
-            catch
+            catch (EntryPointNotFoundException ex)
             {
+                diagnostic = $"The loaded wgbooster.dll does not expose network lock query support. {ex.Message}";
                 return false;
             }
+            catch (Exception ex)
+            {
+                diagnostic = ex.Message;
+                return false;
+            }
+        }
+
+        private void DropFailedConnectHandle()
+        {
+            if (_handle == IntPtr.Zero)
+                return;
+
+            if (!DropCurrentHandle(true, true))
+                PrintLog("Discarding failed tunnel handle after cleanup failure. Restart WireSock UI if the next connection attempt fails.");
         }
 
         private bool DropCurrentHandle(bool logFailure, bool clearOnFailure = false)

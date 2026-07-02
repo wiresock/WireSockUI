@@ -19,7 +19,10 @@ namespace WireSockUI.Tests
                 { "Profile rejects empty required values", ProfileRejectsEmptyRequiredValues },
                 { "Profile rejects empty address list items", ProfileRejectsEmptyAddressListItems },
                 { "Profile validates Windows-safe profile names", ProfileValidatesWindowsSafeNames },
+                { "Profile path rejects unsafe names", ProfilePathRejectsUnsafeNames },
+                { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
+                { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
@@ -81,6 +84,32 @@ namespace WireSockUI.Tests
             AssertFalse(Profile.IsValidProfileName(@"nested\office"), "Path separators must be rejected.");
         }
 
+        private static void ProfilePathRejectsUnsafeNames()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                AssertThrows<ArgumentException>(() => Profile.GetProfilePath(@"..\office"), "Profile name");
+                AssertThrows<ArgumentException>(() => Profile.GetProfilePath("CON"), "Profile name");
+
+                var profilePath = Profile.GetProfilePath("office");
+                var configRoot = Path.GetFullPath(Global.ConfigsFolder)
+                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+                AssertTrue(profilePath.StartsWith(configRoot, StringComparison.OrdinalIgnoreCase),
+                    "Expected profile path to stay inside the configured profile folder.");
+            });
+        }
+
+        private static void ProfileEnumerationAcceptsUppercaseConfExtension()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Office.CONF"), string.Empty);
+
+                var profiles = Profile.GetProfiles().ToList();
+                AssertTrue(profiles.Contains("Office"), "Expected .CONF profiles to be listed on Windows.");
+            });
+        }
+
         private static void ParserStripsWireSockDirectivePrefixes()
         {
             var path = WriteConfig(
@@ -94,6 +123,26 @@ namespace WireSockUI.Tests
             AssertTrue(section.ContainsKey("VirtualAdapterMode"), "Expected #@ws directive to become a normal key.");
             AssertEqual("true", section["BypassLanTraffic"]);
             AssertEqual("false", section["VirtualAdapterMode"]);
+        }
+
+        private static void ParserRejectsDuplicateSections()
+        {
+            var path = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = backup.example.com:51820\n" +
+                "AllowedIPs = ::/0\n");
+
+            AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "Duplicate [Peer]");
         }
 
         private static void ProfileAcceptsAmneziaPassthroughOptions()
@@ -141,6 +190,23 @@ namespace WireSockUI.Tests
             var path = Path.Combine(directory, $"{Guid.NewGuid():N}.conf");
             File.WriteAllText(path, contents);
             return path;
+        }
+
+        private static void WithTemporaryConfigFolder(Action action)
+        {
+            var originalConfigsFolder = Global.ConfigsFolder;
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                Global.ConfigsFolder = directory;
+                action();
+            }
+            finally
+            {
+                Global.ConfigsFolder = originalConfigsFolder;
+            }
         }
 
         private static void AssertThrows<T>(Action action, string messagePart) where T : Exception

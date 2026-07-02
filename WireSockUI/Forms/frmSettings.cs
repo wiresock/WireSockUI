@@ -50,7 +50,6 @@ namespace WireSockUI.Forms
 
             chkAutorun.Checked =
                 IsCurrentProcessElevated() ? IsAutoRunForAdminEnabled() : IsAutoRunForNonAdminEnabled();
-            Settings.Default.AutoRun = chkAutorun.Checked;
         }
 
         private void OnKillSwitchCheckedChanged(object sender, EventArgs e)
@@ -134,7 +133,7 @@ namespace WireSockUI.Forms
         ///     switches to battery power, to wake the computer if needed, and to not stop when the computer ceases to be idle.
         ///     If an error occurs while enabling auto-run, an error message is displayed.
         /// </remarks>
-        private static void EnableAutoRunForAdmin()
+        private static bool EnableAutoRunForAdmin()
         {
             try
             {
@@ -161,11 +160,14 @@ namespace WireSockUI.Forms
 
                     ts.RootFolder.RegisterTaskDefinition(GetAppName(), td);
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show("Error enabling autorun: " + ex.Message, "Error", MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                return false;
             }
         }
 
@@ -177,19 +179,23 @@ namespace WireSockUI.Forms
         ///     If such a task is found and deleted, it means that the auto-run feature is disabled.
         ///     If an error occurs while disabling auto-run, an error message is displayed.
         /// </remarks>
-        private static void DisableAutoRunForAdmin()
+        private static bool DisableAutoRunForAdmin()
         {
             try
             {
                 using (var ts = new TaskService())
                 {
-                    ts.RootFolder.DeleteTask(GetAppName(), false);
+                    if (ts.FindTask(GetAppName()) != null)
+                        ts.RootFolder.DeleteTask(GetAppName(), false);
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error disabling autorun: {ex.Message}", "Error", MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                return false;
             }
         }
 
@@ -202,7 +208,7 @@ namespace WireSockUI.Forms
         ///     If the shortcut is created successfully, a success message is displayed.
         ///     If an error occurs while enabling auto-run, an error message is displayed.
         /// </remarks>
-        private static void EnableAutoRunForNonAdmin()
+        private static bool EnableAutoRunForNonAdmin()
         {
             try
             {
@@ -220,11 +226,13 @@ namespace WireSockUI.Forms
 
                 //MessageBox.Show("Auto-run enabled successfully.", "Success", MessageBoxButtons.OK,
                 //    MessageBoxIcon.Information);
+                return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error enabling auto-run: {ex.Message}", "Error", MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                return false;
             }
         }
 
@@ -237,7 +245,7 @@ namespace WireSockUI.Forms
         ///     If the shortcut is not found, an info message is displayed.
         ///     If an error occurs while disabling auto-run, an error message is displayed.
         /// </remarks>
-        private static void DisableAutoRunForNonAdmin()
+        private static bool DisableAutoRunForNonAdmin()
         {
             try
             {
@@ -252,11 +260,13 @@ namespace WireSockUI.Forms
                 //    MessageBox.Show("Auto-run shortcut not found.", "Info", MessageBoxButtons.OK,
                 //        MessageBoxIcon.Information);
                 //}
+                return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error disabling auto-run: {ex.Message}", "Error", MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                return false;
             }
         }
 
@@ -264,35 +274,43 @@ namespace WireSockUI.Forms
         {
             if (Settings.Default.AutoRun != chkAutorun.Checked)
             {
+                var autoRunUpdated = false;
+
                 if (!chkAutorun.Checked)
                 {
                     if (IsCurrentProcessElevated())
                     {
-                        DisableAutoRunForAdmin();
+                        autoRunUpdated = DisableAutoRunForAdmin();
 
                         // Under Administrator ensure that non-admin AutoRun is also disabled
-                        if (IsAutoRunForNonAdminEnabled())
-                            DisableAutoRunForNonAdmin();
+                        if (autoRunUpdated && IsAutoRunForNonAdminEnabled())
+                            autoRunUpdated = DisableAutoRunForNonAdmin();
                     }
                     else
                     {
-                        DisableAutoRunForNonAdmin();
+                        autoRunUpdated = DisableAutoRunForNonAdmin();
                     }
                 }
                 else
                 {
                     if (IsCurrentProcessElevated())
                     {
-                        EnableAutoRunForAdmin();
+                        autoRunUpdated = EnableAutoRunForAdmin();
 
                         // Under Administrator ensure that non-admin AutoRun is disabled
-                        if (IsAutoRunForNonAdminEnabled())
-                            DisableAutoRunForNonAdmin();
+                        if (autoRunUpdated && IsAutoRunForNonAdminEnabled())
+                            autoRunUpdated = DisableAutoRunForNonAdmin();
                     }
                     else
                     {
-                        EnableAutoRunForNonAdmin();
+                        autoRunUpdated = EnableAutoRunForNonAdmin();
                     }
+                }
+
+                if (!autoRunUpdated)
+                {
+                    DialogResult = DialogResult.None;
+                    return;
                 }
 
                 Settings.Default.AutoRun = chkAutorun.Checked;

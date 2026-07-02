@@ -555,7 +555,7 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            var profilePath = Path.Combine(Global.ConfigsFolder, txtProfileName.Text + ".conf");
+            var profilePath = Profile.GetProfilePath(txtProfileName.Text);
 
             try
             {
