@@ -52,7 +52,7 @@ dotnet build WireSockUI.sln -p:Platform=x64
 
 - A clean build does not prove that the installed driver and SDK DLL are present or compatible on the target machine.
 - Tunnel start/stop still depends on driver state, Windows networking permissions, and elevation.
-- There is no automated test project in this repository yet; compatibility is currently guarded by build checks and focused validation logic.
+- The `WireSockUI.Tests` harness covers focused parser/profile validation scenarios, but native driver and `wgbooster.dll` lifecycle behavior still needs runtime validation on a machine with the SDK installed.
 
 ## License
 

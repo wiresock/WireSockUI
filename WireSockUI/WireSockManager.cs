@@ -222,9 +222,17 @@ namespace WireSockUI
             if (_handle != IntPtr.Zero)
             {
                 if (disposing)
-                    Disconnect();
+                {
+                    if (!Disconnect() && _handle != IntPtr.Zero)
+                    {
+                        PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
+                        DropCurrentHandle(true, true);
+                    }
+                }
                 else
+                {
                     DropCurrentHandle(false, true);
+                }
             }
 
             CompleteLogQueue();

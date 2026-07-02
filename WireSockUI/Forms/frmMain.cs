@@ -176,6 +176,7 @@ namespace WireSockUI.Forms
                 return;
 
             _shutdownComplete = true;
+            _currentState = ConnectionState.Disconnected;
 
             _tunnelConnectionWorker.CancelAsync();
             _tunnelStateWorker.CancelAsync();
@@ -273,6 +274,9 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
+                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
+                    return;
+
                 if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
                     worker.RunWorkerAsync();
             };
@@ -335,6 +339,9 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
+                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
+                    return;
+
                 if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
                     worker.RunWorkerAsync();
             };
