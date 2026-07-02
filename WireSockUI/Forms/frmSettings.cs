@@ -25,6 +25,7 @@ namespace WireSockUI.Forms
             chkUseAdapter.Checked = Settings.Default.UseAdapter;
             chkNotify.Checked = Settings.Default.EnableNotifications;
             chkDisableAutoAdmin.Checked = Settings.Default.DisableAutoAdmin;
+            chkEnableKillSwitch.Checked = Settings.Default.EnableKillSwitch;
             ddlLogLevel.SelectedItem = Settings.Default.LogLevel;
             if (ddlLogLevel.SelectedItem == null)
                 ddlLogLevel.SelectedItem = "Error";
@@ -33,6 +34,8 @@ namespace WireSockUI.Forms
             {
                 chkUseAdapter.Enabled = false;
                 chkUseAdapter.Checked = false;
+                chkEnableKillSwitch.Enabled = false;
+                chkEnableKillSwitch.Checked = false;
 
                 // If autorun is enabled for admin users while we are not an admin, disable the checkbox
                 if (chkAutorun.Checked && !IsAutoRunForNonAdminEnabled())
@@ -292,6 +295,7 @@ namespace WireSockUI.Forms
             Settings.Default.UseAdapter = chkUseAdapter.Checked;
             Settings.Default.EnableNotifications = chkNotify.Checked;
             Settings.Default.DisableAutoAdmin = chkDisableAutoAdmin.Checked;
+            Settings.Default.EnableKillSwitch = chkEnableKillSwitch.Checked;
             Settings.Default.LogLevel = ddlLogLevel.SelectedItem as string;
 
             Settings.Default.Save();

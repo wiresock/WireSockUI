@@ -17,6 +17,12 @@ namespace WireSockUI.Native
             All = 255
         }
 
+        public enum WgbNetworkLockMode
+        {
+            Disabled = 0,
+            Enabled = 1
+        }
+
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern IntPtr wgb_get_handle(LogPrinter logPrinter, WgbLogLevel level, bool enableTrafficCapture);
 
@@ -54,6 +60,13 @@ namespace WireSockUI.Native
         public static extern bool wgb_get_tunnel_active(IntPtr wgboosterHandle);
 
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool wgb_set_network_lock_mode(IntPtr wgboosterHandle, WgbNetworkLockMode mode);
+
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        public static extern WgbNetworkLockMode wgb_get_network_lock_mode(IntPtr wgboosterHandle);
+
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern IntPtr
             wgbp_get_handle(LogPrinter logPrinter, WgbLogLevel level, bool enableTrafficCapture);
 
@@ -89,6 +102,21 @@ namespace WireSockUI.Native
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_get_tunnel_active(IntPtr wgboosterHandle);
+
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool wgbp_set_network_lock_mode(IntPtr wgboosterHandle, WgbNetworkLockMode mode);
+
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        public static extern WgbNetworkLockMode wgbp_get_network_lock_mode(IntPtr wgboosterHandle);
+
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool wg_reset_network_lock();
+
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool wg_is_network_lock_active();
 
         [StructLayout(LayoutKind.Sequential, Pack = 1)]
         public struct WgbStats

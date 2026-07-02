@@ -34,9 +34,11 @@ WireSock-specific directives may use the current SDK comment-extension syntax:
 
 Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK fields such as script hooks, masking parameters, SOCKS5 settings, `BypassLanTraffic`, and profile-level `VirtualAdapterMode` while preserving the file-based profile workflow.
 
+The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
+
 ## Compatibility Notes
 
-- The native `wgbooster.dll` ABI is expected to match the current SDK headers, including log levels and `drop_tunnel(..., preserve_network_lock)`.
+- The native `wgbooster.dll` ABI is expected to match the current SDK headers, including log levels, network-lock exports, and `drop_tunnel(..., preserve_network_lock)`.
 - `Any CPU` builds disable 32-bit preference, and the solution includes x64 mappings for direct use with the common 64-bit SDK install.
 - WireSockUI uses the same global direct-client event name as the C++ CLI/service to avoid running side by side with another direct SDK tunnel owner.
 - The newer WireSock Secure Connect service stack is intentionally out of scope for this project.

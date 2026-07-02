@@ -20,7 +20,8 @@ namespace WireSockUI.Tests
                 { "Profile rejects empty address list items", ProfileRejectsEmptyAddressListItems },
                 { "Profile validates Windows-safe profile names", ProfileValidatesWindowsSafeNames },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
-                { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions }
+                { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
+                { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
 
             var failures = 0;
@@ -126,6 +127,12 @@ namespace WireSockUI.Tests
             new Profile(path);
         }
 
+        private static void NetworkLockEnumMatchesWgboosterAbi()
+        {
+            AssertEqual(0, (int)WireguardBoosterExports.WgbNetworkLockMode.Disabled);
+            AssertEqual(1, (int)WireguardBoosterExports.WgbNetworkLockMode.Enabled);
+        }
+
         private static string WriteConfig(string contents)
         {
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests");
@@ -168,6 +175,12 @@ namespace WireSockUI.Tests
         private static void AssertEqual(string expected, string actual)
         {
             if (!string.Equals(expected, actual, StringComparison.Ordinal))
+                throw new Exception($"Expected '{expected}', got '{actual}'.");
+        }
+
+        private static void AssertEqual(int expected, int actual)
+        {
+            if (expected != actual)
                 throw new Exception($"Expected '{expected}', got '{actual}'.");
         }
     }
