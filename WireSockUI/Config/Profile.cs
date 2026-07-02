@@ -64,17 +64,8 @@ namespace WireSockUI.Config
 
             var section = parser.GetSection("Interface");
 
-            // Validate minimum required fields
-            if (!section.ContainsKey("PrivateKey"))
-                throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Interface\" does not have a \"PrivateKey\" defined.");
-
-            if (!section.ContainsKey("Address"))
-                throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Interface\" does not have a \"Address\" defined.");
-
-            PrivateKey = section.Get("PrivateKey");
-            Address = section.Get("Address");
+            PrivateKey = GetRequiredValue(profilePath, "Interface", section, "PrivateKey");
+            Address = GetRequiredValue(profilePath, "Interface", section, "Address");
             Dns = section.Get("DNS");
             Mtu = section.Get("MTU");
             ListenPort = section.Get("ListenPort");
@@ -93,23 +84,10 @@ namespace WireSockUI.Config
 
             section = parser.GetSection("Peer");
 
-            // Validate minimum required fields
-            if (!section.ContainsKey("PublicKey"))
-                throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have a \"PublicKey\" defined.");
-
-            if (!section.ContainsKey("Endpoint"))
-                throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have an \"Endpoint\" defined.");
-
-            if (!section.ContainsKey("AllowedIPs"))
-                throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"Peer\" does not have an \"AllowedIPs\" defined.");
-
-            PeerKey = section.Get("PublicKey");
+            PeerKey = GetRequiredValue(profilePath, "Peer", section, "PublicKey");
             PresharedKey = section.Get("PresharedKey");
-            AllowedIPs = section.Get("AllowedIPs");
-            Endpoint = section.Get("Endpoint");
+            AllowedIPs = GetRequiredValue(profilePath, "Peer", section, "AllowedIPs");
+            Endpoint = GetRequiredValue(profilePath, "Peer", section, "Endpoint");
             PersistentKeepAlive = section.Get("PersistentKeepalive");
 
             AllowedApps = section.Get("AllowedApps");
@@ -466,9 +444,12 @@ namespace WireSockUI.Config
         {
             if (string.IsNullOrWhiteSpace(keyValue)) return;
 
-            foreach (var value in keyValue.Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
-                if (!validator(value.Trim()))
+            foreach (var value in keyValue.Split(','))
+            {
+                var trimmedValue = value.Trim();
+                if (string.IsNullOrWhiteSpace(trimmedValue) || !validator(trimmedValue))
                     throw new FormatException($"\"{key}\" in \"{section}\", invalid address \"{value}\".");
+            }
         }
 
         internal static void ValidateInt(string section, string key, string keyValue, int minValue, int maxValue)
@@ -517,6 +498,30 @@ namespace WireSockUI.Config
             return Path.Combine(Global.ConfigsFolder, profileName + ".conf");
         }
 
+        public static bool IsValidProfileName(string profileName)
+        {
+            if (string.IsNullOrWhiteSpace(profileName))
+                return false;
+
+            var trimmedName = profileName.Trim();
+            if (!string.Equals(profileName, trimmedName, StringComparison.Ordinal) ||
+                trimmedName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+                return false;
+
+            var reservedName = trimmedName.TrimEnd(' ', '.');
+            if (reservedName.Length == 0 || !string.Equals(reservedName, trimmedName, StringComparison.Ordinal))
+                return false;
+
+            var reservedDeviceNames = new[]
+            {
+                "CON", "PRN", "AUX", "NUL",
+                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+            };
+
+            return !reservedDeviceNames.Contains(reservedName, StringComparer.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         ///     Load an existing named profile
         /// </summary>
@@ -525,6 +530,21 @@ namespace WireSockUI.Config
         {
             var filename = GetProfilePath(profileName);
             return new Profile(filename);
+        }
+
+        private static string GetRequiredValue(string profilePath, string sectionName, Dictionary<string, string> section,
+            string key)
+        {
+            if (!section.ContainsKey(key))
+                throw new ArgumentException(
+                    $"Profile {Path.GetFileName(profilePath)}, section \"{sectionName}\" does not have a \"{key}\" defined.");
+
+            var value = section.Get(key);
+            if (string.IsNullOrWhiteSpace(value))
+                throw new ArgumentException(
+                    $"Profile {Path.GetFileName(profilePath)}, section \"{sectionName}\" has an empty \"{key}\" value.");
+
+            return value;
         }
     }
 }

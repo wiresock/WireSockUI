@@ -7,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Principal;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
@@ -37,6 +38,9 @@ namespace WireSockUI.Forms
         private readonly WireSockManager _wiresock;
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
+        private bool _exitRequested;
+        private bool _shutdownComplete;
+        private Icon _ownedTrayIcon;
 
         /**
          * @brief Initializes a new instance of the Main class.
@@ -77,24 +81,22 @@ namespace WireSockUI.Forms
             _tunnelStateWorker = InitTunnelStateWorker();
 
             // Configure icons
-            Icon = trayIcon.Icon = Resources.ico;
+            Icon = Resources.ico;
+            SetTrayIcon(Resources.ico, false);
             cmiStatus.Image = BitmapExtensions.DrawCircle(16, 15, Brushes.DarkGray);
 
             // Populate menu items with Windows supplied icons
-            ddmAddTunnel.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Addtunnel, 16).ToBitmap();
-            mniImportTunnel.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.OpenTunnel, 16).ToBitmap();
-            mniNewTunnel.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.NewTunnel, 16).ToBitmap();
-            mniDeleteTunnel.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.DeleteTunnel, 16).ToBitmap();
-            mniSettings.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Settings, 16).ToBitmap();
+            ddmAddTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Addtunnel, 16);
+            mniImportTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.OpenTunnel, 16);
+            mniNewTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.NewTunnel, 16);
+            mniDeleteTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.DeleteTunnel, 16);
+            mniSettings.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Settings, 16);
 
             // Populate profile image list with Windows supplied icons
             imlProfiles.Images.Clear();
-            imlProfiles.Images.Add(ConnectionState.Disconnected.ToString(),
-                WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.DisconnectedTunnel, 24));
-            imlProfiles.Images.Add(ConnectionState.Connected.ToString(),
-                WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.ConnectedTunnel, 24));
-            imlProfiles.Images.Add(ConnectionState.Connecting.ToString(),
-                WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.ConnectingTunnel, 24));
+            AddProfileIcon(ConnectionState.Disconnected.ToString(), WindowsIcons.Icons.DisconnectedTunnel, 24);
+            AddProfileIcon(ConnectionState.Connected.ToString(), WindowsIcons.Icons.ConnectedTunnel, 24);
+            AddProfileIcon(ConnectionState.Connecting.ToString(), WindowsIcons.Icons.ConnectingTunnel, 24);
 
             // Ensure the profile list rows fill the entire width, but no scrollbar appears
             lstProfiles.Columns[0].Width = lstProfiles.Size.Width - 4;
@@ -115,6 +117,86 @@ namespace WireSockUI.Forms
             {
                 var principal = new WindowsPrincipal(identity);
                 return principal.IsInRole(WindowsBuiltInRole.Administrator);
+            }
+        }
+
+        private static bool SleepUntilCancelled(BackgroundWorker worker, int milliseconds)
+        {
+            const int interval = 100;
+            var waited = 0;
+
+            while (waited < milliseconds)
+            {
+                if (worker.CancellationPending)
+                    return true;
+
+                Thread.Sleep(Math.Min(interval, milliseconds - waited));
+                waited += interval;
+            }
+
+            return worker.CancellationPending;
+        }
+
+        private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
+        {
+            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+            {
+                return windowsIcon?.ToBitmap();
+            }
+        }
+
+        private void AddProfileIcon(string key, WindowsIcons.Icons icon, int size)
+        {
+            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+            {
+                if (windowsIcon != null)
+                    imlProfiles.Images.Add(key, windowsIcon);
+            }
+        }
+
+        private void SetTrayIcon(Icon icon, bool ownsIcon)
+        {
+            var previousOwnedIcon = _ownedTrayIcon;
+            _ownedTrayIcon = ownsIcon ? icon : null;
+            trayIcon.Icon = icon;
+
+            if (previousOwnedIcon != null && !ReferenceEquals(previousOwnedIcon, icon))
+                previousOwnedIcon.Dispose();
+        }
+
+        private void SetActivateButtonEnabled(bool enabled)
+        {
+            if (layoutInterface.Controls["btnActivate"] is Button btnActivate)
+                btnActivate.Enabled = enabled;
+        }
+
+        private void Shutdown()
+        {
+            if (_shutdownComplete)
+                return;
+
+            _shutdownComplete = true;
+
+            _tunnelConnectionWorker.CancelAsync();
+            _tunnelStateWorker.CancelAsync();
+
+            try
+            {
+                _wiresock?.Disconnect();
+                _wiresock?.Dispose();
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to cleanly shut down WireSock manager: {ex.Message}");
+            }
+
+            trayIcon.Visible = false;
+            SetTrayIcon(null, false);
+
+            if (Global.AlreadyRunning != null)
+            {
+                Global.AlreadyRunning.Dispose();
+                Global.AlreadyRunning = null;
             }
         }
 
@@ -173,15 +255,26 @@ namespace WireSockUI.Forms
             {
                 do
                 {
-                    Thread.Sleep(500);
+                    if (SleepUntilCancelled(worker, 500))
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
+
                     worker.ReportProgress(0, _wiresock.Connected);
                 } while (!worker.CancellationPending && !_wiresock.Connected);
             };
 
             worker.ProgressChanged += (s, e) =>
             {
-                if ((bool)e.UserState)
+                if (_currentState == ConnectionState.Connecting && (bool)e.UserState)
                     UpdateState(ConnectionState.Connected);
+            };
+
+            worker.RunWorkerCompleted += (s, e) =>
+            {
+                if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
+                    worker.RunWorkerAsync();
             };
 
             return worker;
@@ -205,7 +298,11 @@ namespace WireSockUI.Forms
             {
                 while (!worker.CancellationPending)
                 {
-                    Thread.Sleep(1000);
+                    if (SleepUntilCancelled(worker, 1000))
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
 
                     if (!_wiresock.Connected) continue;
 
@@ -216,6 +313,9 @@ namespace WireSockUI.Forms
 
             worker.ProgressChanged += (s, e) =>
             {
+                if (_currentState != ConnectionState.Connected)
+                    return;
+
                 if (!(e.UserState is WgbStats stats)) return;
 
                 if (layoutState.Controls["txtHandshake"] is TextBox txtHandshake)
@@ -231,6 +331,12 @@ namespace WireSockUI.Forms
 
                 if (layoutState.Controls["txtLoss"] is TextBox txtLoss)
                     txtLoss.Text = string.Format(Resources.StateLossValue, stats.estimated_loss * 100);
+            };
+
+            worker.RunWorkerCompleted += (s, e) =>
+            {
+                if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
+                    worker.RunWorkerAsync();
             };
 
             return worker;
@@ -307,6 +413,8 @@ namespace WireSockUI.Forms
         /// <remarks>This updates both the actual tunnel state and all related UI elements.</remarks>
         private void UpdateState(ConnectionState state, bool notify = true)
         {
+            _currentState = state;
+
             var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
             var imgStatus = layoutInterface.Controls.Find("imgStatus", true).FirstOrDefault() as PictureBox;
             var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
@@ -341,10 +449,10 @@ namespace WireSockUI.Forms
 
                     if (imgStatus != null)
                     {
-                        imgStatus.Image = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Activated, 16).ToBitmap();
+                        imgStatus.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Activated, 16);
                         if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusActive;
 
-                        trayIcon.Icon = Resources.ico.SuperImpose(64, WindowsIcons.Icons.Activated, 48, 24);
+                        SetTrayIcon(Resources.ico.SuperImpose(64, WindowsIcons.Icons.Activated, 48, 24), true);
                         trayIcon.Text = Resources.TrayActive;
 
                         cmiStatus.Image = imgStatus.Image;
@@ -389,7 +497,7 @@ namespace WireSockUI.Forms
                         imgStatus.Image = BitmapExtensions.DrawCircle(16, 15, Brushes.DarkGray);
                         if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusInactive;
 
-                        trayIcon.Icon = Resources.ico;
+                        SetTrayIcon(Resources.ico, false);
                         trayIcon.Text = Resources.TrayInactive;
 
                         cmiStatus.Image = imgStatus.Image;
@@ -410,6 +518,7 @@ namespace WireSockUI.Forms
                         lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Disconnected.ToString();
 
                     gbxState.Visible = false;
+                    _tunnelConnectionWorker.CancelAsync();
                     _tunnelStateWorker.CancelAsync();
 
 #if WIRESOCKUI_ENABLE_UWP
@@ -418,11 +527,13 @@ namespace WireSockUI.Forms
                             string.Format(Resources.ToastInactiveMessage, _wiresock.ProfileName));
 #endif
 
-                    _wiresock.Disconnect();
+                    if (!_wiresock.Disconnect())
+                        MessageBox.Show(
+                            "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
+                            Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     break;
             }
 
-            _currentState = state;
         }
 
         protected override void OnLoad(EventArgs e)
@@ -456,14 +567,26 @@ namespace WireSockUI.Forms
 
         private void OnExitClick(object sender, EventArgs e)
         {
-            Application.Exit();
+            _exitRequested = true;
+            Close();
         }
 
         private void OnFormClosing(object sender, FormClosingEventArgs e)
         {
-            if (e.CloseReason != CloseReason.UserClosing) return;
+            if (e.CloseReason != CloseReason.UserClosing || _exitRequested)
+            {
+                Shutdown();
+                return;
+            }
+
             e.Cancel = true;
             Hide();
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            Shutdown();
+            base.OnFormClosed(e);
         }
 
         /// <summary>
@@ -520,8 +643,23 @@ namespace WireSockUI.Forms
                     return;
                 }
 
-                File.Copy(filePath, Profile.GetProfilePath(profileName));
-                LoadProfiles();
+                if (!Profile.IsValidProfileName(profileName))
+                {
+                    MessageBox.Show(Resources.EditProfileNameError, Resources.ProfileError, MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                    return;
+                }
+
+                try
+                {
+                    new Profile(filePath);
+                    File.Copy(filePath, Profile.GetProfilePath(profileName));
+                    LoadProfiles(profileName);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
             }
         }
 
@@ -552,8 +690,15 @@ namespace WireSockUI.Forms
             if (_wiresock.Connected && _wiresock.ProfileName == selectedConf)
                 UpdateState(ConnectionState.Disconnected);
 
-            File.Delete(Profile.GetProfilePath(selectedConf));
-            LoadProfiles();
+            try
+            {
+                File.Delete(Profile.GetProfilePath(selectedConf));
+                LoadProfiles();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private void OnSettingsClick(object sender, EventArgs e)
@@ -575,7 +720,7 @@ namespace WireSockUI.Forms
         /// </summary>
         /// <param name="sender">The source of the event. In this case, a Button control.</param>
         /// <param name="e">The event arguments containing information about the event.</param>
-        private void OnProfileClick(object sender, EventArgs e)
+        private async void OnProfileClick(object sender, EventArgs e)
         {
             // Return if no profile is selected in the list.
             if (lstProfiles.SelectedItems.Count == 0) return;
@@ -624,17 +769,45 @@ namespace WireSockUI.Forms
             if (bool.TryParse(profileSettings.VirtualAdapterMode, out var profileUseAdapter))
                 useAdapter = profileUseAdapter;
 
-            if (IsCurrentProcessElevated())
-                // Set the tunnel mode based on the application settings and profile override.
-                _wiresock.TunnelMode = useAdapter
-                    ? WireSockManager.Mode.VirtualAdapter
-                    : WireSockManager.Mode.Transparent;
-            else
-                _wiresock.TunnelMode = WireSockManager.Mode.Transparent;
+            try
+            {
+                if (_wiresock.HasTunnelHandle && !_wiresock.Disconnect())
+                {
+                    MessageBox.Show(
+                        "The previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.",
+                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                if (IsCurrentProcessElevated())
+                    // Set the tunnel mode based on the application settings and profile override.
+                    _wiresock.TunnelMode = useAdapter
+                        ? WireSockManager.Mode.VirtualAdapter
+                        : WireSockManager.Mode.Transparent;
+                else
+                    _wiresock.TunnelMode = WireSockManager.Mode.Transparent;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
             // Connect to the selected profile and update the state to connecting if successful.
-            if (_wiresock.Connect(profile))
-                UpdateState(ConnectionState.Connecting);
+            SetActivateButtonEnabled(false);
+            try
+            {
+                if (await Task.Run(() => _wiresock.Connect(profile)))
+                    UpdateState(ConnectionState.Connecting);
+                else
+                    MessageBox.Show(_wiresock.LastError ?? Resources.TunnelErrorManager, Resources.TunnelErrorTitle,
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                if (_currentState == ConnectionState.Disconnected)
+                    SetActivateButtonEnabled(true);
+            }
         }
 
         private void OnWireSockLogMessage(WireSockManager.LogMessage logMessage)

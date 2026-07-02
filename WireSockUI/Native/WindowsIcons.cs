@@ -83,6 +83,9 @@ namespace WireSockUI.Native
         private static extern IntPtr CreateIconFromResourceEx(byte[] pbIconBits, uint cbIconBits, bool fIcon,
             uint dwVersion, int cxDesired, int cyDesired, uint uFlags);
 
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
         [DllImport("kernel32", SetLastError = true)]
         private static extern uint SizeofResource(IntPtr hModule, IntPtr hResInfo);
 
@@ -132,7 +135,18 @@ namespace WireSockUI.Native
 
                 // Create the icon from the resource
                 var hIcon = CreateIconFromResourceEx(lpResource, sz, true, 0x00030000, size, size, 0);
-                if (hIcon != IntPtr.Zero) icon = Icon.FromHandle(hIcon);
+                if (hIcon != IntPtr.Zero)
+                    try
+                    {
+                        using (var nativeIcon = Icon.FromHandle(hIcon))
+                        {
+                            icon = (Icon)nativeIcon.Clone();
+                        }
+                    }
+                    finally
+                    {
+                        DestroyIcon(hIcon);
+                    }
             }
             finally
             {

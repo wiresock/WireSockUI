@@ -19,8 +19,18 @@ namespace WireSockUI
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
-            if (!Directory.Exists(Global.MainFolder)) Directory.CreateDirectory(Global.MainFolder);
-            if (!Directory.Exists(Global.ConfigsFolder)) Directory.CreateDirectory(Global.ConfigsFolder);
+            try
+            {
+                Directory.CreateDirectory(Global.MainFolder);
+                Directory.CreateDirectory(Global.ConfigsFolder);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Unable to initialize WireSock UI profile folders.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+            }
 
             if (!IsWireSockArchitectureSupported())
             {
@@ -51,8 +61,9 @@ namespace WireSockUI
             {
                 Process.Start(url);
             }
-            catch
+            catch (Exception ex)
             {
+                Trace.TraceWarning($"Failed to open browser for '{url}': {ex.Message}");
             }
         }
 

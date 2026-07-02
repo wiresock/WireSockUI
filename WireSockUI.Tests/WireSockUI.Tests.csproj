@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net472-windows</TargetFramework>
+    <RootNamespace>WireSockUI.Tests</RootNamespace>
+    <AssemblyName>WireSockUI.Tests</AssemblyName>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\WireSockUI\WireSockUI.csproj" />
+  </ItemGroup>
+</Project>

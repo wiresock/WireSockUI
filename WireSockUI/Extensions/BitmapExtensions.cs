@@ -1,11 +1,16 @@
 ﻿using System.Drawing;
 using System.Drawing.Drawing2D;
+using System;
+using System.Runtime.InteropServices;
 using WireSockUI.Native;
 
 namespace WireSockUI.Extensions
 {
     internal static class BitmapExtensions
     {
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool DestroyIcon(IntPtr hIcon);
+
         public static Bitmap DrawCircle(int size, int diameter, Brush color)
         {
             var bm = new Bitmap(size, size);
@@ -35,10 +40,25 @@ namespace WireSockUI.Extensions
             {
                 using (var gr = Graphics.FromImage(bitmap))
                 {
-                    gr.DrawIcon(WindowsIcons.GetWindowsIcon(imposed, imposedSize), imposedOffset, imposedOffset);
+                    using (var imposedIcon = WindowsIcons.GetWindowsIcon(imposed, imposedSize))
+                    {
+                        if (imposedIcon != null)
+                            gr.DrawIcon(imposedIcon, imposedOffset, imposedOffset);
+                    }
                 }
 
-                return Icon.FromHandle(bitmap.GetHicon());
+                var hIcon = bitmap.GetHicon();
+                try
+                {
+                    using (var nativeIcon = Icon.FromHandle(hIcon))
+                    {
+                        return (Icon)nativeIcon.Clone();
+                    }
+                }
+                finally
+                {
+                    DestroyIcon(hIcon);
+                }
             }
         }
     }

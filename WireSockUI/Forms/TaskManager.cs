@@ -22,8 +22,10 @@ namespace WireSockUI.Forms
             if (Resources.ico != null) Icon = Resources.ico;
 
             // Safely set the refresh button image
-            var refreshIcon = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Refresh, 16);
-            if (refreshIcon != null) btnRefresh.Image = refreshIcon.ToBitmap();
+            using (var refreshIcon = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Refresh, 16))
+            {
+                if (refreshIcon != null) btnRefresh.Image = refreshIcon.ToBitmap();
+            }
 
             // Ensure the process list rows fill the entire width, but no scrollbar appears
             if (lstProcesses != null && lstProcesses.Columns.Count > 0)
@@ -59,7 +61,11 @@ namespace WireSockUI.Forms
             // Add process items to the list view
             foreach (var process in processes)
             {
-                var displayName = Path.GetFileNameWithoutExtension(process.ImageName);
+                var displayName = !string.IsNullOrWhiteSpace(process.ImageName)
+                    ? Path.GetFileNameWithoutExtension(process.ImageName)
+                    : Path.GetFileNameWithoutExtension(process.Name);
+                if (string.IsNullOrWhiteSpace(displayName))
+                    displayName = process.Name;
                 var iconKey = process.ProcessId.ToString();
 
                 // If the process's image file exists, extract its associated icon and add it to the list view's image list
