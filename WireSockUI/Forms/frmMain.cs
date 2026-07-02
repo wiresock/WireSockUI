@@ -716,7 +716,34 @@ namespace WireSockUI.Forms
                 form.Owner = this;
 
                 if (form.ShowDialog() == DialogResult.OK)
+                {
                     _wiresock.LogLevel = _wiresock.LogLevelSetting;
+                    ApplyKillSwitchSetting();
+                }
+            }
+        }
+
+        private void ApplyKillSwitchSetting()
+        {
+            try
+            {
+                if (_wiresock.HasTunnelHandle)
+                {
+                    if (Settings.Default.EnableKillSwitch || _wiresock.KillSwitchEnabled)
+                        _wiresock.KillSwitchEnabled = Settings.Default.EnableKillSwitch;
+
+                    return;
+                }
+
+                if (!Settings.Default.EnableKillSwitch && WireSockManager.IsNetworkLockActive() &&
+                    !WireSockManager.ResetNetworkLock())
+                    MessageBox.Show(
+                        Resources.KillSwitchResetError,
+                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 

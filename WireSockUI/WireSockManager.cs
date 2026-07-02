@@ -106,6 +106,8 @@ namespace WireSockUI
                             _dropTunnel = wgbp_drop_tunnel;
                             _tunnelActive = wgbp_get_tunnel_active;
                             _tunnelState = wgbp_get_tunnel_state;
+                            _setNetworkLockMode = wgbp_set_network_lock_mode;
+                            _getNetworkLockMode = wgbp_get_network_lock_mode;
                             break;
                         default:
                             _getHandle = wgb_get_handle;
@@ -116,6 +118,8 @@ namespace WireSockUI
                             _dropTunnel = wgb_drop_tunnel;
                             _tunnelActive = wgb_get_tunnel_active;
                             _tunnelState = wgb_get_tunnel_state;
+                            _setNetworkLockMode = wgb_set_network_lock_mode;
+                            _getNetworkLockMode = wgb_get_network_lock_mode;
                             break;
                     }
 
@@ -208,6 +212,42 @@ namespace WireSockUI
         public string ProfileName { get; private set; }
 
         public string LastError { get; private set; }
+
+        public bool KillSwitchEnabled
+        {
+            get
+            {
+                lock (_syncRoot)
+                {
+                    if (_handle == IntPtr.Zero || _getNetworkLockMode == null)
+                        return false;
+
+                    try
+                    {
+                        return _getNetworkLockMode(_handle) == WgbNetworkLockMode.Enabled;
+                    }
+                    catch (Exception ex)
+                    {
+                        PrintLog($"Failed to query kill switch network lock mode: {ex.Message}");
+                        return false;
+                    }
+                }
+            }
+            set
+            {
+                lock (_syncRoot)
+                {
+                    ThrowIfDisposed();
+
+                    if (_handle == IntPtr.Zero)
+                        throw new InvalidOperationException("Kill Switch mode cannot be changed before a tunnel handle is allocated.");
+
+                    if (!SetNetworkLockMode(value))
+                        throw new InvalidOperationException(
+                            LastError ?? "Failed to update Kill Switch network lock mode.");
+                }
+            }
+        }
 
         /// <summary>
         ///     Disposes the GCHandle for the log printer delegate.
@@ -380,6 +420,12 @@ namespace WireSockUI
                     if (_handle == IntPtr.Zero)
                         return ShowTunnelError(Resources.TunnelErrorManager);
 
+                    if (Settings.Default.EnableKillSwitch && !SetNetworkLockMode(true))
+                    {
+                        DropCurrentHandle(true, true);
+                        return false;
+                    }
+
                     if (!_createTunnelFromFile(_handle, profilePath))
                     {
                         ShowTunnelError(Resources.TunnelErrorCreate);
@@ -537,6 +583,60 @@ namespace WireSockUI
                 throw new ObjectDisposedException(nameof(WireSockManager));
         }
 
+        private bool SetNetworkLockMode(bool enabled)
+        {
+            try
+            {
+                if (_setNetworkLockMode == null)
+                    return ShowTunnelError("Failed to update Kill Switch network lock mode.",
+                        "The loaded wgbooster.dll does not expose network lock support.");
+
+                var mode = enabled ? WgbNetworkLockMode.Enabled : WgbNetworkLockMode.Disabled;
+                if (_setNetworkLockMode(_handle, mode))
+                    return true;
+
+                return ShowTunnelError("Failed to update Kill Switch network lock mode.",
+                    GetLastNativeErrorOrDefault("native set_network_lock_mode returned false."));
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                return ShowTunnelError("Failed to update Kill Switch network lock mode.",
+                    $"The loaded wgbooster.dll does not expose network lock support. {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                return ShowTunnelError("Failed to update Kill Switch network lock mode.", ex.Message);
+            }
+        }
+
+        public static bool ResetNetworkLock()
+        {
+            try
+            {
+                return wg_reset_network_lock();
+            }
+            catch (EntryPointNotFoundException)
+            {
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static bool IsNetworkLockActive()
+        {
+            try
+            {
+                return wg_is_network_lock_active();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private bool DropCurrentHandle(bool logFailure, bool clearOnFailure = false)
         {
             if (_handle == IntPtr.Zero)
@@ -587,6 +687,10 @@ namespace WireSockUI
 
         private delegate WgbStats TunnelState(IntPtr handle);
 
+        private delegate bool SetNetworkLockModeAction(IntPtr handle, WgbNetworkLockMode mode);
+
+        private delegate WgbNetworkLockMode GetNetworkLockModeAction(IntPtr handle);
+
         private GetHandle _getHandle;
         private SetLogLevel _setLogLevel;
         private CreateTunnelFromFile _createTunnelFromFile;
@@ -595,6 +699,8 @@ namespace WireSockUI
         private DropTunnelAction _dropTunnel;
         private TunnelAction _tunnelActive;
         private TunnelState _tunnelState;
+        private SetNetworkLockModeAction _setNetworkLockMode;
+        private GetNetworkLockModeAction _getNetworkLockMode;
 
         private Mode _adapterMode;
 

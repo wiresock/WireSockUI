@@ -25,6 +25,7 @@ namespace WireSockUI.Forms
             chkUseAdapter.Checked = Settings.Default.UseAdapter;
             chkNotify.Checked = Settings.Default.EnableNotifications;
             chkDisableAutoAdmin.Checked = Settings.Default.DisableAutoAdmin;
+            chkEnableKillSwitch.Checked = Settings.Default.EnableKillSwitch;
             ddlLogLevel.SelectedItem = Settings.Default.LogLevel;
             if (ddlLogLevel.SelectedItem == null)
                 ddlLogLevel.SelectedItem = "Error";
@@ -33,6 +34,11 @@ namespace WireSockUI.Forms
             {
                 chkUseAdapter.Enabled = false;
                 chkUseAdapter.Checked = false;
+
+                // Non-elevated users may turn an already-enabled Kill Switch off, but cannot enable it.
+                chkEnableKillSwitch.Enabled = chkEnableKillSwitch.Checked;
+                if (chkEnableKillSwitch.Enabled)
+                    chkEnableKillSwitch.CheckedChanged += OnKillSwitchCheckedChanged;
 
                 // If autorun is enabled for admin users while we are not an admin, disable the checkbox
                 if (chkAutorun.Checked && !IsAutoRunForNonAdminEnabled())
@@ -45,6 +51,12 @@ namespace WireSockUI.Forms
             chkAutorun.Checked =
                 IsCurrentProcessElevated() ? IsAutoRunForAdminEnabled() : IsAutoRunForNonAdminEnabled();
             Settings.Default.AutoRun = chkAutorun.Checked;
+        }
+
+        private void OnKillSwitchCheckedChanged(object sender, EventArgs e)
+        {
+            if (!chkEnableKillSwitch.Checked)
+                chkEnableKillSwitch.Enabled = false;
         }
 
         private static bool IsCurrentProcessElevated()
@@ -292,6 +304,7 @@ namespace WireSockUI.Forms
             Settings.Default.UseAdapter = chkUseAdapter.Checked;
             Settings.Default.EnableNotifications = chkNotify.Checked;
             Settings.Default.DisableAutoAdmin = chkDisableAutoAdmin.Checked;
+            Settings.Default.EnableKillSwitch = chkEnableKillSwitch.Checked;
             Settings.Default.LogLevel = ddlLogLevel.SelectedItem as string;
 
             Settings.Default.Save();
