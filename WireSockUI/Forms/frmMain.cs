@@ -329,6 +329,7 @@ namespace WireSockUI.Forms
             worker.DoWork += (s, e) =>
             {
                 var generation = (int)e.Argument;
+                var connected = false;
 
                 do
                 {
@@ -344,13 +345,13 @@ namespace WireSockUI.Forms
                         return;
                     }
 
-                    var connected = _wiresock.Connected;
+                    connected = _wiresock.Connected;
                     worker.ReportProgress(0, new TunnelConnectionProgress
                     {
                         Generation = generation,
                         Connected = connected
                     });
-                } while (!worker.CancellationPending && generation == CurrentTunnelGeneration() && !_wiresock.Connected);
+                } while (!worker.CancellationPending && generation == CurrentTunnelGeneration() && !connected);
             };
 
             worker.ProgressChanged += (s, e) =>

@@ -257,6 +257,9 @@ namespace WireSockUI
             if (fullDirectory == null)
                 return false;
 
+            var appDirectory = NormalizePathDirectory(AppDomain.CurrentDomain.BaseDirectory);
+            var isAppLocalDirectory = string.Equals(fullDirectory, appDirectory, StringComparison.OrdinalIgnoreCase);
+
             try
             {
                 if (SetDllDirectory(fullDirectory))
@@ -270,7 +273,7 @@ namespace WireSockUI
                 Trace.TraceWarning($"Failed to set WireSock library directory '{fullDirectory}': {ex.Message}");
             }
 
-            return false;
+            return isAppLocalDirectory;
         }
 
         private static string NormalizePathDirectory(string directory)
