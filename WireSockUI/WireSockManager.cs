@@ -48,7 +48,7 @@ namespace WireSockUI
         private volatile IntPtr _handle = IntPtr.Zero;
         private WgbLogLevel _logLevel;
         private GCHandle _logPrinterHandle;
-        private bool _disposed;
+        private volatile bool _disposed;
 
         /// <summary>
         ///     Initializes a new instance of the <see cref="WireSockManager" />.
@@ -86,6 +86,8 @@ namespace WireSockUI
             {
                 lock (_syncRoot)
                 {
+                    ThrowIfDisposed();
+
                     if (value == _adapterMode)
                         return;
 
@@ -152,6 +154,8 @@ namespace WireSockUI
             {
                 lock (_syncRoot)
                 {
+                    ThrowIfDisposed();
+
                     _logLevel = value;
 
                     // Update loglevel directly if instantiated
@@ -216,31 +220,34 @@ namespace WireSockUI
 
         private void Dispose(bool disposing)
         {
-            if (_disposed)
-                return;
-
-            if (_handle != IntPtr.Zero)
+            lock (_syncRoot)
             {
-                if (disposing)
+                if (_disposed)
+                    return;
+
+                if (_handle != IntPtr.Zero)
                 {
-                    if (!Disconnect() && _handle != IntPtr.Zero)
+                    if (disposing)
                     {
-                        PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
-                        DropCurrentHandle(true, true);
+                        if (!Disconnect() && _handle != IntPtr.Zero)
+                        {
+                            PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
+                            DropCurrentHandle(true, true);
+                        }
+                    }
+                    else
+                    {
+                        DropCurrentHandle(false, true);
                     }
                 }
-                else
-                {
-                    DropCurrentHandle(false, true);
-                }
+
+                CompleteLogQueue();
+
+                if (_logPrinterHandle.IsAllocated)
+                    _logPrinterHandle.Free();
+
+                _disposed = true;
             }
-
-            CompleteLogQueue();
-
-            if (_logPrinterHandle.IsAllocated)
-                _logPrinterHandle.Free();
-
-            _disposed = true;
         }
 
         /// <summary>
@@ -358,6 +365,7 @@ namespace WireSockUI
 
             lock (_syncRoot)
             {
+                ThrowIfDisposed();
                 LastError = null;
 
                 try
@@ -521,6 +529,12 @@ namespace WireSockUI
         {
             var diagnostic = GetLastNativeError();
             return string.IsNullOrWhiteSpace(diagnostic) ? fallback : diagnostic;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+                throw new ObjectDisposedException(nameof(WireSockManager));
         }
 
         private bool DropCurrentHandle(bool logFailure, bool clearOnFailure = false)
