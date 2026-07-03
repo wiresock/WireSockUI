@@ -7,7 +7,11 @@ namespace WireSockUI.Extensions
     {
         public static string AsTimeAgo(this long seconds)
         {
-            return new TimeSpan(0, 0, (int)seconds).AsTimeAgo();
+            var maxSeconds = (long)TimeSpan.MaxValue.TotalSeconds;
+            var minSeconds = (long)TimeSpan.MinValue.TotalSeconds;
+            var clampedSeconds = Math.Max(minSeconds, Math.Min(maxSeconds, seconds));
+
+            return TimeSpan.FromSeconds(clampedSeconds).AsTimeAgo();
         }
 
         public static string AsTimeAgo(this TimeSpan value)

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using WireSockUI.Config;
+using WireSockUI.Extensions;
 using WireSockUI.Native;
 
 namespace WireSockUI.Tests
@@ -20,10 +21,12 @@ namespace WireSockUI.Tests
                 { "Profile rejects empty address list items", ProfileRejectsEmptyAddressListItems },
                 { "Profile validates Windows-safe profile names", ProfileValidatesWindowsSafeNames },
                 { "Profile path rejects unsafe names", ProfilePathRejectsUnsafeNames },
+                { "Profile reports configured script hooks", ProfileReportsConfiguredScriptHooks },
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
+                { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
 
@@ -79,6 +82,10 @@ namespace WireSockUI.Tests
         {
             AssertTrue(Profile.IsValidProfileName("office-vpn"), "Expected a simple profile name to be valid.");
             AssertFalse(Profile.IsValidProfileName("CON"), "Reserved DOS device names must be rejected.");
+            AssertFalse(Profile.IsValidProfileName("CON.txt"),
+                "Reserved DOS device names must be rejected even with extensions.");
+            AssertFalse(Profile.IsValidProfileName("COM1.conf"),
+                "Reserved COM device names must be rejected even with extensions.");
             AssertFalse(Profile.IsValidProfileName("office "), "Trailing spaces must be rejected.");
             AssertFalse(Profile.IsValidProfileName("office."), "Trailing dots must be rejected.");
             AssertFalse(Profile.IsValidProfileName(@"nested\office"), "Path separators must be rejected.");
@@ -97,6 +104,26 @@ namespace WireSockUI.Tests
                 AssertTrue(profilePath.StartsWith(configRoot, StringComparison.OrdinalIgnoreCase),
                     "Expected profile path to stay inside the configured profile folder.");
             });
+        }
+
+        private static void ProfileReportsConfiguredScriptHooks()
+        {
+            var path = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "PostUp = powershell.exe -NoProfile -Command Write-Host test\n" +
+                "\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+
+            var hooks = new Profile(path).GetConfiguredScriptHooks();
+
+            AssertEqual(1, hooks.Count);
+            AssertEqual("PostUp", hooks[0].Key);
+            AssertTrue(hooks[0].Value.Contains("powershell.exe"), "Expected the script command to be reported.");
         }
 
         private static void ProfileEnumerationAcceptsUppercaseConfExtension()
@@ -174,6 +201,14 @@ namespace WireSockUI.Tests
             AssertEqual("1280", interfaceSection["S1"]);
             AssertEqual("chrome", interfaceSection["Ib"]);
             new Profile(path);
+        }
+
+        private static void StatsFormattingHandlesExtremeValues()
+        {
+            AssertFalse(string.IsNullOrWhiteSpace(ulong.MaxValue.AsHumanReadable()),
+                "Expected large byte counters to format without overflowing the suffix list.");
+            AssertFalse(string.IsNullOrWhiteSpace(long.MaxValue.AsTimeAgo()),
+                "Expected large handshake ages to format without narrowing to Int32.");
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()

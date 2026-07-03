@@ -41,6 +41,9 @@ jobs:
           WIRESOCKUI_VERSION=$(echo ${{ github.ref_name }} | sed -e 's/^v//') 
           echo "WIRESOCKUI_VERSION=${WIRESOCKUI_VERSION}" >> $GITHUB_ENV
 
+      - name: Test
+        run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework "${{ matrix.framework }}"
+
       - name: Build
         run: dotnet publish WireSockUI/WireSockUI.csproj --configuration "${{ matrix.build_configuration }}" --framework "${{ matrix.framework }}" --no-self-contained /p:Platform="${{ matrix.platform }}" /p:Version="${{ env.WIRESOCKUI_VERSION }}" /p:Repository="${{ github.repository }}"
 

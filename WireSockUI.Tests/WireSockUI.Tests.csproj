@@ -4,6 +4,8 @@
     <TargetFramework>net472-windows</TargetFramework>
     <RootNamespace>WireSockUI.Tests</RootNamespace>
     <AssemblyName>WireSockUI.Tests</AssemblyName>
+    <Platforms>AnyCPU;x64;ARM64</Platforms>
+    <RestoreProjectStyle>PackageReference</RestoreProjectStyle>
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
 

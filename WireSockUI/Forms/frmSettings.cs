@@ -69,7 +69,15 @@ namespace WireSockUI.Forms
 
         private void OnProfilesFolderClick(object sender, EventArgs e)
         {
-            Process.Start("explorer.exe", Global.MainFolder);
+            try
+            {
+                Process.Start("explorer.exe", Global.MainFolder);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error opening profiles folder: {ex.Message}", "Error", MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
         }
 
         private static string GetAppName()
@@ -89,9 +97,18 @@ namespace WireSockUI.Forms
         /// </remarks>
         private static bool IsAutoRunForAdminEnabled()
         {
-            using (var ts = new TaskService())
+            try
             {
-                return ts.FindTask(GetAppName()) != null;
+                using (var ts = new TaskService())
+                {
+                    return ts.FindTask(GetAppName()) != null;
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error checking elevated autorun status: {ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
         }
 
@@ -318,7 +335,8 @@ namespace WireSockUI.Forms
             Settings.Default.AutoConnect = chkAutoConnect.Checked;
             Settings.Default.AutoMinimize = chkAutoMinimize.Checked;
             Settings.Default.AutoUpdate = chkAutoUpdate.Checked;
-            Settings.Default.UseAdapter = chkUseAdapter.Checked;
+            if (chkUseAdapter.Enabled)
+                Settings.Default.UseAdapter = chkUseAdapter.Checked;
             Settings.Default.EnableNotifications = chkNotify.Checked;
             Settings.Default.DisableAutoAdmin = chkDisableAutoAdmin.Checked;
             Settings.Default.EnableKillSwitch = chkEnableKillSwitch.Checked;
