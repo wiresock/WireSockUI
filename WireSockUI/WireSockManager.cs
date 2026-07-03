@@ -318,9 +318,13 @@ namespace WireSockUI
                 }
 
                 _disposed = true;
-                CompleteLogQueue();
-                if (!_logWorker.IsBusy)
-                    _logWorker.Dispose();
+
+                if (disposing)
+                {
+                    CompleteLogQueue();
+                    if (!_logWorker.IsBusy)
+                        _logWorker.Dispose();
+                }
 
                 if (_logPrinterHandle.IsAllocated)
                     _logPrinterHandle.Free();
@@ -369,7 +373,7 @@ namespace WireSockUI
 
             worker.ProgressChanged += (s, e) =>
             {
-                if (e.UserState is LogMessage message)
+                if (!_disposed && e.UserState is LogMessage message)
                     logMessageCallback?.Invoke(message);
             };
 

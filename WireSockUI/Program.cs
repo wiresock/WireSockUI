@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -302,16 +301,67 @@ namespace WireSockUI
 
                 var destinationPath = Profile.GetProfilePath(profileName);
                 if (File.Exists(destinationPath))
+                {
+                    if (FilesHaveSameContent(legacyProfilePath, destinationPath))
+                        TryDeleteLegacyProfile(legacyProfilePath, profileName);
+                    else
+                        Trace.TraceWarning(
+                            $"Skipping legacy profile '{profileName}' because a secured profile with different content already exists.");
+
                     continue;
+                }
 
                 try
                 {
                     File.Copy(legacyProfilePath, destinationPath, false);
+                    TryDeleteLegacyProfile(legacyProfilePath, profileName);
                 }
                 catch (Exception ex)
                 {
                     Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
                 }
+            }
+        }
+
+        private static bool FilesHaveSameContent(string firstPath, string secondPath)
+        {
+            try
+            {
+                var firstInfo = new FileInfo(firstPath);
+                var secondInfo = new FileInfo(secondPath);
+                if (firstInfo.Length != secondInfo.Length)
+                    return false;
+
+                using (var first = File.OpenRead(firstPath))
+                using (var second = File.OpenRead(secondPath))
+                {
+                    int firstByte;
+                    do
+                    {
+                        firstByte = first.ReadByte();
+                        if (firstByte != second.ReadByte())
+                            return false;
+                    } while (firstByte != -1);
+
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to compare migrated profile files: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static void TryDeleteLegacyProfile(string legacyProfilePath, string profileName)
+        {
+            try
+            {
+                File.Delete(legacyProfilePath);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Migrated legacy profile '{profileName}', but could not delete the old copy: {ex.Message}");
             }
         }
 
@@ -325,15 +375,6 @@ namespace WireSockUI
             {
                 var security = Directory.GetAccessControl(normalizedDirectory);
                 var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                var currentUser = WindowsIdentity.GetCurrent().User;
-                var writableSids = new[]
-                {
-                    new SecurityIdentifier(WellKnownSidType.WorldSid, null),
-                    new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
-                    new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
-                    new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
-                    currentUser
-                };
                 const FileSystemRights writeRights =
                     FileSystemRights.FullControl |
                     FileSystemRights.Modify |
@@ -349,7 +390,7 @@ namespace WireSockUI
                 {
                     if (rule.AccessControlType != AccessControlType.Allow ||
                         !(rule.IdentityReference is SecurityIdentifier sid) ||
-                        !writableSids.Contains(sid))
+                        IsAdministrativeOrServiceSid(sid))
                         continue;
 
                     if ((rule.FileSystemRights & writeRights) != 0)
@@ -363,6 +404,17 @@ namespace WireSockUI
                 Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
                 return true;
             }
+        }
+
+        private static bool IsAdministrativeOrServiceSid(SecurityIdentifier sid)
+        {
+            return sid.IsWellKnown(WellKnownSidType.LocalSystemSid) ||
+                   sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) ||
+                   sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid) ||
+                   sid.IsWellKnown(WellKnownSidType.LocalServiceSid) ||
+                   sid.IsWellKnown(WellKnownSidType.NetworkServiceSid) ||
+                   sid.Value.StartsWith("S-1-5-80-", StringComparison.OrdinalIgnoreCase) ||
+                   sid.Value.StartsWith("S-1-5-83-", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string NormalizePathDirectory(string directory)

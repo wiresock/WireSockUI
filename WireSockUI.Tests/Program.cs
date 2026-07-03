@@ -28,6 +28,7 @@ namespace WireSockUI.Tests
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
+                { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
 
@@ -219,6 +220,16 @@ namespace WireSockUI.Tests
             AssertTrue(value.Contains("2"), "Expected two-hour durations to include the hour count.");
             AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void TimeFormattingHandlesFutureValues()
+        {
+            var value = TimeSpan.FromHours(-2).AsTimeAgo();
+
+            AssertTrue(!value.Contains("-"), $"Expected future durations to format without a negative sign, got '{value}'.");
+            AssertTrue(value.Contains("2"), "Expected future two-hour durations to include the absolute hour count.");
+            AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected future two-hour durations to use a plural hour label, got '{value}'.");
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()

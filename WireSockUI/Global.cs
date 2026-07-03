@@ -32,11 +32,11 @@ namespace WireSockUI
 
         private static void EnsureAdministratorsOnlyDirectory(string path)
         {
-            Directory.CreateDirectory(path);
-
             try
             {
-                Directory.SetAccessControl(path, CreateAdministratorsOnlyDirectorySecurity());
+                var security = CreateAdministratorsOnlyDirectorySecurity();
+                Directory.CreateDirectory(path, security);
+                Directory.SetAccessControl(path, security);
                 SecureExistingChildren(path);
             }
             catch (Exception ex)

@@ -582,13 +582,13 @@ namespace WireSockUI.Forms
                 case ConnectionState.Connecting:
                     if (btnActivate != null)
                     {
-                        btnActivate.Text = Resources.ButtonActive;
-                        btnActivate.Enabled = true;
+                        btnActivate.Text = Resources.ButtonActivating;
+                        btnActivate.Enabled = false;
                     }
 
                     imgStatus?.Focus();
 
-                    cmiDeactivateTunnel.Enabled = true;
+                    cmiDeactivateTunnel.Enabled = false;
 
                     if (TryGetProfileItem(activeProfileName, out var connectingProfile))
                         connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
