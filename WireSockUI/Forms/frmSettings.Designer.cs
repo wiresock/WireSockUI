@@ -39,7 +39,6 @@
             this.chkAutoUpdate = new System.Windows.Forms.CheckBox();
             this.chkNotify = new System.Windows.Forms.CheckBox();
             this.resControls = new WireSockUI.Extensions.ControlTextExtender();
-            this.chkDisableAutoAdmin = new System.Windows.Forms.CheckBox();
             this.chkEnableKillSwitch = new System.Windows.Forms.CheckBox();
             ((System.ComponentModel.ISupportInitialize)(this.resControls)).BeginInit();
             this.SuspendLayout();
@@ -79,7 +78,7 @@
             // 
             // btnSave
             // 
-            this.btnSave.Location = new System.Drawing.Point(12, 280);
+            this.btnSave.Location = new System.Drawing.Point(12, 254);
             this.btnSave.Name = "btnSave";
             this.resControls.SetResourceKey(this.btnSave, "SettingsSave");
             this.btnSave.Size = new System.Drawing.Size(75, 25);
@@ -90,7 +89,7 @@
             // 
             // btnOpenFolder
             // 
-            this.btnOpenFolder.Location = new System.Drawing.Point(89, 280);
+            this.btnOpenFolder.Location = new System.Drawing.Point(89, 254);
             this.btnOpenFolder.Name = "btnOpenFolder";
             this.resControls.SetResourceKey(this.btnOpenFolder, "SettingsProfiles");
             this.btnOpenFolder.Size = new System.Drawing.Size(121, 25);
@@ -109,7 +108,7 @@
             "Info",
             "Debug",
             "All"});
-            this.ddlLogLevel.Location = new System.Drawing.Point(12, 243);
+            this.ddlLogLevel.Location = new System.Drawing.Point(12, 217);
             this.ddlLogLevel.Name = "ddlLogLevel";
             this.resControls.SetResourceKey(this.ddlLogLevel, null);
             this.ddlLogLevel.Size = new System.Drawing.Size(121, 21);
@@ -118,7 +117,7 @@
             // lblLogLevel
             // 
             this.lblLogLevel.AutoSize = true;
-            this.lblLogLevel.Location = new System.Drawing.Point(12, 227);
+            this.lblLogLevel.Location = new System.Drawing.Point(12, 201);
             this.lblLogLevel.Name = "lblLogLevel";
             this.resControls.SetResourceKey(this.lblLogLevel, "SettingsLogLevel");
             this.lblLogLevel.Size = new System.Drawing.Size(70, 13);
@@ -162,33 +161,22 @@
             // 
             this.resControls.ResourceClassName = "WireSockUI.Properties.Resources";
             // 
-            // chkDisableAutoAdmin
-            // 
-            this.chkDisableAutoAdmin.AutoSize = true;
-            this.chkDisableAutoAdmin.Location = new System.Drawing.Point(12, 168);
-            this.chkDisableAutoAdmin.Name = "chkDisableAutoAdmin";
-            this.resControls.SetResourceKey(this.chkDisableAutoAdmin, null);
-            this.chkDisableAutoAdmin.Size = new System.Drawing.Size(165, 17);
-            this.chkDisableAutoAdmin.TabIndex = 11;
-            this.chkDisableAutoAdmin.Text = "Disable Auto-Admin Elevation";
-            //
             // chkEnableKillSwitch
             //
             this.chkEnableKillSwitch.AutoSize = true;
-            this.chkEnableKillSwitch.Location = new System.Drawing.Point(12, 194);
+            this.chkEnableKillSwitch.Location = new System.Drawing.Point(12, 168);
             this.chkEnableKillSwitch.Name = "chkEnableKillSwitch";
             this.resControls.SetResourceKey(this.chkEnableKillSwitch, "SettingsEnableKillSwitch");
             this.chkEnableKillSwitch.Size = new System.Drawing.Size(185, 17);
-            this.chkEnableKillSwitch.TabIndex = 12;
+            this.chkEnableKillSwitch.TabIndex = 11;
             this.chkEnableKillSwitch.Text = "Enable Kill Switch (network lock)";
             // 
             // FrmSettings
             // 
             this.AutoScaleDimensions = new System.Drawing.SizeF(6F, 13F);
             this.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font;
-            this.ClientSize = new System.Drawing.Size(222, 317);
+            this.ClientSize = new System.Drawing.Size(222, 291);
             this.Controls.Add(this.chkEnableKillSwitch);
-            this.Controls.Add(this.chkDisableAutoAdmin);
             this.Controls.Add(this.chkNotify);
             this.Controls.Add(this.chkAutoUpdate);
             this.Controls.Add(this.lblLogLevel);
@@ -225,7 +213,6 @@
         private Extensions.ControlTextExtender resControls;
         private System.Windows.Forms.CheckBox chkAutoUpdate;
         private System.Windows.Forms.CheckBox chkNotify;
-        private System.Windows.Forms.CheckBox chkDisableAutoAdmin;
         private System.Windows.Forms.CheckBox chkEnableKillSwitch;
     }
 }
