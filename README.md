@@ -46,9 +46,11 @@ The Settings dialog includes an optional Kill Switch toggle. When enabled, WireS
 ## Building
 
 ```powershell
-dotnet build WireSockUI.sln
-dotnet build WireSockUI.sln -p:Platform=x64
+dotnet run --project WireSockUI.Tests\WireSockUI.Tests.csproj --configuration Release --framework net472-windows
+dotnet build WireSockUI.sln --configuration Release -p:Platform=x64 -p:UseSharedCompilation=false -m:1
 ```
+
+The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
 
 ## Remaining Runtime Risks
 

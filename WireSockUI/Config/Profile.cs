@@ -236,6 +236,18 @@ namespace WireSockUI.Config
 
         public string PostDownScript { get; set; }
 
+        public IReadOnlyList<KeyValuePair<string, string>> GetConfiguredScriptHooks()
+        {
+            var hooks = new List<KeyValuePair<string, string>>();
+
+            AddScriptHook(hooks, "PreUp", PreUpScript);
+            AddScriptHook(hooks, "PostUp", PostUpScript);
+            AddScriptHook(hooks, "PreDown", PreDownScript);
+            AddScriptHook(hooks, "PostDown", PostDownScript);
+
+            return hooks;
+        }
+
         /// <summary>
         ///     Exclude local LAN traffic from the tunnel when supported by the SDK.
         /// </summary>
@@ -550,7 +562,9 @@ namespace WireSockUI.Config
                 "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
             };
 
-            return !reservedDeviceNames.Contains(reservedName, StringComparer.OrdinalIgnoreCase);
+            var baseName = reservedName.Split('.')[0];
+
+            return !reservedDeviceNames.Contains(baseName, StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -576,6 +590,12 @@ namespace WireSockUI.Config
                     $"Profile {Path.GetFileName(profilePath)}, section \"{sectionName}\" has an empty \"{key}\" value.");
 
             return value;
+        }
+
+        private static void AddScriptHook(List<KeyValuePair<string, string>> hooks, string name, string value)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                hooks.Add(new KeyValuePair<string, string>(name, value));
         }
     }
 }

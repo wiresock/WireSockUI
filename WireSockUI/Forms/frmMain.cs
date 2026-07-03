@@ -40,6 +40,7 @@ namespace WireSockUI.Forms
         private ConnectionState _currentState = ConnectionState.Disconnected;
         private bool _exitRequested;
         private bool _shutdownComplete;
+        private int _tunnelOperationInProgress;
         private int _tunnelGeneration;
         private Icon _ownedTrayIcon;
 
@@ -116,12 +117,12 @@ namespace WireSockUI.Forms
 
             OnLogWindowResize(lstLog, EventArgs.Empty);
 
-            // Update the list of available configurations.
-            LoadProfiles();
-
             // Create a new WireSockManager instance, attached to the logging control
             _wiresock = new WireSockManager(OnWireSockLogMessage);
             _wiresock.LogLevel = _wiresock.LogLevelSetting;
+
+            // Update the list of available configurations.
+            LoadProfiles();
         }
 
         private static bool IsCurrentProcessElevated()
@@ -204,6 +205,23 @@ namespace WireSockUI.Forms
             Interlocked.Increment(ref _tunnelGeneration);
         }
 
+        private void CancelTunnelMonitoring()
+        {
+            AdvanceTunnelGeneration();
+            _tunnelConnectionWorker.CancelAsync();
+            _tunnelStateWorker.CancelAsync();
+        }
+
+        private bool TryBeginTunnelOperation()
+        {
+            return Interlocked.CompareExchange(ref _tunnelOperationInProgress, 1, 0) == 0;
+        }
+
+        private void EndTunnelOperation()
+        {
+            Interlocked.Exchange(ref _tunnelOperationInProgress, 0);
+        }
+
         private void StartTunnelConnectionWorker()
         {
             if (!_tunnelConnectionWorker.IsBusy)
@@ -218,8 +236,22 @@ namespace WireSockUI.Forms
 
         private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true)
         {
-            UpdateState(ConnectionState.Disconnected, notify);
-            return await DisconnectNativeTunnelAsync();
+            var profileName = _wiresock.ProfileName;
+
+            CancelTunnelMonitoring();
+
+            if (await DisconnectNativeTunnelAsync())
+            {
+                UpdateState(ConnectionState.Disconnected, notify, profileName);
+                return true;
+            }
+
+            if (_wiresock.HasTunnelHandle)
+                UpdateState(ConnectionState.Connected, false, profileName);
+            else
+                UpdateState(ConnectionState.Disconnected, notify, profileName);
+
+            return false;
         }
 
         private async Task<bool> DisconnectNativeTunnelAsync(long? connectionSequence = null, bool showWarning = true)
@@ -240,9 +272,8 @@ namespace WireSockUI.Forms
             }
 
             if (!disconnected && showWarning)
-                MessageBox.Show(
-                    "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
-                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(Resources.TunnelHandleReleaseWarning, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
 
             return disconnected;
         }
@@ -369,7 +400,7 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
                     return;
 
                 if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
@@ -447,7 +478,7 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
                     return;
 
                 if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
@@ -526,9 +557,10 @@ namespace WireSockUI.Forms
         ///     <c>true</c> if a toast notification should be triggered, otherwise <c>false</c>
         /// </param>
         /// <remarks>This updates both the actual tunnel state and all related UI elements.</remarks>
-        private void UpdateState(ConnectionState state, bool notify = true)
+        private void UpdateState(ConnectionState state, bool notify = true, string profileName = null)
         {
             _currentState = state;
+            var activeProfileName = profileName ?? _wiresock?.ProfileName;
 
             var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
             var imgStatus = layoutInterface.Controls.Find("imgStatus", true).FirstOrDefault() as PictureBox;
@@ -541,14 +573,14 @@ namespace WireSockUI.Forms
                     if (btnActivate != null)
                     {
                         btnActivate.Text = Resources.ButtonActivating;
-                        btnActivate.Enabled = true;
+                        btnActivate.Enabled = false;
                     }
 
                     imgStatus?.Focus();
 
-                    cmiDeactivateTunnel.Enabled = true;
+                    cmiDeactivateTunnel.Enabled = false;
 
-                    if (TryGetProfileItem(_wiresock.ProfileName, out var connectingProfile))
+                    if (TryGetProfileItem(activeProfileName, out var connectingProfile))
                         connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
 
                     trayIcon.Text = Resources.TrayActivating;
@@ -582,13 +614,16 @@ namespace WireSockUI.Forms
 
                     foreach (ToolStripItem item in mnuContext.Items)
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
-                            menuItem.Checked = menuItem.Text == _wiresock.ProfileName;
+                            menuItem.Checked = menuItem.Text == activeProfileName;
 
-                    if (TryGetProfileItem(_wiresock.ProfileName, out var connectedProfile))
+                    if (TryGetProfileItem(activeProfileName, out var connectedProfile))
                         connectedProfile.ImageKey = ConnectionState.Connected.ToString();
 
-                    Settings.Default.LastProfile = _wiresock.ProfileName;
-                    Settings.Default.Save();
+                    if (!string.IsNullOrWhiteSpace(activeProfileName))
+                    {
+                        Settings.Default.LastProfile = activeProfileName;
+                        Settings.Default.Save();
+                    }
 
                     gbxState.Visible = true;
 
@@ -597,11 +632,11 @@ namespace WireSockUI.Forms
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
                         Notifications.Notifications.Notify(Resources.ToastActiveTitle,
-                            string.Format(Resources.ToastActiveMessage, _wiresock.ProfileName));
+                            string.Format(Resources.ToastActiveMessage, activeProfileName));
 #endif
                     break;
                 case ConnectionState.Disconnected:
-                    AdvanceTunnelGeneration();
+                    CancelTunnelMonitoring();
 
                     if (btnActivate != null)
                     {
@@ -631,17 +666,15 @@ namespace WireSockUI.Forms
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
                             menuItem.Checked = false;
 
-                    if (TryGetProfileItem(_wiresock.ProfileName, out var disconnectedProfile))
+                    if (TryGetProfileItem(activeProfileName, out var disconnectedProfile))
                         disconnectedProfile.ImageKey = ConnectionState.Disconnected.ToString();
 
                     gbxState.Visible = false;
-                    _tunnelConnectionWorker.CancelAsync();
-                    _tunnelStateWorker.CancelAsync();
 
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
                         Notifications.Notifications.Notify(Resources.ToastInactiveTitle,
-                            string.Format(Resources.ToastInactiveMessage, _wiresock.ProfileName));
+                            string.Format(Resources.ToastInactiveMessage, activeProfileName));
 #endif
                     break;
             }
@@ -674,7 +707,17 @@ namespace WireSockUI.Forms
 
         private async void OnDisconnectClick(object sender, EventArgs e)
         {
-            await DisconnectCurrentTunnelAsync();
+            if (!TryBeginTunnelOperation())
+                return;
+
+            try
+            {
+                await DisconnectCurrentTunnelAsync();
+            }
+            finally
+            {
+                EndTunnelOperation();
+            }
         }
 
         private void OnExitClick(object sender, EventArgs e)
@@ -764,7 +807,10 @@ namespace WireSockUI.Forms
 
                 try
                 {
-                    new Profile(filePath);
+                    var profile = new Profile(filePath);
+                    if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profile))
+                        return;
+
                     File.Copy(filePath, Profile.GetProfilePath(profileName));
                     LoadProfiles(profileName);
                 }
@@ -779,38 +825,55 @@ namespace WireSockUI.Forms
         {
             var profile = lstProfiles.SelectedItems[0].Text;
 
-            using (var form = new FrmEdit(profile))
+            try
             {
-                if (form.ShowDialog() != DialogResult.OK) return;
+                using (var form = new FrmEdit(profile))
+                {
+                    if (form.ShowDialog() != DialogResult.OK) return;
 
-                LoadProfiles(form.ReturnValue);
+                    LoadProfiles(form.ReturnValue);
 
-                if (_wiresock.Connected && _wiresock.ProfileName == profile)
-                    OnProfileClick(lstProfiles, EventArgs.Empty);
+                    if (_wiresock.Connected && _wiresock.ProfileName == profile)
+                        OnProfileClick(lstProfiles, EventArgs.Empty);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
         private async void OnDeleteProfileClick(object sender, EventArgs e)
         {
-            var selectedConf = lstProfiles.SelectedItems[0].Text;
-
-            if (MessageBox.Show(string.Format(Resources.DeleteProfileConfirmMsg, selectedConf),
-                    Resources.DeleteProfileConfirmTitle,
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation) != DialogResult.Yes)
+            if (!TryBeginTunnelOperation())
                 return;
-
-            if (_wiresock.Connected && _wiresock.ProfileName == selectedConf)
-                if (!await DisconnectCurrentTunnelAsync())
-                    return;
 
             try
             {
+                if (lstProfiles.SelectedItems.Count == 0)
+                    return;
+
+                var selectedConf = lstProfiles.SelectedItems[0].Text;
+
+                if (MessageBox.Show(string.Format(Resources.DeleteProfileConfirmMsg, selectedConf),
+                        Resources.DeleteProfileConfirmTitle,
+                        MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation) != DialogResult.Yes)
+                    return;
+
+                if (_wiresock.Connected && _wiresock.ProfileName == selectedConf)
+                    if (!await DisconnectCurrentTunnelAsync())
+                        return;
+
                 File.Delete(Profile.GetProfilePath(selectedConf));
                 LoadProfiles();
             }
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                EndTunnelOperation();
             }
         }
 
@@ -844,7 +907,7 @@ namespace WireSockUI.Forms
                     if (!_wiresock.TryGetKillSwitchEnabled(out var killSwitchEnabled, out var diagnostic))
                     {
                         MessageBox.Show(
-                            $"Unable to confirm the current Kill Switch state.{Environment.NewLine}{Environment.NewLine}{diagnostic}",
+                            $"{Resources.TunnelKillSwitchStateError}{Environment.NewLine}{Environment.NewLine}{diagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
@@ -860,7 +923,7 @@ namespace WireSockUI.Forms
                     if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
                     {
                         MessageBox.Show(
-                            $"Unable to query the current Kill Switch network lock state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
+                            $"{Resources.TunnelKillSwitchQueryError}{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
@@ -886,115 +949,158 @@ namespace WireSockUI.Forms
         /// <param name="e">The event arguments containing information about the event.</param>
         private async void OnProfileClick(object sender, EventArgs e)
         {
-            // Return if no profile is selected in the list.
-            if (lstProfiles.SelectedItems.Count == 0) return;
+            if (!TryBeginTunnelOperation())
+                return;
 
-            // Check if the event arguments are not empty.
-            if (e != EventArgs.Empty)
+            try
             {
-                // Check if the current state is connected or connecting.
-                if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
+                // Return if no profile is selected in the list.
+                if (lstProfiles.SelectedItems.Count == 0) return;
+
+                // Check if the event arguments are not empty.
+                if (e != EventArgs.Empty)
                 {
-                    var reconnect = false;
+                    // Check if the current state is connected or connecting.
+                    if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
+                    {
+                        var reconnect = false;
 
-                    // Check if the sender is a Button, and if its text is equal to ButtonInactive.
-                    if (sender is Button senderButton)
-                        if (senderButton.Text == Resources.ButtonInactive)
-                            reconnect = true;
+                        // Check if the sender is a Button, and if its text is equal to ButtonInactive.
+                        if (sender is Button senderButton)
+                            if (senderButton.Text == Resources.ButtonInactive)
+                                reconnect = true;
 
+                        // Update the state to disconnected.
+                        if (!await DisconnectCurrentTunnelAsync())
+                            return;
+
+                        // Proceed with reconnecting if the reconnect flag is set.
+                        if (!reconnect) return;
+                    }
+                }
+                else
+                {
                     // Update the state to disconnected.
-                    if (!await DisconnectCurrentTunnelAsync())
+                    if (!await DisconnectCurrentTunnelAsync(false))
                         return;
-
-                    // Proceed with reconnecting if the reconnect flag is set.
-                    if (!reconnect) return;
                 }
-            }
-            else
-            {
-                // Update the state to disconnected.
-                if (!await DisconnectCurrentTunnelAsync(false))
-                    return;
-            }
 
-            // Get the selected profile.
-            var profile = lstProfiles.SelectedItems[0].Text;
-            Profile profileSettings;
+                // Get the selected profile.
+                var profile = lstProfiles.SelectedItems[0].Text;
+                Profile profileSettings;
 
-            try
-            {
-                profileSettings = Profile.LoadProfile(profile);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
-
-            var useAdapter = Settings.Default.UseAdapter;
-            if (bool.TryParse(profileSettings.VirtualAdapterMode, out var profileUseAdapter))
-                useAdapter = profileUseAdapter;
-
-            try
-            {
-                if (_wiresock.HasTunnelHandle && !await DisconnectNativeTunnelAsync())
+                try
                 {
+                    profileSettings = Profile.LoadProfile(profile);
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
-                if (IsCurrentProcessElevated())
-                    // Set the tunnel mode based on the application settings and profile override.
-                    _wiresock.TunnelMode = useAdapter
-                        ? WireSockManager.Mode.VirtualAdapter
-                        : WireSockManager.Mode.Transparent;
-                else
-                    _wiresock.TunnelMode = WireSockManager.Mode.Transparent;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return;
-            }
+                var useAdapter = Settings.Default.UseAdapter;
+                if (bool.TryParse(profileSettings.VirtualAdapterMode, out var profileUseAdapter))
+                    useAdapter = profileUseAdapter;
 
-            // Connect to the selected profile and update the state to connecting if successful.
-            SetActivateButtonEnabled(false);
-            try
-            {
-                var connectGeneration = CurrentTunnelGeneration();
-                var connected = await Task.Run(() => _wiresock.Connect(profile));
-                var connectionSequence = connected ? _wiresock.ConnectionSequence : 0;
-
-                if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
+                try
                 {
+                    if (_wiresock.HasTunnelHandle && !await DisconnectNativeTunnelAsync())
+                    {
+                        return;
+                    }
+
+                    if (IsCurrentProcessElevated())
+                        // Set the tunnel mode based on the application settings and profile override.
+                        _wiresock.TunnelMode = useAdapter
+                            ? WireSockManager.Mode.VirtualAdapter
+                            : WireSockManager.Mode.Transparent;
+                    else
+                        _wiresock.TunnelMode = WireSockManager.Mode.Transparent;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                // Connect to the selected profile and update the state to connecting if successful.
+                SetActivateButtonEnabled(false);
+                try
+                {
+                    var connectGeneration = CurrentTunnelGeneration();
+                    UpdateState(ConnectionState.Connecting, true, profile);
+                    var connected = await Task.Run(() => _wiresock.Connect(profile));
+                    var connectionSequence = connected ? _wiresock.ConnectionSequence : 0;
+
+                    if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
+                    {
+                        if (connected)
+                            await DisconnectNativeTunnelAsync(connectionSequence, false);
+
+                        return;
+                    }
+
                     if (connected)
-                        await DisconnectNativeTunnelAsync(connectionSequence, false);
-
-                    return;
+                        UpdateState(_wiresock.Connected ? ConnectionState.Connected : ConnectionState.Connecting, true,
+                            profile);
+                    else
+                    {
+                        UpdateState(ConnectionState.Disconnected, false, profile);
+                        MessageBox.Show(_wiresock.LastError ?? Resources.TunnelErrorManager, Resources.TunnelErrorTitle,
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
                 }
-
-                if (connected)
-                    UpdateState(ConnectionState.Connecting);
-                else
-                    MessageBox.Show(_wiresock.LastError ?? Resources.TunnelErrorManager, Resources.TunnelErrorTitle,
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                finally
+                {
+                    if (_currentState == ConnectionState.Disconnected)
+                        SetActivateButtonEnabled(true);
+                }
             }
             finally
             {
-                if (_currentState == ConnectionState.Disconnected)
-                    SetActivateButtonEnabled(true);
+                EndTunnelOperation();
             }
         }
 
         private void OnWireSockLogMessage(WireSockManager.LogMessage logMessage)
         {
-            lstLog.BeginUpdate();
+            if (_shutdownComplete || IsDisposed || Disposing || !IsHandleCreated)
+                return;
 
-            ListViewItem item = new ListViewItem(new[]
-                { logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message });
-            lstLog.Items.Add(item);
-            lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
+            var updating = false;
 
-            lstLog.EndUpdate();
+            try
+            {
+                lstLog.BeginUpdate();
+                updating = true;
+                ListViewItem item = new ListViewItem(new[]
+                    { logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message });
+                lstLog.Items.Add(item);
+                lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
+            }
+            catch (ObjectDisposedException)
+            {
+                // Late native log callbacks can arrive while the form is shutting down.
+            }
+            catch (InvalidOperationException)
+            {
+                // The logging ListView can be in handle destruction during shutdown.
+            }
+            finally
+            {
+                if (updating && !_shutdownComplete && !IsDisposed && !Disposing)
+                    try
+                    {
+                        lstLog.EndUpdate();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                    }
+                    catch (InvalidOperationException)
+                    {
+                    }
+            }
         }
 
         #region Layout
@@ -1099,7 +1205,7 @@ namespace WireSockUI.Forms
                     layoutState.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
                     // Only 1 profile can be active at a time, either show the active state or do not allow to activate
-                    if (_wiresock.Connected)
+                    if (_wiresock != null && _wiresock.Connected)
                     {
                         if (_wiresock.ProfileName == selectedConf)
                             UpdateState(ConnectionState.Connected, false);

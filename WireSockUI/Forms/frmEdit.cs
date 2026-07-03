@@ -47,7 +47,7 @@ namespace WireSockUI.Forms
                 Text = string.Format(Resources.EditProfileTitle, config);
 
                 txtProfileName.Text = config;
-                txtEditor.Text = File.ReadAllText(Path.Combine(Global.ConfigsFolder, config + ".conf"));
+                txtEditor.Text = File.ReadAllText(Profile.GetProfilePath(config));
             }
 
             var textChanged = ApplySyntaxHighlighting();
@@ -377,10 +377,6 @@ namespace WireSockUI.Forms
                             break;
                         // Unrecognized keys
                         default:
-                            txtEditor.SelectionStart = m.Groups["key"].Index;
-                            txtEditor.SelectionLength = m.Groups["key"].Length;
-                            txtEditor.UnderlineSelection();
-                            hasErrors = true;
                             break;
                     }
                 }
@@ -530,11 +526,12 @@ namespace WireSockUI.Forms
         private void OnSaveClick(object sender, EventArgs e)
         {
             var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
+            Profile profile;
 
             try
             {
                 File.WriteAllText(tmpProfile, txtEditor.Text);
-                var profile = new Profile(tmpProfile);
+                profile = new Profile(tmpProfile);
             }
             catch (Exception ex)
             {
@@ -549,6 +546,14 @@ namespace WireSockUI.Forms
             {
                 MessageBox.Show(Resources.EditProfileNameError, Resources.EditProfileError, MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                TryDeleteTemporaryProfile(tmpProfile);
+
+                DialogResult = DialogResult.None;
+                return;
+            }
+
+            if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profile))
+            {
                 TryDeleteTemporaryProfile(tmpProfile);
 
                 DialogResult = DialogResult.None;
