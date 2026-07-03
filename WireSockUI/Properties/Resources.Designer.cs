@@ -748,15 +748,6 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Error checking auto-run status: {0}.
-        /// </summary>
-        internal static string SettingsAutoRunCheckError {
-            get {
-                return ResourceManager.GetString("SettingsAutoRunCheckError", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to Error disabling autorun: {0}.
         /// </summary>
         internal static string SettingsAutoRunDisableAdminError {
@@ -766,29 +757,11 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to Error disabling auto-run: {0}.
-        /// </summary>
-        internal static string SettingsAutoRunDisableUserError {
-            get {
-                return ResourceManager.GetString("SettingsAutoRunDisableUserError", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to Error enabling autorun: {0}.
         /// </summary>
         internal static string SettingsAutoRunEnableAdminError {
             get {
                 return ResourceManager.GetString("SettingsAutoRunEnableAdminError", resourceCulture);
-            }
-        }
-
-        /// <summary>
-        ///   Looks up a localized string similar to Error enabling auto-run: {0}.
-        /// </summary>
-        internal static string SettingsAutoRunEnableUserError {
-            get {
-                return ResourceManager.GetString("SettingsAutoRunEnableUserError", resourceCulture);
             }
         }
 

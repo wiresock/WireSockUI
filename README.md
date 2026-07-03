@@ -9,7 +9,7 @@ WireSockUI does not talk to the newer WireSock Secure Connect service API. Keep 
 - Windows with a matching-architecture WireSock SDK installation.
 - `wgbooster.dll` available next to `WireSockUI.exe` or installed through the WireSock SDK/minimal installer.
 - The WireSock driver installed and usable by the current system.
-- Administrator privileges when the selected tunnel mode or driver operations require elevation.
+- Administrator privileges. Starting with WireSock Secure Connect v3, the driver interface is available only to elevated users, so WireSockUI now always starts elevated.
 
 At startup WireSockUI looks for `wgbooster.dll` in this order:
 
@@ -55,7 +55,7 @@ The single-node `-m:1` solution build avoids a silent MSBuild failure that can h
 ## Remaining Runtime Risks
 
 - A clean build does not prove that the installed driver and SDK DLL are present or compatible on the target machine.
-- Tunnel start/stop still depends on driver state, Windows networking permissions, and elevation.
+- Tunnel start/stop still depends on driver state and Windows networking permissions after elevation succeeds.
 - The `WireSockUI.Tests` harness covers focused parser/profile validation scenarios, but native driver and `wgbooster.dll` lifecycle behavior still needs runtime validation on a machine with the SDK installed.
 
 ## License

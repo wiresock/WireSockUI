@@ -5,7 +5,6 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
-using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -63,27 +62,6 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
-            // Don't try to elevate when running under debugger
-            if (!Debugger.IsAttached)
-                if (!IsCurrentProcessElevated() && !Settings.Default.DisableAutoAdmin)
-                    try
-                    {
-                        var startInfo = new ProcessStartInfo
-                        {
-                            UseShellExecute = true,
-                            WorkingDirectory = Environment.CurrentDirectory,
-                            FileName = Application.ExecutablePath,
-                            Verb = "runas"
-                        };
-                        Process.Start(startInfo);
-                        Environment.Exit(1);
-                    }
-                    catch
-                    {
-                        // If the user refused the elevation, or an error occurred
-                        // MessageBox.Show("Unable to run as administrator. Continuing as normal user.");
-                    }
-
             if (IsApplicationAlreadyRunning())
             {
                 MessageBox.Show(Resources.AlreadyRunningMessage, Resources.AlreadyRunningTitle, MessageBoxButtons.OK,
@@ -123,15 +101,6 @@ namespace WireSockUI.Forms
 
             // Update the list of available configurations.
             LoadProfiles();
-        }
-
-        private static bool IsCurrentProcessElevated()
-        {
-            using (var identity = WindowsIdentity.GetCurrent())
-            {
-                var principal = new WindowsPrincipal(identity);
-                return principal.IsInRole(WindowsBuiltInRole.Administrator);
-            }
         }
 
         private static bool SleepUntilCancelled(BackgroundWorker worker, int milliseconds)
@@ -1010,13 +979,9 @@ namespace WireSockUI.Forms
                         return;
                     }
 
-                    if (IsCurrentProcessElevated())
-                        // Set the tunnel mode based on the application settings and profile override.
-                        _wiresock.TunnelMode = useAdapter
-                            ? WireSockManager.Mode.VirtualAdapter
-                            : WireSockManager.Mode.Transparent;
-                    else
-                        _wiresock.TunnelMode = WireSockManager.Mode.Transparent;
+                    _wiresock.TunnelMode = useAdapter
+                        ? WireSockManager.Mode.VirtualAdapter
+                        : WireSockManager.Mode.Transparent;
                 }
                 catch (Exception ex)
                 {
