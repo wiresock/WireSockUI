@@ -125,21 +125,6 @@ namespace WireSockUI.Properties {
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
-        public bool DisableAutoAdmin
-        {
-            get
-            {
-                return ((bool)(this["DisableAutoAdmin"]));
-            }
-            set
-            {
-                this["DisableAutoAdmin"] = value;
-            }
-        }
-
-        [global::System.Configuration.UserScopedSettingAttribute()]
-        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
-        [global::System.Configuration.DefaultSettingValueAttribute("False")]
         public bool EnableKillSwitch
         {
             get

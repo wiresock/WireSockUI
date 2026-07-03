@@ -343,20 +343,11 @@
   <data name="SettingsAutoRunCheckAdminError" xml:space="preserve">
     <value>Error checking elevated autorun status: {0}</value>
   </data>
-  <data name="SettingsAutoRunCheckError" xml:space="preserve">
-    <value>Error checking auto-run status: {0}</value>
-  </data>
   <data name="SettingsAutoRunDisableAdminError" xml:space="preserve">
     <value>Error disabling autorun: {0}</value>
   </data>
-  <data name="SettingsAutoRunDisableUserError" xml:space="preserve">
-    <value>Error disabling auto-run: {0}</value>
-  </data>
   <data name="SettingsAutoRunEnableAdminError" xml:space="preserve">
     <value>Error enabling autorun: {0}</value>
-  </data>
-  <data name="SettingsAutoRunEnableUserError" xml:space="preserve">
-    <value>Error enabling auto-run: {0}</value>
   </data>
   <data name="SettingsAutoConnect" xml:space="preserve">
     <value>Automatically connect on start</value>
