@@ -35,7 +35,7 @@ namespace WireSockUI.Forms
         {
             try
             {
-                Process.Start("explorer.exe", Global.MainFolder);
+                Process.Start("explorer.exe", Global.ConfigsFolder);
             }
             catch (Exception ex)
             {
@@ -198,7 +198,16 @@ namespace WireSockUI.Forms
             Settings.Default.EnableKillSwitch = chkEnableKillSwitch.Checked;
             Settings.Default.LogLevel = ddlLogLevel.SelectedItem as string;
 
-            Settings.Default.Save();
+            try
+            {
+                Settings.Default.Save();
+            }
+            catch (Exception ex)
+            {
+                ShowSettingsError(Resources.SettingsSaveError, ex);
+                DialogResult = DialogResult.None;
+                return;
+            }
 
             DialogResult = DialogResult.OK;
             Close();

@@ -376,6 +376,9 @@
   <data name="SettingsSave" xml:space="preserve">
     <value>Save</value>
   </data>
+  <data name="SettingsSaveError" xml:space="preserve">
+    <value>Error saving settings: {0}</value>
+  </data>
   <data name="SizeBytes" xml:space="preserve">
     <value>Bytes</value>
   </data>
@@ -498,6 +501,9 @@
   </data>
   <data name="TunnelKillSwitchStateError" xml:space="preserve">
     <value>Unable to confirm the current Kill Switch state.</value>
+  </data>
+  <data name="TunnelConnectTimeout" xml:space="preserve">
+    <value>The tunnel did not report an active connection in time. WireSock UI stopped the pending tunnel; try again or check the log.</value>
   </data>
   <data name="TunnelErrorStart" xml:space="preserve">
     <value>Tunnel has failed to start. Please check log.</value>

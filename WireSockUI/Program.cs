@@ -3,10 +3,14 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
 using WireSockUI.Properties;
@@ -26,8 +30,8 @@ namespace WireSockUI
 
             try
             {
-                Directory.CreateDirectory(Global.MainFolder);
-                Directory.CreateDirectory(Global.ConfigsFolder);
+                Global.EnsureApplicationFolders();
+                MigrateLegacyProfiles();
             }
             catch (Exception ex)
             {
@@ -145,8 +149,14 @@ namespace WireSockUI
             var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
             if (ContainsWireSockLibrary(localDirectory))
             {
-                libraryDirectory = localDirectory;
-                return true;
+                if (!IsPotentiallyUserWritableDirectory(localDirectory))
+                {
+                    libraryDirectory = localDirectory;
+                    return true;
+                }
+
+                Trace.TraceWarning(
+                    $"Skipping app-local wgbooster.dll in user-writable directory '{localDirectory}' while running elevated.");
             }
 
             foreach (var installLocation in GetInstallLocations())
@@ -274,6 +284,85 @@ namespace WireSockUI
             }
 
             return isAppLocalDirectory;
+        }
+
+        private static void MigrateLegacyProfiles()
+        {
+            if (!Directory.Exists(Global.LegacyConfigsFolder))
+                return;
+
+            foreach (var legacyProfilePath in Directory.GetFiles(Global.LegacyConfigsFolder, "*.conf"))
+            {
+                var profileName = Path.GetFileNameWithoutExtension(legacyProfilePath);
+                if (!Profile.IsValidProfileName(profileName))
+                {
+                    Trace.TraceWarning($"Skipping legacy profile with unsafe name '{Path.GetFileName(legacyProfilePath)}'.");
+                    continue;
+                }
+
+                var destinationPath = Profile.GetProfilePath(profileName);
+                if (File.Exists(destinationPath))
+                    continue;
+
+                try
+                {
+                    File.Copy(legacyProfilePath, destinationPath, false);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
+                }
+            }
+        }
+
+        private static bool IsPotentiallyUserWritableDirectory(string directory)
+        {
+            var normalizedDirectory = NormalizePathDirectory(directory);
+            if (normalizedDirectory == null)
+                return true;
+
+            try
+            {
+                var security = Directory.GetAccessControl(normalizedDirectory);
+                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                var currentUser = WindowsIdentity.GetCurrent().User;
+                var writableSids = new[]
+                {
+                    new SecurityIdentifier(WellKnownSidType.WorldSid, null),
+                    new SecurityIdentifier(WellKnownSidType.AuthenticatedUserSid, null),
+                    new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null),
+                    new SecurityIdentifier(WellKnownSidType.InteractiveSid, null),
+                    currentUser
+                };
+                const FileSystemRights writeRights =
+                    FileSystemRights.FullControl |
+                    FileSystemRights.Modify |
+                    FileSystemRights.Write |
+                    FileSystemRights.WriteData |
+                    FileSystemRights.CreateFiles |
+                    FileSystemRights.AppendData |
+                    FileSystemRights.CreateDirectories |
+                    FileSystemRights.WriteAttributes |
+                    FileSystemRights.WriteExtendedAttributes;
+
+                foreach (FileSystemAccessRule rule in rules)
+                {
+                    if (rule.AccessControlType != AccessControlType.Allow ||
+                        !(rule.IdentityReference is SecurityIdentifier sid) ||
+                        !writableSids.Contains(sid))
+                        continue;
+
+                    if ((rule.FileSystemRights & writeRights) != 0)
+                        return true;
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
+                return true;
+            }
         }
 
         private static string NormalizePathDirectory(string directory)

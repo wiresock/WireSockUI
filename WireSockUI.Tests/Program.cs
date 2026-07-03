@@ -27,6 +27,7 @@ namespace WireSockUI.Tests
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
+                { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
 
@@ -209,6 +210,15 @@ namespace WireSockUI.Tests
                 "Expected large byte counters to format without overflowing the suffix list.");
             AssertFalse(string.IsNullOrWhiteSpace(long.MaxValue.AsTimeAgo()),
                 "Expected large handshake ages to format without narrowing to Int32.");
+        }
+
+        private static void TimeFormattingUsesPluralHours()
+        {
+            var value = TimeSpan.FromHours(2).AsTimeAgo();
+
+            AssertTrue(value.Contains("2"), "Expected two-hour durations to include the hour count.");
+            AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected two-hour durations to use a plural hour label, got '{value}'.");
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()

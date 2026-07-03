@@ -37,7 +37,7 @@ namespace WireSockUI.Extensions
                 return Resources.TimeLapseHour;
 
             if (delta < 24 * hour)
-                return value.Hours + Resources.TimeLapseHour;
+                return value.Hours + Resources.TimeLapseHours;
 
             if (delta < 48 * hour)
                 return "yesterday";

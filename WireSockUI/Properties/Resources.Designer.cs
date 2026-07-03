@@ -820,6 +820,15 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Error saving settings: {0}.
+        /// </summary>
+        internal static string SettingsSaveError {
+            get {
+                return ResourceManager.GetString("SettingsSaveError", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Bytes.
         /// </summary>
         internal static string SizeBytes {
@@ -1205,6 +1214,15 @@ namespace WireSockUI.Properties {
         internal static string TunnelKillSwitchStateError {
             get {
                 return ResourceManager.GetString("TunnelKillSwitchStateError", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to The tunnel did not report an active connection in time. WireSock UI stopped the pending tunnel; try again or check the log..
+        /// </summary>
+        internal static string TunnelConnectTimeout {
+            get {
+                return ResourceManager.GetString("TunnelConnectTimeout", resourceCulture);
             }
         }
 

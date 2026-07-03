@@ -43,6 +43,7 @@ namespace WireSockUI
         private readonly LogPrinter _logPrinter;
 
         private readonly BlockingCollection<LogMessage> _logQueue;
+        private readonly BackgroundWorker _logWorker;
         private readonly object _syncRoot = new object();
 
         private volatile IntPtr _handle = IntPtr.Zero;
@@ -60,7 +61,8 @@ namespace WireSockUI
         public WireSockManager(LogMessageCallback logMessageCallback = null)
         {
             _logQueue = new BlockingCollection<LogMessage>(new ConcurrentQueue<LogMessage>());
-            InitializeLogWorker(logMessageCallback).RunWorkerAsync();
+            _logWorker = InitializeLogWorker(logMessageCallback);
+            _logWorker.RunWorkerAsync();
 
             TunnelMode = Mode.Transparent;
 
@@ -315,12 +317,13 @@ namespace WireSockUI
                     }
                 }
 
+                _disposed = true;
                 CompleteLogQueue();
+                if (!_logWorker.IsBusy)
+                    _logWorker.Dispose();
 
                 if (_logPrinterHandle.IsAllocated)
                     _logPrinterHandle.Free();
-
-                _disposed = true;
             }
         }
 
@@ -368,6 +371,12 @@ namespace WireSockUI
             {
                 if (e.UserState is LogMessage message)
                     logMessageCallback?.Invoke(message);
+            };
+
+            worker.RunWorkerCompleted += (s, e) =>
+            {
+                if (_disposed)
+                    worker.Dispose();
             };
 
             return worker;
@@ -476,15 +485,24 @@ namespace WireSockUI
                         return false;
                     }
 
-                    if (_adapterMode == Mode.VirtualAdapter)
-                        ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
-
                     if (!_startTunnel(_handle))
                     {
                         ShowTunnelError(Resources.TunnelErrorStart);
 
                         DropFailedConnectHandle();
                         return false;
+                    }
+
+                    if (_adapterMode == Mode.VirtualAdapter)
+                    {
+                        try
+                        {
+                            ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
+                        }
+                        catch (Exception ex)
+                        {
+                            PrintLog($"Tunnel is active, but WireSock UI could not rename the virtual adapter: {ex.Message}");
+                        }
                     }
                 }
                 catch (DllNotFoundException ex)
