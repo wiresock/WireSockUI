@@ -42,6 +42,7 @@ namespace WireSockUI.Forms
         private bool _shutdownComplete;
         private int _tunnelOperationInProgress;
         private int _tunnelGeneration;
+        private int _tunnelConnectionTimeoutGeneration;
         private Icon _ownedTrayIcon;
 
         private sealed class TunnelConnectionProgress
@@ -401,23 +402,45 @@ namespace WireSockUI.Forms
 
         private async void HandleTunnelConnectionTimeout(int generation)
         {
-            if (!TryBeginTunnelOperation())
+            if (!RequestTunnelConnectionTimeout(generation) || !TryBeginTunnelOperation())
                 return;
 
             try
             {
-                if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
-                    _currentState != ConnectionState.Connecting)
-                    return;
-
-                await DisconnectCurrentTunnelAsync(false);
-                MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
+                await DisconnectTimedOutTunnelAsync(generation);
             }
             finally
             {
                 EndTunnelOperation();
             }
+        }
+
+        private bool RequestTunnelConnectionTimeout(int generation)
+        {
+            if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
+                _currentState != ConnectionState.Connecting)
+                return false;
+
+            Volatile.Write(ref _tunnelConnectionTimeoutGeneration, generation);
+            return true;
+        }
+
+        private bool IsTunnelConnectionTimedOut(int generation)
+        {
+            return Volatile.Read(ref _tunnelConnectionTimeoutGeneration) == generation;
+        }
+
+        private async Task DisconnectTimedOutTunnelAsync(int generation)
+        {
+            if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
+                _currentState != ConnectionState.Connecting || !IsTunnelConnectionTimedOut(generation))
+                return;
+
+            await DisconnectCurrentTunnelAsync(false);
+
+            if (!_shutdownComplete)
+                MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
         }
 
         /// <summary>
@@ -1046,6 +1069,20 @@ namespace WireSockUI.Forms
                     UpdateState(ConnectionState.Connecting, true, profile);
                     var connected = await Task.Run(() => _wiresock.Connect(profile));
                     var connectionSequence = connected ? _wiresock.ConnectionSequence : 0;
+
+                    if (!_shutdownComplete && connectGeneration == CurrentTunnelGeneration() &&
+                        IsTunnelConnectionTimedOut(connectGeneration))
+                    {
+                        if (connected)
+                            await DisconnectNativeTunnelAsync(connectionSequence, false);
+                        else if (_wiresock.HasTunnelHandle)
+                            await DisconnectNativeTunnelAsync(null, false);
+
+                        UpdateState(ConnectionState.Disconnected, false, profile);
+                        MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
 
                     if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
                     {

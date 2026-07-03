@@ -28,6 +28,7 @@ namespace WireSockUI.Tests
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
+                { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
@@ -220,6 +221,14 @@ namespace WireSockUI.Tests
             AssertTrue(value.Contains("2"), "Expected two-hour durations to include the hour count.");
             AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void TimeFormattingUsesSingularHourForPartialSecondHour()
+        {
+            var value = TimeSpan.FromMinutes(90).AsTimeAgo();
+
+            AssertTrue(value.IndexOf("an hour", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected 90-minute durations to use the singular hour label, got '{value}'.");
         }
 
         private static void TimeFormattingHandlesFutureValues()
