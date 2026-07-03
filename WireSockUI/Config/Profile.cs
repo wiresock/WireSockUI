@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -477,13 +478,31 @@ namespace WireSockUI.Config
 
         public static IEnumerable<string> GetProfiles()
         {
-            var files = Directory.GetFiles(Global.ConfigsFolder);
+            string[] files;
+
+            try
+            {
+                Directory.CreateDirectory(Global.ConfigsFolder);
+                files = Directory.GetFiles(Global.ConfigsFolder);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to enumerate WireSock UI profiles: {ex.Message}");
+                yield break;
+            }
 
             foreach (var file in files)
             {
-                if (!file.EndsWith(".conf")) continue;
+                if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase)) continue;
 
-                yield return Path.GetFileNameWithoutExtension(file);
+                var profileName = Path.GetFileNameWithoutExtension(file);
+                if (!IsValidProfileName(profileName))
+                {
+                    Trace.TraceWarning($"Skipping invalid WireSock UI profile file name '{Path.GetFileName(file)}'.");
+                    continue;
+                }
+
+                yield return profileName;
             }
         }
 
@@ -495,7 +514,19 @@ namespace WireSockUI.Config
         /// <remarks>The profile might not exist, this merely returns the path it should be at.</remarks>
         public static string GetProfilePath(string profileName)
         {
-            return Path.Combine(Global.ConfigsFolder, profileName + ".conf");
+            if (!IsValidProfileName(profileName))
+                throw new ArgumentException("Profile name is empty or contains characters that are not valid in a Windows file name.",
+                    nameof(profileName));
+
+            var configRoot = Path.GetFullPath(Global.ConfigsFolder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var profilePath = Path.GetFullPath(Path.Combine(configRoot, profileName + ".conf"));
+
+            if (!profilePath.StartsWith(configRoot, StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Profile path must stay inside the WireSock UI configuration folder.",
+                    nameof(profileName));
+
+            return profilePath;
         }
 
         public static bool IsValidProfileName(string profileName)

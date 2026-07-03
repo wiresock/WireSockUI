@@ -2,8 +2,6 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
-using System.Text;
 
 namespace WireSockUI.Native
 {
@@ -61,6 +59,10 @@ namespace WireSockUI.Native
                     if (line.StartsWith("[") && line.EndsWith("]"))
                     {
                         currentSection = line.Substring(1, line.Length - 2);
+                        if (Sections.ContainsKey(currentSection))
+                            throw new FormatException(
+                                $"Duplicate [{currentSection}] sections are not supported by WireSock UI.");
+
                         Sections[currentSection] = new Section();
                     }
                     else

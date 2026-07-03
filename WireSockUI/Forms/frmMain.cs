@@ -40,7 +40,20 @@ namespace WireSockUI.Forms
         private ConnectionState _currentState = ConnectionState.Disconnected;
         private bool _exitRequested;
         private bool _shutdownComplete;
+        private int _tunnelGeneration;
         private Icon _ownedTrayIcon;
+
+        private sealed class TunnelConnectionProgress
+        {
+            public int Generation { get; set; }
+            public bool Connected { get; set; }
+        }
+
+        private sealed class TunnelStateProgress
+        {
+            public int Generation { get; set; }
+            public WgbStats Stats { get; set; }
+        }
 
         /**
          * @brief Initializes a new instance of the Main class.
@@ -170,6 +183,70 @@ namespace WireSockUI.Forms
                 btnActivate.Enabled = enabled;
         }
 
+        private bool TryGetProfileItem(string profileName, out ListViewItem profileItem)
+        {
+            profileItem = null;
+
+            if (string.IsNullOrWhiteSpace(profileName) || !lstProfiles.Items.ContainsKey(profileName))
+                return false;
+
+            profileItem = lstProfiles.Items[profileName];
+            return profileItem != null;
+        }
+
+        private int CurrentTunnelGeneration()
+        {
+            return Volatile.Read(ref _tunnelGeneration);
+        }
+
+        private void AdvanceTunnelGeneration()
+        {
+            Interlocked.Increment(ref _tunnelGeneration);
+        }
+
+        private void StartTunnelConnectionWorker()
+        {
+            if (!_tunnelConnectionWorker.IsBusy)
+                _tunnelConnectionWorker.RunWorkerAsync(CurrentTunnelGeneration());
+        }
+
+        private void StartTunnelStateWorker()
+        {
+            if (!_tunnelStateWorker.IsBusy)
+                _tunnelStateWorker.RunWorkerAsync(CurrentTunnelGeneration());
+        }
+
+        private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true)
+        {
+            UpdateState(ConnectionState.Disconnected, notify);
+            return await DisconnectNativeTunnelAsync();
+        }
+
+        private async Task<bool> DisconnectNativeTunnelAsync(long? connectionSequence = null, bool showWarning = true)
+        {
+            bool disconnected;
+
+            try
+            {
+                disconnected = await Task.Run(() => connectionSequence.HasValue
+                    ? _wiresock.DisconnectIfConnectionSequence(connectionSequence.Value)
+                    : _wiresock.Disconnect());
+            }
+            catch (Exception ex)
+            {
+                if (showWarning)
+                    MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
+            }
+
+            if (!disconnected && showWarning)
+                MessageBox.Show(
+                    "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
+                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+            return disconnected;
+        }
+
         private void Shutdown()
         {
             if (_shutdownComplete)
@@ -254,31 +331,49 @@ namespace WireSockUI.Forms
 
             worker.DoWork += (s, e) =>
             {
+                var generation = (int)e.Argument;
+                var connected = false;
+
                 do
                 {
+                    if (generation != CurrentTunnelGeneration())
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
+
                     if (SleepUntilCancelled(worker, 500))
                     {
                         e.Cancel = true;
                         return;
                     }
 
-                    worker.ReportProgress(0, _wiresock.Connected);
-                } while (!worker.CancellationPending && !_wiresock.Connected);
+                    connected = _wiresock.Connected;
+                    worker.ReportProgress(0, new TunnelConnectionProgress
+                    {
+                        Generation = generation,
+                        Connected = connected
+                    });
+                } while (!worker.CancellationPending && generation == CurrentTunnelGeneration() && !connected);
             };
 
             worker.ProgressChanged += (s, e) =>
             {
-                if (_currentState == ConnectionState.Connecting && (bool)e.UserState)
+                if (_shutdownComplete || !(e.UserState is TunnelConnectionProgress progress) ||
+                    progress.Generation != CurrentTunnelGeneration())
+                    return;
+
+                if (_currentState == ConnectionState.Connecting && progress.Connected)
                     UpdateState(ConnectionState.Connected);
             };
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing || e.Error != null)
                     return;
 
                 if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
-                    worker.RunWorkerAsync();
+                    worker.RunWorkerAsync(CurrentTunnelGeneration());
             };
 
             return worker;
@@ -300,8 +395,16 @@ namespace WireSockUI.Forms
 
             worker.DoWork += (s, e) =>
             {
+                var generation = (int)e.Argument;
+
                 while (!worker.CancellationPending)
                 {
+                    if (generation != CurrentTunnelGeneration())
+                    {
+                        e.Cancel = true;
+                        return;
+                    }
+
                     if (SleepUntilCancelled(worker, 1000))
                     {
                         e.Cancel = true;
@@ -311,16 +414,21 @@ namespace WireSockUI.Forms
                     if (!_wiresock.Connected) continue;
 
                     var stats = _wiresock.GetState();
-                    worker.ReportProgress(0, stats);
+                    worker.ReportProgress(0, new TunnelStateProgress
+                    {
+                        Generation = generation,
+                        Stats = stats
+                    });
                 }
             };
 
             worker.ProgressChanged += (s, e) =>
             {
-                if (_currentState != ConnectionState.Connected)
+                if (_shutdownComplete || !(e.UserState is TunnelStateProgress progress) ||
+                    progress.Generation != CurrentTunnelGeneration() || _currentState != ConnectionState.Connected)
                     return;
 
-                if (!(e.UserState is WgbStats stats)) return;
+                var stats = progress.Stats;
 
                 if (layoutState.Controls["txtHandshake"] is TextBox txtHandshake)
                     txtHandshake.Text = stats.time_since_last_handshake.AsTimeAgo();
@@ -339,11 +447,11 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing || e.Error != null)
                     return;
 
                 if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
-                    worker.RunWorkerAsync();
+                    worker.RunWorkerAsync(CurrentTunnelGeneration());
             };
 
             return worker;
@@ -440,12 +548,12 @@ namespace WireSockUI.Forms
 
                     cmiDeactivateTunnel.Enabled = true;
 
-                    lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Connecting.ToString();
+                    if (TryGetProfileItem(_wiresock.ProfileName, out var connectingProfile))
+                        connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
 
                     trayIcon.Text = Resources.TrayActivating;
 
-                    if (!_tunnelConnectionWorker.IsBusy)
-                        _tunnelConnectionWorker.RunWorkerAsync();
+                    StartTunnelConnectionWorker();
                     break;
                 case ConnectionState.Connected:
                     if (btnActivate != null)
@@ -476,15 +584,15 @@ namespace WireSockUI.Forms
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
                             menuItem.Checked = menuItem.Text == _wiresock.ProfileName;
 
-                    lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Connected.ToString();
+                    if (TryGetProfileItem(_wiresock.ProfileName, out var connectedProfile))
+                        connectedProfile.ImageKey = ConnectionState.Connected.ToString();
 
                     Settings.Default.LastProfile = _wiresock.ProfileName;
                     Settings.Default.Save();
 
                     gbxState.Visible = true;
 
-                    if (!_tunnelStateWorker.IsBusy)
-                        _tunnelStateWorker.RunWorkerAsync();
+                    StartTunnelStateWorker();
 
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
@@ -493,6 +601,8 @@ namespace WireSockUI.Forms
 #endif
                     break;
                 case ConnectionState.Disconnected:
+                    AdvanceTunnelGeneration();
+
                     if (btnActivate != null)
                     {
                         btnActivate.Text = Resources.ButtonInactive;
@@ -521,8 +631,8 @@ namespace WireSockUI.Forms
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
                             menuItem.Checked = false;
 
-                    if (_wiresock.ProfileName != null)
-                        lstProfiles.Items[_wiresock.ProfileName].ImageKey = ConnectionState.Disconnected.ToString();
+                    if (TryGetProfileItem(_wiresock.ProfileName, out var disconnectedProfile))
+                        disconnectedProfile.ImageKey = ConnectionState.Disconnected.ToString();
 
                     gbxState.Visible = false;
                     _tunnelConnectionWorker.CancelAsync();
@@ -533,11 +643,6 @@ namespace WireSockUI.Forms
                         Notifications.Notifications.Notify(Resources.ToastInactiveTitle,
                             string.Format(Resources.ToastInactiveMessage, _wiresock.ProfileName));
 #endif
-
-                    if (!_wiresock.Disconnect())
-                        MessageBox.Show(
-                            "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
-                            Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     break;
             }
 
@@ -567,9 +672,9 @@ namespace WireSockUI.Forms
                     MessageBoxIcon.Error);
         }
 
-        private void OnDisconnectClick(object sender, EventArgs e)
+        private async void OnDisconnectClick(object sender, EventArgs e)
         {
-            UpdateState(ConnectionState.Disconnected);
+            await DisconnectCurrentTunnelAsync();
         }
 
         private void OnExitClick(object sender, EventArgs e)
@@ -685,7 +790,7 @@ namespace WireSockUI.Forms
             }
         }
 
-        private void OnDeleteProfileClick(object sender, EventArgs e)
+        private async void OnDeleteProfileClick(object sender, EventArgs e)
         {
             var selectedConf = lstProfiles.SelectedItems[0].Text;
 
@@ -695,7 +800,8 @@ namespace WireSockUI.Forms
                 return;
 
             if (_wiresock.Connected && _wiresock.ProfileName == selectedConf)
-                UpdateState(ConnectionState.Disconnected);
+                if (!await DisconnectCurrentTunnelAsync())
+                    return;
 
             try
             {
@@ -729,17 +835,41 @@ namespace WireSockUI.Forms
             {
                 if (_wiresock.HasTunnelHandle)
                 {
-                    if (Settings.Default.EnableKillSwitch || _wiresock.KillSwitchEnabled)
+                    if (Settings.Default.EnableKillSwitch)
+                    {
                         _wiresock.KillSwitchEnabled = Settings.Default.EnableKillSwitch;
+                        return;
+                    }
+
+                    if (!_wiresock.TryGetKillSwitchEnabled(out var killSwitchEnabled, out var diagnostic))
+                    {
+                        MessageBox.Show(
+                            $"Unable to confirm the current Kill Switch state.{Environment.NewLine}{Environment.NewLine}{diagnostic}",
+                            Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    if (killSwitchEnabled)
+                        _wiresock.KillSwitchEnabled = false;
 
                     return;
                 }
 
-                if (!Settings.Default.EnableKillSwitch && WireSockManager.IsNetworkLockActive() &&
-                    !WireSockManager.ResetNetworkLock())
-                    MessageBox.Show(
-                        Resources.KillSwitchResetError,
-                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                if (!Settings.Default.EnableKillSwitch)
+                {
+                    if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
+                    {
+                        MessageBox.Show(
+                            $"Unable to query the current Kill Switch network lock state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
+                            Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    if (networkLockActive && !WireSockManager.TryResetNetworkLock(out var resetDiagnostic))
+                        MessageBox.Show(
+                            $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{resetDiagnostic}",
+                            Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                }
             }
             catch (Exception ex)
             {
@@ -773,7 +903,8 @@ namespace WireSockUI.Forms
                             reconnect = true;
 
                     // Update the state to disconnected.
-                    UpdateState(ConnectionState.Disconnected);
+                    if (!await DisconnectCurrentTunnelAsync())
+                        return;
 
                     // Proceed with reconnecting if the reconnect flag is set.
                     if (!reconnect) return;
@@ -782,7 +913,8 @@ namespace WireSockUI.Forms
             else
             {
                 // Update the state to disconnected.
-                UpdateState(ConnectionState.Disconnected, false);
+                if (!await DisconnectCurrentTunnelAsync(false))
+                    return;
             }
 
             // Get the selected profile.
@@ -805,11 +937,8 @@ namespace WireSockUI.Forms
 
             try
             {
-                if (_wiresock.HasTunnelHandle && !_wiresock.Disconnect())
+                if (_wiresock.HasTunnelHandle && !await DisconnectNativeTunnelAsync())
                 {
-                    MessageBox.Show(
-                        "The previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.",
-                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                     return;
                 }
 
@@ -831,7 +960,19 @@ namespace WireSockUI.Forms
             SetActivateButtonEnabled(false);
             try
             {
-                if (await Task.Run(() => _wiresock.Connect(profile)))
+                var connectGeneration = CurrentTunnelGeneration();
+                var connected = await Task.Run(() => _wiresock.Connect(profile));
+                var connectionSequence = connected ? _wiresock.ConnectionSequence : 0;
+
+                if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
+                {
+                    if (connected)
+                        await DisconnectNativeTunnelAsync(connectionSequence, false);
+
+                    return;
+                }
+
+                if (connected)
                     UpdateState(ConnectionState.Connecting);
                 else
                     MessageBox.Show(_wiresock.LastError ?? Resources.TunnelErrorManager, Resources.TunnelErrorTitle,

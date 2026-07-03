@@ -1,8 +1,10 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using WireSockUI.Extensions;
@@ -13,6 +15,9 @@ namespace WireSockUI
 {
     internal static class Program
     {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern bool SetDllDirectory(string lpPathName);
+
         [STAThread]
         private static void Main()
         {
@@ -130,8 +135,7 @@ namespace WireSockUI
             if (!TryFindWireSockLibraryDirectory(out libraryDirectory))
                 return false;
 
-            AddDirectoryToProcessPath(libraryDirectory);
-            return true;
+            return ConfigureWireSockLibraryDirectory(libraryDirectory);
         }
 
         private static bool TryFindWireSockLibraryDirectory(out string libraryDirectory)
@@ -244,47 +248,32 @@ namespace WireSockUI
             return locations.ToArray();
         }
 
-        private static IEnumerable<string> GetPathDirectories()
-        {
-            var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-
-            foreach (var item in environmentPath.Split(Path.PathSeparator))
-            {
-                var directory = item.Trim().Trim('"');
-                if (!string.IsNullOrWhiteSpace(directory))
-                    yield return directory;
-            }
-        }
-
-        private static void AddDirectoryToProcessPath(string directory)
+        private static bool ConfigureWireSockLibraryDirectory(string directory)
         {
             if (string.IsNullOrWhiteSpace(directory))
-                return;
+                return false;
 
             var fullDirectory = NormalizePathDirectory(directory);
             if (fullDirectory == null)
-                return;
+                return false;
 
-            var environmentPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
-
-            foreach (var item in GetPathDirectories())
-            {
-                var existingDirectory = NormalizePathDirectory(item);
-                if (existingDirectory == null)
-                    continue;
-
-                if (string.Equals(existingDirectory, fullDirectory, StringComparison.OrdinalIgnoreCase))
-                    return;
-            }
+            var appDirectory = NormalizePathDirectory(AppDomain.CurrentDomain.BaseDirectory);
+            var isAppLocalDirectory = string.Equals(fullDirectory, appDirectory, StringComparison.OrdinalIgnoreCase);
 
             try
             {
-                Environment.SetEnvironmentVariable("PATH", $"{fullDirectory}{Path.PathSeparator}{environmentPath}");
+                if (SetDllDirectory(fullDirectory))
+                    return true;
+
+                Trace.TraceWarning(
+                    $"Failed to set WireSock library directory '{fullDirectory}': {new Win32Exception(Marshal.GetLastWin32Error()).Message}");
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Failed to add WireSock library directory to process PATH: {ex.Message}");
+                Trace.TraceWarning($"Failed to set WireSock library directory '{fullDirectory}': {ex.Message}");
             }
+
+            return isAppLocalDirectory;
         }
 
         private static string NormalizePathDirectory(string directory)

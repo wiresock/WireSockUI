@@ -3,7 +3,7 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.4.33213.308
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WireSockUI", "WiresockUI\WireSockUI.csproj", "{C309F359-DAFF-42D0-8379-70ECC9688943}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WireSockUI", "WireSockUI\WireSockUI.csproj", "{C309F359-DAFF-42D0-8379-70ECC9688943}"
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "WireSockUI.Tests", "WireSockUI.Tests\WireSockUI.Tests.csproj", "{B50483CA-E58B-4373-9482-AA1A40B4C5E8}"
 EndProject
