@@ -378,15 +378,25 @@ namespace WireSockUI
                 using (var first = File.OpenRead(firstPath))
                 using (var second = File.OpenRead(secondPath))
                 {
-                    int firstByte;
-                    do
-                    {
-                        firstByte = first.ReadByte();
-                        if (firstByte != second.ReadByte())
-                            return false;
-                    } while (firstByte != -1);
+                    var firstBuffer = new byte[81920];
+                    var secondBuffer = new byte[81920];
 
-                    return true;
+                    while (true)
+                    {
+                        var firstBytesRead = ReadBlock(first, firstBuffer);
+                        var secondBytesRead = ReadBlock(second, secondBuffer);
+                        if (firstBytesRead != secondBytesRead)
+                            return false;
+
+                        if (firstBytesRead == 0)
+                            return true;
+
+                        for (var i = 0; i < firstBytesRead; i++)
+                        {
+                            if (firstBuffer[i] != secondBuffer[i])
+                                return false;
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -394,6 +404,21 @@ namespace WireSockUI
                 Trace.TraceWarning($"Failed to compare migrated profile files: {ex.Message}");
                 return false;
             }
+        }
+
+        private static int ReadBlock(Stream stream, byte[] buffer)
+        {
+            var totalRead = 0;
+            while (totalRead < buffer.Length)
+            {
+                var bytesRead = stream.Read(buffer, totalRead, buffer.Length - totalRead);
+                if (bytesRead == 0)
+                    break;
+
+                totalRead += bytesRead;
+            }
+
+            return totalRead;
         }
 
         private static void TryDeleteLegacyProfile(string legacyProfilePath, string profileName)

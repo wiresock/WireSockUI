@@ -336,7 +336,7 @@ namespace WireSockUI.Forms
             {
                 var generation = (int)e.Argument;
                 var connected = false;
-                var timeoutAt = DateTime.UtcNow.AddMilliseconds(TunnelConnectionTimeoutMilliseconds);
+                var timeout = Stopwatch.StartNew();
 
                 do
                 {
@@ -353,7 +353,7 @@ namespace WireSockUI.Forms
                     }
 
                     connected = _wiresock.Connected;
-                    if (!connected && DateTime.UtcNow >= timeoutAt)
+                    if (!connected && timeout.ElapsedMilliseconds >= TunnelConnectionTimeoutMilliseconds)
                     {
                         worker.ReportProgress(0, new TunnelConnectionProgress
                         {
