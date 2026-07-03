@@ -380,7 +380,7 @@ namespace WireSockUI.Forms
 
                 if (progress.TimedOut)
                 {
-                    HandleTunnelConnectionTimeout(progress.Generation);
+                    _ = HandleTunnelConnectionTimeoutAsync(progress.Generation);
                     return;
                 }
 
@@ -400,7 +400,7 @@ namespace WireSockUI.Forms
             return worker;
         }
 
-        private async void HandleTunnelConnectionTimeout(int generation)
+        private async Task HandleTunnelConnectionTimeoutAsync(int generation)
         {
             if (!RequestTunnelConnectionTimeout(generation) || !TryBeginTunnelOperation())
                 return;
