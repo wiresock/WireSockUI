@@ -155,7 +155,7 @@ namespace WireSockUI
                 }
 
                 Trace.TraceWarning(
-                    $"Skipping app-local wgbooster.dll in user-writable directory '{localDirectory}' while running elevated.");
+                    $"Skipping app-local wgbooster.dll in user-writable directory '{localDirectory}'.");
             }
 
             foreach (var installLocation in GetInstallLocations())
