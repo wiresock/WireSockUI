@@ -390,10 +390,18 @@ namespace WireSockUI
                 {
                     if (rule.AccessControlType != AccessControlType.Allow ||
                         !(rule.IdentityReference is SecurityIdentifier sid) ||
-                        IsAdministrativeOrServiceSid(sid))
+                        (rule.FileSystemRights & writeRights) == 0)
                         continue;
 
-                    if ((rule.FileSystemRights & writeRights) != 0)
+                    if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
+                    {
+                        if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
+                            continue;
+
+                        return true;
+                    }
+
+                    if (!IsAdministrativeOrServiceSid(sid))
                         return true;
                 }
 
@@ -410,7 +418,6 @@ namespace WireSockUI
         {
             return sid.IsWellKnown(WellKnownSidType.LocalSystemSid) ||
                    sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) ||
-                   sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid) ||
                    sid.IsWellKnown(WellKnownSidType.LocalServiceSid) ||
                    sid.IsWellKnown(WellKnownSidType.NetworkServiceSid) ||
                    sid.Value.StartsWith("S-1-5-80-", StringComparison.OrdinalIgnoreCase) ||

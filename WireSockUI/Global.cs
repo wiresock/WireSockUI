@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Security.AccessControl;
@@ -36,6 +37,9 @@ namespace WireSockUI
             {
                 var security = CreateAdministratorsOnlyDirectorySecurity();
                 Directory.CreateDirectory(path, security);
+                if (IsReparsePoint(path))
+                    throw new IOException($"Refusing to secure WireSock UI directory reparse point '{path}'.");
+
                 Directory.SetAccessControl(path, security);
                 SecureExistingChildren(path);
             }
@@ -87,11 +91,41 @@ namespace WireSockUI
 
         private static void SecureExistingChildren(string path)
         {
-            foreach (var directory in Directory.GetDirectories(path, "*", SearchOption.AllDirectories))
-                Directory.SetAccessControl(directory, CreateAdministratorsOnlyDirectorySecurity());
+            var directories = new Stack<string>();
+            directories.Push(path);
 
-            foreach (var file in Directory.GetFiles(path, "*", SearchOption.AllDirectories))
-                File.SetAccessControl(file, CreateAdministratorsOnlyFileSecurity());
+            while (directories.Count > 0)
+            {
+                var directory = directories.Pop();
+
+                foreach (var file in Directory.GetFiles(directory))
+                {
+                    if (IsReparsePoint(file))
+                    {
+                        Trace.TraceWarning($"Skipping WireSock UI configuration file reparse point '{file}'.");
+                        continue;
+                    }
+
+                    File.SetAccessControl(file, CreateAdministratorsOnlyFileSecurity());
+                }
+
+                foreach (var childDirectory in Directory.GetDirectories(directory))
+                {
+                    if (IsReparsePoint(childDirectory))
+                    {
+                        Trace.TraceWarning($"Skipping WireSock UI configuration directory reparse point '{childDirectory}'.");
+                        continue;
+                    }
+
+                    Directory.SetAccessControl(childDirectory, CreateAdministratorsOnlyDirectorySecurity());
+                    directories.Push(childDirectory);
+                }
+            }
+        }
+
+        private static bool IsReparsePoint(string path)
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
         }
     }
 }
