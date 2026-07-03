@@ -367,8 +367,24 @@ namespace WireSockUI
 
             worker.DoWork += (s, e) =>
             {
-                foreach (var message in logQueue.GetConsumingEnumerable())
-                    worker.ReportProgress(0, message);
+                while (!_disposed)
+                {
+                    try
+                    {
+                        if (logQueue.TryTake(out var message, 500))
+                            worker.ReportProgress(0, message);
+                        else if (logQueue.IsCompleted)
+                            break;
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        break;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        break;
+                    }
+                }
             };
 
             worker.ProgressChanged += (s, e) =>

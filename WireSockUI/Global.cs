@@ -103,8 +103,19 @@ namespace WireSockUI
             while (directories.Count > 0)
             {
                 var directory = directories.Pop();
+                string[] files;
 
-                foreach (var file in Directory.GetFiles(directory))
+                try
+                {
+                    files = Directory.GetFiles(directory);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning($"Unable to enumerate WireSock UI configuration files in '{directory}': {ex.Message}");
+                    files = Array.Empty<string>();
+                }
+
+                foreach (var file in files)
                 {
                     if (IsReparsePoint(file))
                     {
@@ -112,10 +123,29 @@ namespace WireSockUI
                         continue;
                     }
 
-                    File.SetAccessControl(file, CreateAdministratorsOnlyFileSecurity());
+                    try
+                    {
+                        File.SetAccessControl(file, CreateAdministratorsOnlyFileSecurity());
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.TraceWarning($"Failed to secure WireSock UI configuration file '{file}': {ex.Message}");
+                    }
                 }
 
-                foreach (var childDirectory in Directory.GetDirectories(directory))
+                string[] childDirectories;
+                try
+                {
+                    childDirectories = Directory.GetDirectories(directory);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning(
+                        $"Unable to enumerate WireSock UI configuration directories in '{directory}': {ex.Message}");
+                    continue;
+                }
+
+                foreach (var childDirectory in childDirectories)
                 {
                     if (IsReparsePoint(childDirectory))
                     {
@@ -123,15 +153,31 @@ namespace WireSockUI
                         continue;
                     }
 
-                    Directory.SetAccessControl(childDirectory, CreateAdministratorsOnlyDirectorySecurity());
-                    directories.Push(childDirectory);
+                    try
+                    {
+                        Directory.SetAccessControl(childDirectory, CreateAdministratorsOnlyDirectorySecurity());
+                        directories.Push(childDirectory);
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.TraceWarning(
+                            $"Failed to secure WireSock UI configuration directory '{childDirectory}': {ex.Message}");
+                    }
                 }
             }
         }
 
         private static bool IsReparsePoint(string path)
         {
-            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            try
+            {
+                return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
+                return true;
+            }
         }
     }
 }
