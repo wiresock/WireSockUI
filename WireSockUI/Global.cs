@@ -53,17 +53,20 @@ namespace WireSockUI
         private static DirectorySecurity CreateAdministratorsOnlyDirectorySecurity()
         {
             var inheritanceFlags = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
             var security = new DirectorySecurity();
 
             security.SetAccessRuleProtection(true, false);
+            security.SetOwner(administratorsSid);
             security.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                systemSid,
                 FileSystemRights.FullControl,
                 inheritanceFlags,
                 PropagationFlags.None,
                 AccessControlType.Allow));
             security.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+                administratorsSid,
                 FileSystemRights.FullControl,
                 inheritanceFlags,
                 PropagationFlags.None,
@@ -74,15 +77,18 @@ namespace WireSockUI
 
         private static FileSecurity CreateAdministratorsOnlyFileSecurity()
         {
+            var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
             var security = new FileSecurity();
 
             security.SetAccessRuleProtection(true, false);
+            security.SetOwner(administratorsSid);
             security.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                systemSid,
                 FileSystemRights.FullControl,
                 AccessControlType.Allow));
             security.AddAccessRule(new FileSystemAccessRule(
-                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+                administratorsSid,
                 FileSystemRights.FullControl,
                 AccessControlType.Allow));
 

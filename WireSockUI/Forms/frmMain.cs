@@ -407,7 +407,14 @@ namespace WireSockUI.Forms
 
             try
             {
-                await DisconnectTimedOutTunnelAsync(generation);
+                try
+                {
+                    await DisconnectTimedOutTunnelAsync(generation);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning($"Failed to handle tunnel connection timeout: {ex.Message}");
+                }
             }
             finally
             {

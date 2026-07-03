@@ -290,8 +290,35 @@ namespace WireSockUI
             if (!Directory.Exists(Global.LegacyConfigsFolder))
                 return;
 
-            foreach (var legacyProfilePath in Directory.GetFiles(Global.LegacyConfigsFolder, "*.conf"))
+            if (!TryIsReparsePoint(Global.LegacyConfigsFolder, out var legacyConfigsIsReparsePoint) ||
+                legacyConfigsIsReparsePoint)
             {
+                Trace.TraceWarning(
+                    $"Skipping legacy profile migration because '{Global.LegacyConfigsFolder}' is a reparse point or cannot be inspected.");
+                return;
+            }
+
+            string[] legacyProfilePaths;
+            try
+            {
+                legacyProfilePaths = Directory.GetFiles(Global.LegacyConfigsFolder, "*.conf");
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to enumerate legacy WireSock UI profiles: {ex.Message}");
+                return;
+            }
+
+            foreach (var legacyProfilePath in legacyProfilePaths)
+            {
+                if (!TryIsReparsePoint(legacyProfilePath, out var legacyProfileIsReparsePoint) ||
+                    legacyProfileIsReparsePoint)
+                {
+                    Trace.TraceWarning(
+                        $"Skipping legacy profile '{Path.GetFileName(legacyProfilePath)}' because it is a reparse point or cannot be inspected.");
+                    continue;
+                }
+
                 var profileName = Path.GetFileNameWithoutExtension(legacyProfilePath);
                 if (!Profile.IsValidProfileName(profileName))
                 {
@@ -320,6 +347,22 @@ namespace WireSockUI
                 {
                     Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
                 }
+            }
+        }
+
+        private static bool TryIsReparsePoint(string path, out bool isReparsePoint)
+        {
+            isReparsePoint = false;
+
+            try
+            {
+                isReparsePoint = (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
+                return false;
             }
         }
 
