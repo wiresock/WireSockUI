@@ -474,14 +474,23 @@ namespace WireSockUI
 
             try
             {
-                return Path.GetFullPath(directory.Trim().Trim('"'))
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return NormalizePathRoot(Path.GetFullPath(directory.Trim().Trim('"')));
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
                 return null;
             }
+        }
+
+        private static string NormalizePathRoot(string fullPath)
+        {
+            var root = Path.GetPathRoot(fullPath);
+            if (!string.IsNullOrEmpty(root) &&
+                string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase))
+                return fullPath;
+
+            return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         /// <summary>

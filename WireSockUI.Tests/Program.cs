@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Native;
@@ -30,6 +31,7 @@ namespace WireSockUI.Tests
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
+                { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
 
@@ -239,6 +241,23 @@ namespace WireSockUI.Tests
             AssertTrue(value.Contains("2"), "Expected future two-hour durations to include the absolute hour count.");
             AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected future two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void ProgramPathNormalizationPreservesDriveRoots()
+        {
+            var normalize = typeof(WireSockUI.Program).GetMethod("NormalizePathDirectory",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (normalize == null)
+                throw new InvalidOperationException("NormalizePathDirectory helper was not found.");
+
+            var root = Path.GetPathRoot(Environment.SystemDirectory);
+            var normalizedRoot = (string)normalize.Invoke(null, new object[] { root });
+            var normalizedWithQuotes = (string)normalize.Invoke(null, new object[] { $"\"{root}\"" });
+            var normalizedChild = (string)normalize.Invoke(null, new object[] { Path.Combine(root, "Windows") + "\\" });
+
+            AssertEqual(root, normalizedRoot);
+            AssertEqual(root, normalizedWithQuotes);
+            AssertEqual(Path.Combine(root, "Windows"), normalizedChild);
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()
