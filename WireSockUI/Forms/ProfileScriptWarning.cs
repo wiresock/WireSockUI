@@ -18,11 +18,11 @@ namespace WireSockUI.Forms
                 hooks.Select(hook => $"{hook.Key}: {Truncate(hook.Value)}"));
 
             var message =
-                "This profile contains script hooks that can execute commands when the tunnel starts or stops. Continue only if you trust this profile." +
+                Resources.ProfileScriptWarningMessage +
                 Environment.NewLine + Environment.NewLine +
                 hookSummary +
                 Environment.NewLine + Environment.NewLine +
-                "Do you want to continue?";
+                Resources.ProfileScriptWarningContinue;
 
             return MessageBox.Show(owner, message, Resources.ProfileError, MessageBoxButtons.YesNo,
                        MessageBoxIcon.Warning) == DialogResult.Yes;

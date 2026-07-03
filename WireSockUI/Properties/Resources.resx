@@ -148,7 +148,7 @@
     <value>https://www.wiresock.net/</value>
   </data>
   <data name="ButtonActivating" xml:space="preserve">
-    <value>Activating... Click to Cancel</value>
+    <value>Activating...</value>
   </data>
   <data name="ButtonActive" xml:space="preserve">
     <value>Deactivate</value>
@@ -259,6 +259,9 @@
   <data name="KillSwitchResetError" xml:space="preserve">
     <value>Kill Switch network lock is active, but WireSock UI could not reset it. Disconnect or restart WireSock UI and try again.</value>
   </data>
+  <data name="ParserDuplicateSectionError" xml:space="preserve">
+    <value>Duplicate [{0}] sections are not supported by WireSock UI.</value>
+  </data>
   <data name="LogTimestampFormat" xml:space="preserve">
     <value>yyyy-MM-dd HH:mm:ss.fff</value>
   </data>
@@ -328,8 +331,32 @@
   <data name="ProfileError" xml:space="preserve">
     <value>Profile error</value>
   </data>
+  <data name="ProfileScriptWarningContinue" xml:space="preserve">
+    <value>Do you want to continue?</value>
+  </data>
+  <data name="ProfileScriptWarningMessage" xml:space="preserve">
+    <value>This profile contains script hooks that can execute commands when the tunnel starts or stops. Continue only if you trust this profile.</value>
+  </data>
   <data name="SettingsAdapterMode" xml:space="preserve">
     <value>Virtual Network Adapter mode</value>
+  </data>
+  <data name="SettingsAutoRunCheckAdminError" xml:space="preserve">
+    <value>Error checking elevated autorun status: {0}</value>
+  </data>
+  <data name="SettingsAutoRunCheckError" xml:space="preserve">
+    <value>Error checking auto-run status: {0}</value>
+  </data>
+  <data name="SettingsAutoRunDisableAdminError" xml:space="preserve">
+    <value>Error disabling autorun: {0}</value>
+  </data>
+  <data name="SettingsAutoRunDisableUserError" xml:space="preserve">
+    <value>Error disabling auto-run: {0}</value>
+  </data>
+  <data name="SettingsAutoRunEnableAdminError" xml:space="preserve">
+    <value>Error enabling autorun: {0}</value>
+  </data>
+  <data name="SettingsAutoRunEnableUserError" xml:space="preserve">
+    <value>Error enabling auto-run: {0}</value>
   </data>
   <data name="SettingsAutoConnect" xml:space="preserve">
     <value>Automatically connect on start</value>
@@ -351,6 +378,9 @@
   </data>
   <data name="SettingsProfiles" xml:space="preserve">
     <value>Open profiles folder</value>
+  </data>
+  <data name="SettingsProfilesFolderError" xml:space="preserve">
+    <value>Error opening profiles folder: {0}</value>
   </data>
   <data name="SettingsSave" xml:space="preserve">
     <value>Save</value>
@@ -468,6 +498,15 @@
   </data>
   <data name="TunnelErrorManager" xml:space="preserve">
     <value>Failed to connect to tunnel manager. Please check log.</value>
+  </data>
+  <data name="TunnelHandleReleaseWarning" xml:space="preserve">
+    <value>WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.</value>
+  </data>
+  <data name="TunnelKillSwitchQueryError" xml:space="preserve">
+    <value>Unable to query the current Kill Switch network lock state.</value>
+  </data>
+  <data name="TunnelKillSwitchStateError" xml:space="preserve">
+    <value>Unable to confirm the current Kill Switch state.</value>
   </data>
   <data name="TunnelErrorStart" xml:space="preserve">
     <value>Tunnel has failed to start. Please check log.</value>

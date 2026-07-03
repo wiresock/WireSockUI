@@ -272,9 +272,8 @@ namespace WireSockUI.Forms
             }
 
             if (!disconnected && showWarning)
-                MessageBox.Show(
-                    "WireSock stopped the tunnel, but could not release the native tunnel handle. Retry disconnect or restart WireSock UI before connecting again.",
-                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                MessageBox.Show(Resources.TunnelHandleReleaseWarning, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
 
             return disconnected;
         }
@@ -401,7 +400,7 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
                     return;
 
                 if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
@@ -479,7 +478,7 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
                     return;
 
                 if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
@@ -574,12 +573,12 @@ namespace WireSockUI.Forms
                     if (btnActivate != null)
                     {
                         btnActivate.Text = Resources.ButtonActivating;
-                        btnActivate.Enabled = true;
+                        btnActivate.Enabled = false;
                     }
 
                     imgStatus?.Focus();
 
-                    cmiDeactivateTunnel.Enabled = true;
+                    cmiDeactivateTunnel.Enabled = false;
 
                     if (TryGetProfileItem(activeProfileName, out var connectingProfile))
                         connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
@@ -826,14 +825,21 @@ namespace WireSockUI.Forms
         {
             var profile = lstProfiles.SelectedItems[0].Text;
 
-            using (var form = new FrmEdit(profile))
+            try
             {
-                if (form.ShowDialog() != DialogResult.OK) return;
+                using (var form = new FrmEdit(profile))
+                {
+                    if (form.ShowDialog() != DialogResult.OK) return;
 
-                LoadProfiles(form.ReturnValue);
+                    LoadProfiles(form.ReturnValue);
 
-                if (_wiresock.Connected && _wiresock.ProfileName == profile)
-                    OnProfileClick(lstProfiles, EventArgs.Empty);
+                    if (_wiresock.Connected && _wiresock.ProfileName == profile)
+                        OnProfileClick(lstProfiles, EventArgs.Empty);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -901,7 +907,7 @@ namespace WireSockUI.Forms
                     if (!_wiresock.TryGetKillSwitchEnabled(out var killSwitchEnabled, out var diagnostic))
                     {
                         MessageBox.Show(
-                            $"Unable to confirm the current Kill Switch state.{Environment.NewLine}{Environment.NewLine}{diagnostic}",
+                            $"{Resources.TunnelKillSwitchStateError}{Environment.NewLine}{Environment.NewLine}{diagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
@@ -917,7 +923,7 @@ namespace WireSockUI.Forms
                     if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
                     {
                         MessageBox.Show(
-                            $"Unable to query the current Kill Switch network lock state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
+                            $"{Resources.TunnelKillSwitchQueryError}{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                         return;
                     }
