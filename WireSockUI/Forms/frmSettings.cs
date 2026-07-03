@@ -10,13 +10,16 @@ namespace WireSockUI.Forms
 {
     public partial class FrmSettings : Form
     {
+        private readonly bool _initialAutoRun;
+
         public FrmSettings()
         {
             InitializeComponent();
 
             Icon = Resources.ico;
 
-            chkAutorun.Checked = IsAutoRunEnabled();
+            _initialAutoRun = IsAutoRunEnabled();
+            chkAutorun.Checked = _initialAutoRun;
             chkAutoMinimize.Checked = Settings.Default.AutoMinimize;
             chkAutoConnect.Checked = Settings.Default.AutoConnect;
             chkAutoUpdate.Checked = Settings.Default.AutoUpdate;
@@ -176,7 +179,7 @@ namespace WireSockUI.Forms
 
         private void OnSaveClick(object sender, EventArgs e)
         {
-            if (Settings.Default.AutoRun != chkAutorun.Checked)
+            if (_initialAutoRun != chkAutorun.Checked)
             {
                 var autoRunUpdated = chkAutorun.Checked ? EnableAutoRun() : DisableAutoRun();
                 if (!autoRunUpdated)
@@ -184,10 +187,9 @@ namespace WireSockUI.Forms
                     DialogResult = DialogResult.None;
                     return;
                 }
-
-                Settings.Default.AutoRun = chkAutorun.Checked;
             }
 
+            Settings.Default.AutoRun = chkAutorun.Checked;
             Settings.Default.AutoConnect = chkAutoConnect.Checked;
             Settings.Default.AutoMinimize = chkAutoMinimize.Checked;
             Settings.Default.AutoUpdate = chkAutoUpdate.Checked;
