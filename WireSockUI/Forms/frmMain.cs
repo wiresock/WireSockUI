@@ -188,14 +188,21 @@ namespace WireSockUI.Forms
             while (panel.Controls.Count > 0)
             {
                 var control = panel.Controls[0];
-                if (control is PictureBox pictureBox &&
-                    (ReferenceEquals(pictureBox.Image, _inactiveStatusImage) ||
-                     ReferenceEquals(pictureBox.Image, _connectedStatusImage)))
-                    pictureBox.Image = null;
-
+                DetachSharedStatusImages(control);
                 panel.Controls.RemoveAt(0);
                 control.Dispose();
             }
+        }
+
+        private void DetachSharedStatusImages(Control control)
+        {
+            if (control is PictureBox pictureBox &&
+                (ReferenceEquals(pictureBox.Image, _inactiveStatusImage) ||
+                 ReferenceEquals(pictureBox.Image, _connectedStatusImage)))
+                pictureBox.Image = null;
+
+            foreach (Control child in control.Controls)
+                DetachSharedStatusImages(child);
         }
 
         private bool TryGetProfileItem(string profileName, out ListViewItem profileItem)
