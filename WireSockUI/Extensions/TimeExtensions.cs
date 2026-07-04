@@ -25,33 +25,38 @@ namespace WireSockUI.Extensions
             var delta = Math.Abs(value.TotalSeconds);
 
             if (delta < 1 * minute)
-                return value.Seconds == 1 ? Resources.TimeLapseSecond : value.Seconds + Resources.TimeLapseSeconds;
+                return Math.Abs(value.Seconds) == 1
+                    ? Resources.TimeLapseSecond
+                    : Math.Abs(value.Seconds) + Resources.TimeLapseSeconds;
 
             if (delta < 2 * minute)
                 return Resources.TimeLapseMinute;
 
             if (delta < 45 * minute)
-                return value.Minutes + Resources.TimeLapseMinutes;
+                return Math.Abs(value.Minutes) + Resources.TimeLapseMinutes;
 
             if (delta < 90 * minute)
                 return Resources.TimeLapseHour;
 
             if (delta < 24 * hour)
-                return value.Hours + Resources.TimeLapseHour;
+            {
+                var hours = Convert.ToInt32(Math.Floor(delta / hour));
+                return hours <= 1 ? Resources.TimeLapseHour : hours + Resources.TimeLapseHours;
+            }
 
             if (delta < 48 * hour)
                 return "yesterday";
 
             if (delta < 30 * day)
-                return value.Days + Resources.TimeLapseDays;
+                return Math.Abs(value.Days) + Resources.TimeLapseDays;
 
             if (delta < 12 * month)
             {
-                var months = Convert.ToInt32(Math.Floor((double)value.Days / 30));
+                var months = Math.Abs(value.Days) / 30;
                 return months <= 1 ? Resources.TimeLapseMonth : months + Resources.TimeLapseMonths;
             }
 
-            var years = Convert.ToInt32(Math.Floor((double)value.Days / 365));
+            var years = Math.Abs(value.Days) / 365;
             return years <= 1 ? Resources.TimeLapseYear : years + Resources.TimeLapseYears;
         }
     }

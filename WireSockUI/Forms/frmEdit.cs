@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -25,6 +26,7 @@ namespace WireSockUI.Forms
         private Font _editorBoldFont;
         private Font _editorItalicFont;
         private Font _editorRegularFont;
+        private readonly string _originalProfileName;
         private string _targetConfigurationKeyName;
 
         public FrmEdit() : this(null)
@@ -36,6 +38,7 @@ namespace WireSockUI.Forms
             Initialize();
 
             ShowInTaskbar = false;
+            _originalProfileName = config;
 
             if (string.IsNullOrEmpty(config))
             {
@@ -542,10 +545,28 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            if (!Profile.IsValidProfileName(txtProfileName.Text))
+            var requestedProfileName = txtProfileName.Text;
+            if (!Profile.IsValidProfileName(requestedProfileName))
             {
                 MessageBox.Show(Resources.EditProfileNameError, Resources.EditProfileError, MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                TryDeleteTemporaryProfile(tmpProfile);
+
+                DialogResult = DialogResult.None;
+                return;
+            }
+
+            var profilePath = Profile.GetProfilePath(requestedProfileName);
+            var isExistingProfile = !string.IsNullOrEmpty(_originalProfileName);
+            var isRename = isExistingProfile &&
+                           !string.Equals(_originalProfileName, requestedProfileName,
+                               StringComparison.OrdinalIgnoreCase);
+
+            if (File.Exists(profilePath) && (!isExistingProfile || isRename))
+            {
+                MessageBox.Show(string.Format(Resources.AddProfileExistsMsg, requestedProfileName),
+                    Resources.EditProfileError,
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
                 TryDeleteTemporaryProfile(tmpProfile);
 
                 DialogResult = DialogResult.None;
@@ -560,14 +581,15 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            var profilePath = Profile.GetProfilePath(txtProfileName.Text);
-
             try
             {
                 if (File.Exists(profilePath))
                     File.Replace(tmpProfile, profilePath, null);
                 else
                     File.Move(tmpProfile, profilePath);
+
+                if (isRename)
+                    TryDeleteOriginalProfile(_originalProfileName, profilePath);
             }
             catch (Exception ex)
             {
@@ -578,9 +600,25 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            ReturnValue = txtProfileName.Text;
+            ReturnValue = requestedProfileName;
 
             Close();
+        }
+
+        private static void TryDeleteOriginalProfile(string originalProfileName, string newProfilePath)
+        {
+            try
+            {
+                var originalProfilePath = Profile.GetProfilePath(originalProfileName);
+                if (!string.Equals(Path.GetFullPath(originalProfilePath), Path.GetFullPath(newProfilePath),
+                        StringComparison.OrdinalIgnoreCase) &&
+                    File.Exists(originalProfilePath))
+                    File.Delete(originalProfilePath);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to delete renamed profile '{originalProfileName}': {ex.Message}");
+            }
         }
 
         private static void TryDeleteTemporaryProfile(string tmpProfile)

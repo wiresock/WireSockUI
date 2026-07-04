@@ -5,8 +5,11 @@ using System.Diagnostics;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
 using WireSockUI.Properties;
@@ -26,8 +29,8 @@ namespace WireSockUI
 
             try
             {
-                Directory.CreateDirectory(Global.MainFolder);
-                Directory.CreateDirectory(Global.ConfigsFolder);
+                Global.EnsureApplicationFolders();
+                MigrateLegacyProfiles();
             }
             catch (Exception ex)
             {
@@ -145,8 +148,14 @@ namespace WireSockUI
             var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
             if (ContainsWireSockLibrary(localDirectory))
             {
-                libraryDirectory = localDirectory;
-                return true;
+                if (!IsPotentiallyUserWritableDirectory(localDirectory))
+                {
+                    libraryDirectory = localDirectory;
+                    return true;
+                }
+
+                Trace.TraceWarning(
+                    $"Skipping app-local wgbooster.dll in user-writable directory '{localDirectory}'.");
             }
 
             foreach (var installLocation in GetInstallLocations())
@@ -276,6 +285,213 @@ namespace WireSockUI
             return isAppLocalDirectory;
         }
 
+        private static void MigrateLegacyProfiles()
+        {
+            if (!Directory.Exists(Global.LegacyConfigsFolder))
+                return;
+
+            if (!TryIsReparsePoint(Global.LegacyConfigsFolder, out var legacyConfigsIsReparsePoint) ||
+                legacyConfigsIsReparsePoint)
+            {
+                Trace.TraceWarning(
+                    $"Skipping legacy profile migration because '{Global.LegacyConfigsFolder}' is a reparse point or cannot be inspected.");
+                return;
+            }
+
+            string[] legacyProfilePaths;
+            try
+            {
+                legacyProfilePaths = Directory.GetFiles(Global.LegacyConfigsFolder, "*.conf");
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to enumerate legacy WireSock UI profiles: {ex.Message}");
+                return;
+            }
+
+            foreach (var legacyProfilePath in legacyProfilePaths)
+            {
+                if (!TryIsReparsePoint(legacyProfilePath, out var legacyProfileIsReparsePoint) ||
+                    legacyProfileIsReparsePoint)
+                {
+                    Trace.TraceWarning(
+                        $"Skipping legacy profile '{Path.GetFileName(legacyProfilePath)}' because it is a reparse point or cannot be inspected.");
+                    continue;
+                }
+
+                var profileName = Path.GetFileNameWithoutExtension(legacyProfilePath);
+                if (!Profile.IsValidProfileName(profileName))
+                {
+                    Trace.TraceWarning($"Skipping legacy profile with unsafe name '{Path.GetFileName(legacyProfilePath)}'.");
+                    continue;
+                }
+
+                var destinationPath = Profile.GetProfilePath(profileName);
+                if (File.Exists(destinationPath))
+                {
+                    if (FilesHaveSameContent(legacyProfilePath, destinationPath))
+                        TryDeleteLegacyProfile(legacyProfilePath, profileName);
+                    else
+                        Trace.TraceWarning(
+                            $"Skipping legacy profile '{profileName}' because a secured profile with different content already exists.");
+
+                    continue;
+                }
+
+                try
+                {
+                    File.Copy(legacyProfilePath, destinationPath, false);
+                    TryDeleteLegacyProfile(legacyProfilePath, profileName);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
+                }
+            }
+        }
+
+        private static bool TryIsReparsePoint(string path, out bool isReparsePoint)
+        {
+            isReparsePoint = false;
+
+            try
+            {
+                isReparsePoint = (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
+                return false;
+            }
+        }
+
+        private static bool FilesHaveSameContent(string firstPath, string secondPath)
+        {
+            try
+            {
+                var firstInfo = new FileInfo(firstPath);
+                var secondInfo = new FileInfo(secondPath);
+                if (firstInfo.Length != secondInfo.Length)
+                    return false;
+
+                using (var first = File.OpenRead(firstPath))
+                using (var second = File.OpenRead(secondPath))
+                {
+                    var firstBuffer = new byte[81920];
+                    var secondBuffer = new byte[81920];
+
+                    while (true)
+                    {
+                        var firstBytesRead = ReadBlock(first, firstBuffer);
+                        var secondBytesRead = ReadBlock(second, secondBuffer);
+                        if (firstBytesRead != secondBytesRead)
+                            return false;
+
+                        if (firstBytesRead == 0)
+                            return true;
+
+                        for (var i = 0; i < firstBytesRead; i++)
+                        {
+                            if (firstBuffer[i] != secondBuffer[i])
+                                return false;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to compare migrated profile files: {ex.Message}");
+                return false;
+            }
+        }
+
+        private static int ReadBlock(Stream stream, byte[] buffer)
+        {
+            var totalRead = 0;
+            while (totalRead < buffer.Length)
+            {
+                var bytesRead = stream.Read(buffer, totalRead, buffer.Length - totalRead);
+                if (bytesRead == 0)
+                    break;
+
+                totalRead += bytesRead;
+            }
+
+            return totalRead;
+        }
+
+        private static void TryDeleteLegacyProfile(string legacyProfilePath, string profileName)
+        {
+            try
+            {
+                File.Delete(legacyProfilePath);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Migrated legacy profile '{profileName}', but could not delete the old copy: {ex.Message}");
+            }
+        }
+
+        private static bool IsPotentiallyUserWritableDirectory(string directory)
+        {
+            var normalizedDirectory = NormalizePathDirectory(directory);
+            if (normalizedDirectory == null)
+                return true;
+
+            try
+            {
+                var security = Directory.GetAccessControl(normalizedDirectory);
+                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                const FileSystemRights writeRights =
+                    FileSystemRights.FullControl |
+                    FileSystemRights.Modify |
+                    FileSystemRights.Write |
+                    FileSystemRights.WriteData |
+                    FileSystemRights.CreateFiles |
+                    FileSystemRights.AppendData |
+                    FileSystemRights.CreateDirectories |
+                    FileSystemRights.WriteAttributes |
+                    FileSystemRights.WriteExtendedAttributes;
+
+                foreach (FileSystemAccessRule rule in rules)
+                {
+                    if (rule.AccessControlType != AccessControlType.Allow ||
+                        !(rule.IdentityReference is SecurityIdentifier sid) ||
+                        (rule.FileSystemRights & writeRights) == 0)
+                        continue;
+
+                    if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
+                    {
+                        if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
+                            continue;
+
+                        return true;
+                    }
+
+                    if (!IsAdministrativeOrServiceSid(sid))
+                        return true;
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
+                return true;
+            }
+        }
+
+        private static bool IsAdministrativeOrServiceSid(SecurityIdentifier sid)
+        {
+            return sid.IsWellKnown(WellKnownSidType.LocalSystemSid) ||
+                   sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) ||
+                   sid.IsWellKnown(WellKnownSidType.LocalServiceSid) ||
+                   sid.IsWellKnown(WellKnownSidType.NetworkServiceSid) ||
+                   sid.Value.StartsWith("S-1-5-80-", StringComparison.OrdinalIgnoreCase) ||
+                   sid.Value.StartsWith("S-1-5-83-", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string NormalizePathDirectory(string directory)
         {
             if (string.IsNullOrWhiteSpace(directory))
@@ -283,14 +499,23 @@ namespace WireSockUI
 
             try
             {
-                return Path.GetFullPath(directory.Trim().Trim('"'))
-                    .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                return NormalizePathRoot(Path.GetFullPath(directory.Trim().Trim('"')));
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
                 return null;
             }
+        }
+
+        private static string NormalizePathRoot(string fullPath)
+        {
+            var root = Path.GetPathRoot(fullPath);
+            if (!string.IsNullOrEmpty(root) &&
+                string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase))
+                return fullPath;
+
+            return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
         /// <summary>

@@ -30,6 +30,7 @@ namespace WireSockUI.Forms
 
         private readonly BackgroundWorker _tunnelConnectionWorker;
         private readonly BackgroundWorker _tunnelStateWorker;
+        private const int TunnelConnectionTimeoutMilliseconds = 30000;
 
         /**
          * @brief The manager that handles the Wireguard connections.
@@ -41,12 +42,14 @@ namespace WireSockUI.Forms
         private bool _shutdownComplete;
         private int _tunnelOperationInProgress;
         private int _tunnelGeneration;
+        private int _tunnelConnectionTimeoutGeneration;
         private Icon _ownedTrayIcon;
 
         private sealed class TunnelConnectionProgress
         {
             public int Generation { get; set; }
             public bool Connected { get; set; }
+            public bool TimedOut { get; set; }
         }
 
         private sealed class TunnelStateProgress
@@ -333,6 +336,7 @@ namespace WireSockUI.Forms
             {
                 var generation = (int)e.Argument;
                 var connected = false;
+                var timeout = Stopwatch.StartNew();
 
                 do
                 {
@@ -349,6 +353,17 @@ namespace WireSockUI.Forms
                     }
 
                     connected = _wiresock.Connected;
+                    if (!connected && timeout.ElapsedMilliseconds >= TunnelConnectionTimeoutMilliseconds)
+                    {
+                        worker.ReportProgress(0, new TunnelConnectionProgress
+                        {
+                            Generation = generation,
+                            TimedOut = true
+                        });
+                        e.Cancel = true;
+                        return;
+                    }
+
                     worker.ReportProgress(0, new TunnelConnectionProgress
                     {
                         Generation = generation,
@@ -362,6 +377,12 @@ namespace WireSockUI.Forms
                 if (_shutdownComplete || !(e.UserState is TunnelConnectionProgress progress) ||
                     progress.Generation != CurrentTunnelGeneration())
                     return;
+
+                if (progress.TimedOut)
+                {
+                    _ = HandleTunnelConnectionTimeoutAsync(progress.Generation);
+                    return;
+                }
 
                 if (_currentState == ConnectionState.Connecting && progress.Connected)
                     UpdateState(ConnectionState.Connected);
@@ -377,6 +398,56 @@ namespace WireSockUI.Forms
             };
 
             return worker;
+        }
+
+        private async Task HandleTunnelConnectionTimeoutAsync(int generation)
+        {
+            if (!RequestTunnelConnectionTimeout(generation) || !TryBeginTunnelOperation())
+                return;
+
+            try
+            {
+                try
+                {
+                    await DisconnectTimedOutTunnelAsync(generation);
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning($"Failed to handle tunnel connection timeout: {ex.Message}");
+                }
+            }
+            finally
+            {
+                EndTunnelOperation();
+            }
+        }
+
+        private bool RequestTunnelConnectionTimeout(int generation)
+        {
+            if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
+                _currentState != ConnectionState.Connecting)
+                return false;
+
+            Volatile.Write(ref _tunnelConnectionTimeoutGeneration, generation);
+            return true;
+        }
+
+        private bool IsTunnelConnectionTimedOut(int generation)
+        {
+            return Volatile.Read(ref _tunnelConnectionTimeoutGeneration) == generation;
+        }
+
+        private async Task DisconnectTimedOutTunnelAsync(int generation)
+        {
+            if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
+                _currentState != ConnectionState.Connecting || !IsTunnelConnectionTimedOut(generation))
+                return;
+
+            await DisconnectCurrentTunnelAsync(false);
+
+            if (!_shutdownComplete)
+                MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning);
         }
 
         /// <summary>
@@ -590,8 +661,15 @@ namespace WireSockUI.Forms
 
                     if (!string.IsNullOrWhiteSpace(activeProfileName))
                     {
-                        Settings.Default.LastProfile = activeProfileName;
-                        Settings.Default.Save();
+                        try
+                        {
+                            Settings.Default.LastProfile = activeProfileName;
+                            Settings.Default.Save();
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.TraceWarning($"Failed to save last active profile setting: {ex.Message}");
+                        }
                     }
 
                     gbxState.Visible = true;
@@ -926,51 +1004,52 @@ namespace WireSockUI.Forms
                 // Return if no profile is selected in the list.
                 if (lstProfiles.SelectedItems.Count == 0) return;
 
-                // Check if the event arguments are not empty.
-                if (e != EventArgs.Empty)
+                // Get the selected profile.
+                var profile = lstProfiles.SelectedItems[0].Text;
+                var disconnectOnly = false;
+
+                if (e != EventArgs.Empty &&
+                    (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting))
                 {
-                    // Check if the current state is connected or connecting.
-                    if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
-                    {
-                        var reconnect = false;
-
-                        // Check if the sender is a Button, and if its text is equal to ButtonInactive.
-                        if (sender is Button senderButton)
-                            if (senderButton.Text == Resources.ButtonInactive)
-                                reconnect = true;
-
-                        // Update the state to disconnected.
-                        if (!await DisconnectCurrentTunnelAsync())
-                            return;
-
-                        // Proceed with reconnecting if the reconnect flag is set.
-                        if (!reconnect) return;
-                    }
+                    var reconnect = sender is Button senderButton && senderButton.Text == Resources.ButtonInactive;
+                    disconnectOnly = !reconnect;
                 }
-                else
+
+                Profile profileSettings = null;
+                var useAdapter = Settings.Default.UseAdapter;
+
+                if (!disconnectOnly)
                 {
-                    // Update the state to disconnected.
+                    try
+                    {
+                        profileSettings = Profile.LoadProfile(profile);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+
+                    if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profileSettings))
+                        return;
+
+                    if (bool.TryParse(profileSettings.VirtualAdapterMode, out var profileUseAdapter))
+                        useAdapter = profileUseAdapter;
+                }
+
+                if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
+                {
+                    if (!await DisconnectCurrentTunnelAsync(e != EventArgs.Empty))
+                        return;
+
+                    if (disconnectOnly)
+                        return;
+                }
+                else if (e == EventArgs.Empty && _wiresock.HasTunnelHandle)
+                {
                     if (!await DisconnectCurrentTunnelAsync(false))
                         return;
                 }
-
-                // Get the selected profile.
-                var profile = lstProfiles.SelectedItems[0].Text;
-                Profile profileSettings;
-
-                try
-                {
-                    profileSettings = Profile.LoadProfile(profile);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(ex.Message, Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
-                var useAdapter = Settings.Default.UseAdapter;
-                if (bool.TryParse(profileSettings.VirtualAdapterMode, out var profileUseAdapter))
-                    useAdapter = profileUseAdapter;
 
                 try
                 {
@@ -997,6 +1076,20 @@ namespace WireSockUI.Forms
                     UpdateState(ConnectionState.Connecting, true, profile);
                     var connected = await Task.Run(() => _wiresock.Connect(profile));
                     var connectionSequence = connected ? _wiresock.ConnectionSequence : 0;
+
+                    if (!_shutdownComplete && connectGeneration == CurrentTunnelGeneration() &&
+                        IsTunnelConnectionTimedOut(connectGeneration))
+                    {
+                        if (connected)
+                            await DisconnectNativeTunnelAsync(connectionSequence, false);
+                        else if (_wiresock.HasTunnelHandle)
+                            await DisconnectNativeTunnelAsync(null, false);
+
+                        UpdateState(ConnectionState.Disconnected, false, profile);
+                        MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle,
+                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
 
                     if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
                     {

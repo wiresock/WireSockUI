@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Native;
@@ -27,6 +28,10 @@ namespace WireSockUI.Tests
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
+                { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
+                { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
+                { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
+                { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
             };
 
@@ -209,6 +214,50 @@ namespace WireSockUI.Tests
                 "Expected large byte counters to format without overflowing the suffix list.");
             AssertFalse(string.IsNullOrWhiteSpace(long.MaxValue.AsTimeAgo()),
                 "Expected large handshake ages to format without narrowing to Int32.");
+        }
+
+        private static void TimeFormattingUsesPluralHours()
+        {
+            var value = TimeSpan.FromHours(2).AsTimeAgo();
+
+            AssertTrue(value.Contains("2"), "Expected two-hour durations to include the hour count.");
+            AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void TimeFormattingUsesSingularHourForPartialSecondHour()
+        {
+            var value = TimeSpan.FromMinutes(90).AsTimeAgo();
+
+            AssertTrue(value.IndexOf("an hour", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected 90-minute durations to use the singular hour label, got '{value}'.");
+        }
+
+        private static void TimeFormattingHandlesFutureValues()
+        {
+            var value = TimeSpan.FromHours(-2).AsTimeAgo();
+
+            AssertTrue(!value.Contains("-"), $"Expected future durations to format without a negative sign, got '{value}'.");
+            AssertTrue(value.Contains("2"), "Expected future two-hour durations to include the absolute hour count.");
+            AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected future two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void ProgramPathNormalizationPreservesDriveRoots()
+        {
+            var normalize = typeof(WireSockUI.Program).GetMethod("NormalizePathDirectory",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (normalize == null)
+                throw new InvalidOperationException("NormalizePathDirectory helper was not found.");
+
+            var root = Path.GetPathRoot(Environment.SystemDirectory);
+            var normalizedRoot = (string)normalize.Invoke(null, new object[] { root });
+            var normalizedWithQuotes = (string)normalize.Invoke(null, new object[] { $"\"{root}\"" });
+            var normalizedChild = (string)normalize.Invoke(null, new object[] { Path.Combine(root, "Windows") + "\\" });
+
+            AssertEqual(root, normalizedRoot);
+            AssertEqual(root, normalizedWithQuotes);
+            AssertEqual(Path.Combine(root, "Windows"), normalizedChild);
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()
