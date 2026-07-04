@@ -182,6 +182,26 @@ namespace WireSockUI
 
         private static void DeleteConfigurationFileReparsePoint(string file)
         {
+            FileAttributes attributes;
+
+            try
+            {
+                attributes = File.GetAttributes(file);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock UI configuration file reparse point '{file}' because its attributes could not be inspected: {ex.Message}");
+                return;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) == 0)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock UI configuration file '{file}' because it is no longer a reparse point.");
+                return;
+            }
+
             try
             {
                 File.Delete(file);

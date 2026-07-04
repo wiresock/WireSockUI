@@ -36,6 +36,7 @@ namespace WireSockUI.Tests
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
                 { "Profile rejects directory profile paths", ProfileRejectsDirectoryProfilePaths },
                 { "Profile rejects reparse point profile files", ProfileRejectsReparsePointProfileFiles },
+                { "Profile reports missing profile paths clearly", ProfileReportsMissingProfilePathsClearly },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
@@ -189,6 +190,19 @@ namespace WireSockUI.Tests
                     "Expected directory profile paths to be excluded from enumeration.");
                 AssertThrows<IOException>(() => Profile.EnsureRegularProfileFile(profileDirectory), "directory");
                 AssertThrows<IOException>(() => new Profile(profileDirectory), "directory");
+            });
+        }
+
+        private static void ProfileReportsMissingProfilePathsClearly()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var missingProfile = Path.Combine(Global.ConfigsFolder, "missing.conf");
+
+                AssertFalse(Profile.IsRegularProfileFile(missingProfile, out var diagnostic),
+                    "Expected missing profile paths to be rejected.");
+                AssertTrue(diagnostic.IndexOf("does not exist", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected a clear missing-file diagnostic, got '{diagnostic}'.");
             });
         }
 

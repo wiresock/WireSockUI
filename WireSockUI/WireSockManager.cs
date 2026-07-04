@@ -44,6 +44,7 @@ namespace WireSockUI
 
         private const int MaxQueuedLogMessages = 1000;
         private readonly BlockingCollection<LogMessage> _logQueue;
+        private readonly object _logQueueSyncRoot = new object();
         private readonly BackgroundWorker _logWorker;
         private readonly object _syncRoot = new object();
 
@@ -340,17 +341,25 @@ namespace WireSockUI
         /// <param name="message">The message to append to the log queue.</param>
         private void PrintLog(string message)
         {
-            if (_disposed || _logQueue.IsAddingCompleted)
+            if (_disposed)
                 return;
 
             try
             {
                 var logMessage = new LogMessage { Message = message };
-                if (_logQueue.TryAdd(logMessage))
-                    return;
 
-                _logQueue.TryTake(out _);
-                _logQueue.TryAdd(logMessage);
+                lock (_logQueueSyncRoot)
+                {
+                    // CompleteAdding shares this lock, so a failed TryAdd below means the bounded queue is full.
+                    if (_disposed || _logQueue.IsAddingCompleted)
+                        return;
+
+                    if (_logQueue.TryAdd(logMessage))
+                        return;
+
+                    _logQueue.TryTake(out _);
+                    _logQueue.TryAdd(logMessage);
+                }
             }
             catch (InvalidOperationException)
             {
@@ -414,8 +423,11 @@ namespace WireSockUI
         {
             try
             {
-                if (!_logQueue.IsAddingCompleted)
-                    _logQueue.CompleteAdding();
+                lock (_logQueueSyncRoot)
+                {
+                    if (!_logQueue.IsAddingCompleted)
+                        _logQueue.CompleteAdding();
+                }
             }
             catch (ObjectDisposedException)
             {

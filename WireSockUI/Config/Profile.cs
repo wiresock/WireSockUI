@@ -646,6 +646,16 @@ namespace WireSockUI.Config
 
                 return true;
             }
+            catch (FileNotFoundException)
+            {
+                diagnostic = $"Profile file '{Path.GetFileName(profilePath)}' does not exist.";
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                diagnostic = $"Profile directory for '{Path.GetFileName(profilePath)}' does not exist.";
+                return false;
+            }
             catch (Exception ex)
             {
                 diagnostic =
