@@ -479,7 +479,10 @@ namespace WireSockUI.Forms
                     return;
 
                 if (e.Error != null)
+                {
                     Trace.TraceWarning($"Tunnel connection monitor stopped unexpectedly: {e.Error.Message}");
+                    return;
+                }
 
                 if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
                     worker.RunWorkerAsync(CurrentTunnelGeneration());
@@ -610,7 +613,10 @@ namespace WireSockUI.Forms
                     return;
 
                 if (e.Error != null)
+                {
                     Trace.TraceWarning($"Tunnel state monitor stopped unexpectedly: {e.Error.Message}");
+                    return;
+                }
 
                 if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
                     worker.RunWorkerAsync(CurrentTunnelGeneration());
