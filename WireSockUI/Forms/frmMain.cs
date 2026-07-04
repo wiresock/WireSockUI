@@ -930,18 +930,23 @@ namespace WireSockUI.Forms
 
                 var profileName = Path.GetFileNameWithoutExtension(filePath);
 
-                if (Profile.GetProfiles().Contains(profileName, StringComparer.OrdinalIgnoreCase))
-                {
-                    MessageBox.Show(string.Format(Resources.AddProfileExistsMsg, profileName),
-                        Resources.AddProfileExistsTitle,
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
                 if (!Profile.IsValidProfileName(profileName))
                 {
                     MessageBox.Show(Resources.EditProfileNameError, Resources.ProfileError, MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
+                    return;
+                }
+
+                var destinationPath = Profile.GetProfilePath(profileName);
+                if (Profile.ProfilePathExists(destinationPath))
+                {
+                    var message = Profile.IsRegularProfileFile(destinationPath, out var diagnostic)
+                        ? string.Format(Resources.AddProfileExistsMsg, profileName)
+                        : diagnostic;
+
+                    MessageBox.Show(message,
+                        Resources.AddProfileExistsTitle,
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
@@ -950,16 +955,6 @@ namespace WireSockUI.Forms
                     var profile = new Profile(filePath);
                     if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profile))
                         return;
-
-                    var destinationPath = Profile.GetProfilePath(profileName);
-                    if (Profile.ProfilePathExists(destinationPath))
-                    {
-                        Profile.EnsureRegularProfileFile(destinationPath);
-                        MessageBox.Show(string.Format(Resources.AddProfileExistsMsg, profileName),
-                            Resources.AddProfileExistsTitle,
-                            MessageBoxButtons.OK, MessageBoxIcon.Error);
-                        return;
-                    }
 
                     File.Copy(filePath, destinationPath);
                     LoadProfiles(profileName);
