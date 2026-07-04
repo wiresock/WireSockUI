@@ -566,7 +566,11 @@ namespace WireSockUI.Forms
 
             if (Profile.ProfilePathExists(profilePath) && (!isExistingProfile || isRename))
             {
-                MessageBox.Show(string.Format(Resources.AddProfileExistsMsg, requestedProfileName),
+                var message = Profile.IsRegularProfileFile(profilePath, out var diagnostic)
+                    ? string.Format(Resources.AddProfileExistsMsg, requestedProfileName)
+                    : diagnostic;
+
+                MessageBox.Show(message,
                     Resources.EditProfileError,
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
                 TryDeleteTemporaryProfile(tmpProfile);

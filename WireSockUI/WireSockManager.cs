@@ -501,7 +501,8 @@ namespace WireSockUI
 
                 try
                 {
-                    Profile.EnsureRegularProfileFile(profilePath);
+                    if (!Profile.IsRegularProfileFile(profilePath, out var profileDiagnostic))
+                        return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
 
                     if (_handle != IntPtr.Zero && !DropCurrentHandle(true))
                         return ShowTunnelError(

@@ -342,14 +342,18 @@ namespace WireSockUI.Forms
                     }
                 });
 
-                cleanupTask.ContinueWith(task =>
-                    Trace.TraceWarning(
-                        $"WireSock manager shutdown completed with an error after exit continued: {task.Exception?.GetBaseException().Message}"),
-                    TaskContinuationOptions.OnlyOnFaulted);
-
                 if (!cleanupTask.Wait(ShutdownDisconnectTimeoutMilliseconds))
+                {
                     Trace.TraceWarning(
                         $"WireSock manager shutdown exceeded {ShutdownDisconnectTimeoutMilliseconds} ms; continuing application exit.");
+
+                    cleanupTask.ContinueWith(task =>
+                            Trace.TraceWarning(
+                                $"WireSock manager shutdown completed with an error after exit continued: {task.Exception?.GetBaseException().Message}"),
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                }
             }
             catch (AggregateException ex)
             {
