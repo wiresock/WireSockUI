@@ -50,7 +50,9 @@ namespace WireSockUI.Forms
                 Text = string.Format(Resources.EditProfileTitle, config);
 
                 txtProfileName.Text = config;
-                txtEditor.Text = File.ReadAllText(Profile.GetProfilePath(config));
+                var profilePath = Profile.GetProfilePath(config);
+                Profile.EnsureRegularProfileFile(profilePath);
+                txtEditor.Text = File.ReadAllText(profilePath);
             }
 
             var textChanged = ApplySyntaxHighlighting();
@@ -562,7 +564,7 @@ namespace WireSockUI.Forms
                            !string.Equals(_originalProfileName, requestedProfileName,
                                StringComparison.OrdinalIgnoreCase);
 
-            if (File.Exists(profilePath) && (!isExistingProfile || isRename))
+            if (Profile.ProfilePathExists(profilePath) && (!isExistingProfile || isRename))
             {
                 MessageBox.Show(string.Format(Resources.AddProfileExistsMsg, requestedProfileName),
                     Resources.EditProfileError,
@@ -583,10 +585,15 @@ namespace WireSockUI.Forms
 
             try
             {
-                if (File.Exists(profilePath))
+                if (Profile.ProfilePathExists(profilePath))
+                {
+                    Profile.EnsureRegularProfileFile(profilePath);
                     File.Replace(tmpProfile, profilePath, null);
+                }
                 else
+                {
                     File.Move(tmpProfile, profilePath);
+                }
 
                 if (isRename)
                     TryDeleteOriginalProfile(_originalProfileName, profilePath);
@@ -612,8 +619,11 @@ namespace WireSockUI.Forms
                 var originalProfilePath = Profile.GetProfilePath(originalProfileName);
                 if (!string.Equals(Path.GetFullPath(originalProfilePath), Path.GetFullPath(newProfilePath),
                         StringComparison.OrdinalIgnoreCase) &&
-                    File.Exists(originalProfilePath))
+                    Profile.ProfilePathExists(originalProfilePath))
+                {
+                    Profile.EnsureRegularProfileFile(originalProfilePath);
                     File.Delete(originalProfilePath);
+                }
             }
             catch (Exception ex)
             {

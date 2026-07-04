@@ -18,7 +18,7 @@ At startup WireSockUI looks for `wgbooster.dll` in this order:
 3. WireSock Secure Connect Pro SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect Pro`.
 4. The legacy WireSock VPN Client registry location under `HKLM\SOFTWARE\NTKernelResources\WinpkFilterForVPNClient`.
 
-For each registered install location it checks `sdk`, `bin`, and the install root. The discovered directory is added to the process `PATH` so the native library can be loaded without changing the machine-wide environment.
+For each registered install location it checks `sdk`, `bin`, and the install root. The discovered directory is registered with the process through `SetDllDirectory` so the native library can be loaded without changing the machine-wide environment.
 
 ## Configuration Notes
 
@@ -34,7 +34,7 @@ WireSock-specific directives may use the current SDK comment-extension syntax:
 
 Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK fields such as script hooks, masking parameters, SOCKS5 settings, `BypassLanTraffic`, and profile-level `VirtualAdapterMode` while preserving the file-based profile workflow.
 
-Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. If a secured profile already exists, the legacy copy is deleted only when its content matches.
+Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening when possible.
 
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
 

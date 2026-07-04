@@ -42,6 +42,7 @@ namespace WireSockUI
 
         private readonly LogPrinter _logPrinter;
 
+        private const int MaxQueuedLogMessages = 1000;
         private readonly BlockingCollection<LogMessage> _logQueue;
         private readonly BackgroundWorker _logWorker;
         private readonly object _syncRoot = new object();
@@ -60,7 +61,9 @@ namespace WireSockUI
         /// </param>
         public WireSockManager(LogMessageCallback logMessageCallback = null)
         {
-            _logQueue = new BlockingCollection<LogMessage>(new ConcurrentQueue<LogMessage>());
+            _logQueue = new BlockingCollection<LogMessage>(
+                new ConcurrentQueue<LogMessage>(),
+                MaxQueuedLogMessages);
             _logWorker = InitializeLogWorker(logMessageCallback);
             _logWorker.RunWorkerAsync();
 
@@ -342,7 +345,12 @@ namespace WireSockUI
 
             try
             {
-                _logQueue.Add(new LogMessage { Message = message });
+                var logMessage = new LogMessage { Message = message };
+                if (_logQueue.TryAdd(logMessage))
+                    return;
+
+                _logQueue.TryTake(out _);
+                _logQueue.TryAdd(logMessage);
             }
             catch (InvalidOperationException)
             {
@@ -481,6 +489,8 @@ namespace WireSockUI
 
                 try
                 {
+                    Profile.EnsureRegularProfileFile(profilePath);
+
                     if (_handle != IntPtr.Zero && !DropCurrentHandle(true))
                         return ShowTunnelError(
                             "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");

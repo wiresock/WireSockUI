@@ -52,8 +52,10 @@ namespace WireSockUI.Config
         /// <param name="profilePath">Full filepath to a profile</param>
         public Profile(string profilePath)
         {
-            if (!File.Exists(profilePath))
+            if (!ProfilePathExists(profilePath))
                 throw new FileNotFoundException($"Profile {Path.GetFileName(profilePath)} does not exist.");
+
+            EnsureRegularProfileFile(profilePath);
 
             var parser = new ConfigParser(profilePath);
             var sections = parser.GetSectionNames();
@@ -507,6 +509,12 @@ namespace WireSockUI.Config
             {
                 if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase)) continue;
 
+                if (!IsRegularProfileFile(file, out var diagnostic))
+                {
+                    Trace.TraceWarning(diagnostic);
+                    continue;
+                }
+
                 var profileName = Path.GetFileNameWithoutExtension(file);
                 if (!IsValidProfileName(profileName))
                 {
@@ -575,6 +583,75 @@ namespace WireSockUI.Config
         {
             var filename = GetProfilePath(profileName);
             return new Profile(filename);
+        }
+
+        internal static void EnsureRegularProfileFile(string profilePath)
+        {
+            if (!IsRegularProfileFile(profilePath, out var diagnostic))
+                throw new IOException(diagnostic);
+        }
+
+        internal static bool ProfilePathExists(string profilePath)
+        {
+            if (string.IsNullOrWhiteSpace(profilePath))
+                return false;
+
+            try
+            {
+                File.GetAttributes(profilePath);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Unable to inspect profile path '{Path.GetFileName(profilePath)}': {ex.Message}");
+                return true;
+            }
+        }
+
+        internal static bool IsRegularProfileFile(string profilePath, out string diagnostic)
+        {
+            diagnostic = null;
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(profilePath))
+                {
+                    diagnostic = "Profile path is empty.";
+                    return false;
+                }
+
+                var attributes = File.GetAttributes(profilePath);
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    diagnostic =
+                        $"Profile path '{Path.GetFileName(profilePath)}' is a directory and will not be loaded by elevated WireSock UI.";
+                    return false;
+                }
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    diagnostic =
+                        $"Profile file '{Path.GetFileName(profilePath)}' is a reparse point and will not be loaded by elevated WireSock UI.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostic =
+                    $"Unable to inspect profile file '{Path.GetFileName(profilePath)}': {ex.Message}";
+                return false;
+            }
         }
 
         private static string GetRequiredValue(string profilePath, string sectionName, Dictionary<string, string> section,

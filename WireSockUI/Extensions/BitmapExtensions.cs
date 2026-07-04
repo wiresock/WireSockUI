@@ -36,7 +36,8 @@ namespace WireSockUI.Extensions
         public static Icon SuperImpose(this Icon icon, int size, WindowsIcons.Icons imposed, int imposedSize,
             int imposedOffset)
         {
-            using (var bitmap = new Icon(icon, new Size(size, size)).ToBitmap())
+            using (var resizedIcon = new Icon(icon, new Size(size, size)))
+            using (var bitmap = resizedIcon.ToBitmap())
             {
                 using (var gr = Graphics.FromImage(bitmap))
                 {
