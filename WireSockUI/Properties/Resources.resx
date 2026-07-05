@@ -505,10 +505,25 @@
   <data name="TunnelConnectTimeout" xml:space="preserve">
     <value>The tunnel did not report an active connection in time. WireSock UI stopped the pending tunnel; try again or check the log.</value>
   </data>
+  <data name="TunnelConnectCleanupPending" xml:space="preserve">
+    <value>WireSock UI is still cleaning up a timed-out tunnel connection. Wait for cleanup to finish before trying another tunnel operation.</value>
+  </data>
   <data name="TunnelErrorStart" xml:space="preserve">
     <value>Tunnel has failed to start. Please check log.</value>
   </data>
   <data name="TunnelErrorTitle" xml:space="preserve">
     <value>Error</value>
+  </data>
+  <data name="TunnelNativeRecoveryRequired" xml:space="preserve">
+    <value>WireSock UI could not finish cleaning up a native tunnel operation. New tunnel operations are disabled to avoid unsafe network state. Restart WireSock UI as administrator; if network access remains blocked, use Reset Kill Switch from the tray menu.</value>
+  </data>
+  <data name="TunnelOperationPending" xml:space="preserve">
+    <value>A WireSock tunnel operation is already in progress. Wait for it to finish before trying again.</value>
+  </data>
+  <data name="TunnelShutdownCleanupUnresolved" xml:space="preserve">
+    <value>WireSock UI could not verify that native tunnel cleanup finished before exit. If network access remains blocked, reopen WireSock UI as administrator and use Reset Kill Switch from the tray menu.</value>
+  </data>
+  <data name="InterfaceStatusRecoveryRequired" xml:space="preserve">
+    <value>Recovery required</value>
   </data>
 </root>
