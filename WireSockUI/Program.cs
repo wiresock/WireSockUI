@@ -191,6 +191,13 @@ namespace WireSockUI
                 return false;
             }
 
+            if (IsPotentiallyUserWritableFile(libraryPath))
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is writable by non-administrative users.");
+                return false;
+            }
+
             libraryDirectory = fullDirectory;
             return true;
         }
@@ -472,43 +479,71 @@ namespace WireSockUI
             {
                 var security = Directory.GetAccessControl(normalizedDirectory);
                 var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                const FileSystemRights writeRights =
-                    FileSystemRights.FullControl |
-                    FileSystemRights.Modify |
-                    FileSystemRights.Write |
-                    FileSystemRights.WriteData |
-                    FileSystemRights.CreateFiles |
-                    FileSystemRights.AppendData |
-                    FileSystemRights.CreateDirectories |
-                    FileSystemRights.WriteAttributes |
-                    FileSystemRights.WriteExtendedAttributes;
-
-                foreach (FileSystemAccessRule rule in rules)
-                {
-                    if (rule.AccessControlType != AccessControlType.Allow ||
-                        !(rule.IdentityReference is SecurityIdentifier sid) ||
-                        (rule.FileSystemRights & writeRights) == 0)
-                        continue;
-
-                    if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
-                    {
-                        if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
-                            continue;
-
-                        return true;
-                    }
-
-                    if (!IsAdministrativeOrServiceSid(sid))
-                        return true;
-                }
-
-                return false;
+                return ContainsPotentiallyUserWritableRule(rules);
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
                 return true;
             }
+        }
+
+        private static bool IsPotentiallyUserWritableFile(string file)
+        {
+            var normalizedFile = NormalizePathFile(file);
+            if (normalizedFile == null)
+                return true;
+
+            try
+            {
+                var security = File.GetAccessControl(normalizedFile);
+                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                return ContainsPotentiallyUserWritableRule(rules);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect ACL for '{normalizedFile}': {ex.Message}");
+                return true;
+            }
+        }
+
+        private static bool ContainsPotentiallyUserWritableRule(AuthorizationRuleCollection rules)
+        {
+            const FileSystemRights writeRights =
+                FileSystemRights.FullControl |
+                FileSystemRights.Modify |
+                FileSystemRights.Write |
+                FileSystemRights.WriteData |
+                FileSystemRights.CreateFiles |
+                FileSystemRights.AppendData |
+                FileSystemRights.CreateDirectories |
+                FileSystemRights.WriteAttributes |
+                FileSystemRights.WriteExtendedAttributes |
+                FileSystemRights.ChangePermissions |
+                FileSystemRights.TakeOwnership |
+                FileSystemRights.Delete |
+                FileSystemRights.DeleteSubdirectoriesAndFiles;
+
+            foreach (FileSystemAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow ||
+                    !(rule.IdentityReference is SecurityIdentifier sid) ||
+                    (rule.FileSystemRights & writeRights) == 0)
+                    continue;
+
+                if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
+                {
+                    if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
+                        continue;
+
+                    return true;
+                }
+
+                if (!IsAdministrativeOrServiceSid(sid))
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool IsAdministrativeOrServiceSid(SecurityIdentifier sid)
@@ -533,6 +568,22 @@ namespace WireSockUI
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string NormalizePathFile(string file)
+        {
+            if (string.IsNullOrWhiteSpace(file))
+                return null;
+
+            try
+            {
+                return NormalizePathRoot(Path.GetFullPath(file.Trim().Trim('"')));
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Skipping invalid file path '{file}': {ex.Message}");
                 return null;
             }
         }

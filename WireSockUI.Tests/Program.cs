@@ -49,6 +49,8 @@ namespace WireSockUI.Tests
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
+                { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
+                { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
@@ -380,6 +382,76 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void ProgramDetectsUserWritableWireSockLibraryFiles()
+        {
+            var isPotentiallyUserWritableFile = typeof(WireSockUI.Program).GetMethod("IsPotentiallyUserWritableFile",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (isPotentiallyUserWritableFile == null)
+                throw new InvalidOperationException("IsPotentiallyUserWritableFile helper was not found.");
+
+            var file = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", $"{Guid.NewGuid():N}.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+
+            try
+            {
+                File.WriteAllText(file, string.Empty);
+
+                var userWritable = (bool)isPotentiallyUserWritableFile.Invoke(null, new object[] { file });
+
+                AssertTrue(userWritable, "Expected user-writable WireSock library files to be detected.");
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(file))
+                        File.Delete(file);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
+        private static void ProfileImportRejectsOversizedFiles()
+        {
+            var copyProfileToTemporaryFile = typeof(FrmMain).GetMethod("CopyProfileToTemporaryFile",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (copyProfileToTemporaryFile == null)
+                throw new InvalidOperationException("CopyProfileToTemporaryFile helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var source = Path.Combine(directory, "oversized.conf");
+            var destination = Path.Combine(directory, "oversized.tmp");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                using (var stream = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    stream.SetLength(1024 * 1024 + 1);
+                }
+
+                AssertInvocationThrows<InvalidOperationException>(
+                    () => copyProfileToTemporaryFile.Invoke(null, new object[] { source, destination }),
+                    "too large");
+                AssertFalse(File.Exists(destination), "Expected oversized profile imports not to create a temp copy.");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
         private static void EditorValidatesAmneziaOptions()
         {
             var isUIntOrRange = typeof(FrmEdit).GetMethod("IsUIntOrRange",
@@ -497,6 +569,23 @@ namespace WireSockUI.Tests
             }
 
             throw new Exception($"Expected {typeof(T).Name}.");
+        }
+
+        private static void AssertInvocationThrows<T>(Action action, string messagePart) where T : Exception
+        {
+            try
+            {
+                action();
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is T inner)
+            {
+                if (messagePart == null || inner.Message.IndexOf(messagePart, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return;
+
+                throw new Exception($"Expected inner exception message to contain '{messagePart}', got '{inner.Message}'.");
+            }
+
+            throw new Exception($"Expected invocation to throw {typeof(T).Name}.");
         }
 
         private static void AssertTrue(bool condition, string message)

@@ -33,6 +33,7 @@ namespace WireSockUI.Forms
         private const int TunnelConnectionTimeoutMilliseconds = 30000;
         private const int MaxVisibleLogMessages = 2000;
         private const int ShutdownDisconnectTimeoutMilliseconds = 5000;
+        private const long MaxImportedProfileSizeBytes = 1024 * 1024;
 
         /**
          * @brief The manager that handles the Wireguard connections.
@@ -586,9 +587,16 @@ namespace WireSockUI.Forms
                 };
             });
 
-            var completedTask = await Task.WhenAny(connectTask, Task.Delay(TunnelConnectionTimeoutMilliseconds));
-            if (completedTask == connectTask)
-                return await connectTask;
+            using (var delayCancellation = new CancellationTokenSource())
+            {
+                var delayTask = Task.Delay(TunnelConnectionTimeoutMilliseconds, delayCancellation.Token);
+                var completedTask = await Task.WhenAny(connectTask, delayTask);
+                if (completedTask == connectTask)
+                {
+                    delayCancellation.Cancel();
+                    return await connectTask;
+                }
+            }
 
             ScheduleTimedOutConnectCleanup(connectTask, generation, profile);
 
@@ -652,7 +660,12 @@ namespace WireSockUI.Forms
             try
             {
                 if (result.Connected)
-                    await DisconnectNativeTunnelAsync(result.ConnectionSequence, false);
+                {
+                    var disconnected = await DisconnectNativeTunnelAsync(result.ConnectionSequence, false);
+                    if (!disconnected)
+                        Trace.TraceWarning(
+                            $"Timed-out tunnel sequence {result.ConnectionSequence} could not be disconnected. The tunnel may still be active.");
+                }
             }
             catch (Exception ex)
             {
@@ -1112,10 +1125,26 @@ namespace WireSockUI.Forms
         {
             using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
                        81920, FileOptions.SequentialScan))
-            using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
-                       FileShare.None))
             {
-                source.CopyTo(destination);
+                if (source.Length > MaxImportedProfileSizeBytes)
+                    throw new InvalidOperationException("The profile file is too large to be imported.");
+
+                using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
+                           FileShare.None))
+                {
+                    var buffer = new byte[81920];
+                    long bytesCopied = 0;
+                    int bytesRead;
+
+                    while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        bytesCopied += bytesRead;
+                        if (bytesCopied > MaxImportedProfileSizeBytes)
+                            throw new InvalidOperationException("The profile file is too large to be imported.");
+
+                        destination.Write(buffer, 0, bytesRead);
+                    }
+                }
             }
         }
 
