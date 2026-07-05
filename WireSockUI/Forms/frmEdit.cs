@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Diagnostics;
 using System.Drawing;
-using System.Globalization;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
@@ -253,14 +252,14 @@ namespace WireSockUI.Forms
                                 break;
                             // Numerical values
                             case "mtu":
-                                if (!IsIntInRange(value, 576, 65535))
+                                if (!ConfigValueValidator.IsIntInRange(value, 576, 65535))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
                                 }
                                 break;
                             case "listenport":
-                                if (!IsIntInRange(value, 1, 65535))
+                                if (!ConfigValueValidator.IsIntInRange(value, 1, 65535))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -268,21 +267,21 @@ namespace WireSockUI.Forms
                                 break;
                             case "persistentkeepalive":
                             case "scriptexectimeout":
-                                if (!IsIntInRange(value, 0, 65535))
+                                if (!ConfigValueValidator.IsIntInRange(value, 0, 65535))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
                                 }
                                 break;
                             case "jc":
-                                if (!IsUIntInRange(value, 0, 128))
+                                if (!ConfigValueValidator.IsUIntInRange(value, 0, 128))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
                                 }
                                 break;
                             case "jd":
-                                if (!IsUIntInRange(value, 0, 200))
+                                if (!ConfigValueValidator.IsUIntInRange(value, 0, 200))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -292,7 +291,7 @@ namespace WireSockUI.Forms
                             case "jmax":
                             case "s1":
                             case "s2":
-                                if (!IsUIntInRange(value, 0, 1280))
+                                if (!ConfigValueValidator.IsUIntInRange(value, 0, 1280))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -300,7 +299,7 @@ namespace WireSockUI.Forms
                                 break;
                             case "s3":
                             case "s4":
-                                if (!IsUIntInRange(value, 0, uint.MaxValue))
+                                if (!ConfigValueValidator.IsUIntInRange(value, 0, uint.MaxValue))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -310,7 +309,7 @@ namespace WireSockUI.Forms
                             case "h2":
                             case "h3":
                             case "h4":
-                                if (!IsUIntOrRange(value, 0, uint.MaxValue))
+                                if (!ConfigValueValidator.IsUIntOrRange(value, 0, uint.MaxValue))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -337,7 +336,7 @@ namespace WireSockUI.Forms
                             case "bypasslantraffic":
                             case "virtualadaptermode":
                             case "socks5proxyalltraffic":
-                                if (!IsBool(value))
+                                if (!ConfigValueValidator.IsBool(value))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -355,14 +354,14 @@ namespace WireSockUI.Forms
                                 }
                                 break;
                             case "ip":
-                                if (!IsOneOf(value, "quic", "dns", "sip", "stun"))
+                                if (!ConfigValueValidator.IsOneOf(value, "quic", "dns", "sip", "stun"))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
                                 }
                                 break;
                             case "ib":
-                                if (!IsOneOf(value, "chrome", "firefox", "curl", "random"))
+                                if (!ConfigValueValidator.IsOneOf(value, "chrome", "firefox", "curl", "random"))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -409,76 +408,6 @@ namespace WireSockUI.Forms
 
                 _highlighting = false;
             }
-        }
-
-        private static bool IsIntInRange(string value, int minValue, int maxValue)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                return true;
-
-            return int.TryParse(value.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue) &&
-                   intValue >= minValue &&
-                   intValue <= maxValue;
-        }
-
-        private static bool IsUIntInRange(string value, uint minValue, uint maxValue)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                return true;
-
-            return TryParseUInt(value, out var intValue) &&
-                   intValue >= minValue &&
-                   intValue <= maxValue;
-        }
-
-        private static bool IsUIntOrRange(string value, uint minValue, uint maxValue)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                return true;
-
-            var parts = value.Split('-');
-            if (parts.Length == 0 || parts.Length > 2)
-                return false;
-
-            if (!TryParseUInt(parts[0], out var first) || first < minValue || first > maxValue)
-                return false;
-
-            if (parts.Length == 1)
-                return true;
-
-            return TryParseUInt(parts[1], out var second) &&
-                   second >= minValue &&
-                   second <= maxValue &&
-                   first <= second;
-        }
-
-        private static bool TryParseUInt(string value, out uint result)
-        {
-            var trimmed = value.Trim();
-            if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                return uint.TryParse(trimmed.Substring(2), NumberStyles.HexNumber, CultureInfo.InvariantCulture,
-                    out result);
-
-            return uint.TryParse(trimmed, NumberStyles.Integer, CultureInfo.InvariantCulture, out result);
-        }
-
-        private static bool IsBool(string value)
-        {
-            return string.IsNullOrWhiteSpace(value) ||
-                   string.Equals(value.Trim(), "true", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value.Trim(), "false", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static bool IsOneOf(string value, params string[] values)
-        {
-            if (string.IsNullOrWhiteSpace(value))
-                return true;
-
-            foreach (var item in values)
-                if (string.Equals(value.Trim(), item, StringComparison.OrdinalIgnoreCase))
-                    return true;
-
-            return false;
         }
 
         private void InsertOrAppendConfigurationValue(string key, string value)

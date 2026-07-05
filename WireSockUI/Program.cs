@@ -9,6 +9,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Windows.Forms;
 using Microsoft.Win32;
+using Microsoft.Win32.SafeHandles;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
@@ -18,8 +19,52 @@ namespace WireSockUI
 {
     internal static class Program
     {
+        private const long MaxMigratedProfileSizeBytes = 1024 * 1024;
+        private const uint GenericRead = 0x80000000;
+        private const uint FileShareRead = 0x00000001;
+        private const uint OpenExisting = 3;
+        private const uint FileFlagOpenReparsePoint = 0x00200000;
+        private const uint FileFlagSequentialScan = 0x08000000;
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectory(string lpPathName);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern SafeFileHandle CreateFile(
+            string lpFileName,
+            uint dwDesiredAccess,
+            uint dwShareMode,
+            IntPtr lpSecurityAttributes,
+            uint dwCreationDisposition,
+            uint dwFlagsAndAttributes,
+            IntPtr hTemplateFile);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool GetFileInformationByHandle(
+            SafeFileHandle hFile,
+            out ByHandleFileInformation lpFileInformation);
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct ByHandleFileInformation
+        {
+            public FileAttributes FileAttributes;
+            public FileTime CreationTime;
+            public FileTime LastAccessTime;
+            public FileTime LastWriteTime;
+            public uint VolumeSerialNumber;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint NumberOfLinks;
+            public uint FileIndexHigh;
+            public uint FileIndexLow;
+        }
+
+        [StructLayout(LayoutKind.Sequential)]
+        private struct FileTime
+        {
+            public uint LowDateTime;
+            public uint HighDateTime;
+        }
 
         [STAThread]
         private static void Main()
@@ -372,15 +417,98 @@ namespace WireSockUI
                     continue;
                 }
 
-                try
-                {
-                    File.Copy(legacyProfilePath, destinationPath, false);
+                if (TryCopyLegacyProfileToSecureProfile(legacyProfilePath, destinationPath, profileName))
                     TryDeleteLegacyProfile(legacyProfilePath, profileName);
-                }
-                catch (Exception ex)
+            }
+        }
+
+        private static bool TryCopyLegacyProfileToSecureProfile(string legacyProfilePath, string destinationPath,
+            string profileName)
+        {
+            var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
+
+            try
+            {
+                CopyLegacyProfileToTemporaryFile(legacyProfilePath, tmpProfile);
+                File.Move(tmpProfile, destinationPath);
+                tmpProfile = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                if (tmpProfile != null)
+                    TryDeleteTemporaryMigratedProfile(tmpProfile, profileName);
+            }
+        }
+
+        private static void CopyLegacyProfileToTemporaryFile(string sourcePath, string destinationPath)
+        {
+            using (var source = OpenLegacyProfileForRead(sourcePath))
+            {
+                if (source.Length > MaxMigratedProfileSizeBytes)
+                    throw new InvalidOperationException("The legacy profile file is too large to be migrated.");
+
+                using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
+                           FileShare.None))
                 {
-                    Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
+                    var buffer = new byte[81920];
+                    long bytesCopied = 0;
+                    int bytesRead;
+
+                    while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        bytesCopied += bytesRead;
+                        if (bytesCopied > MaxMigratedProfileSizeBytes)
+                            throw new InvalidOperationException("The legacy profile file is too large to be migrated.");
+
+                        destination.Write(buffer, 0, bytesRead);
+                    }
                 }
+            }
+        }
+
+        private static FileStream OpenLegacyProfileForRead(string sourcePath)
+        {
+            var handle = CreateFile(
+                sourcePath,
+                GenericRead,
+                FileShareRead,
+                IntPtr.Zero,
+                OpenExisting,
+                FileFlagOpenReparsePoint | FileFlagSequentialScan,
+                IntPtr.Zero);
+
+            if (handle.IsInvalid)
+                throw new IOException(
+                    $"Unable to open legacy profile '{Path.GetFileName(sourcePath)}'.",
+                    new Win32Exception(Marshal.GetLastWin32Error()));
+
+            try
+            {
+                if (!GetFileInformationByHandle(handle, out var fileInformation))
+                    throw new IOException(
+                        $"Unable to inspect legacy profile '{Path.GetFileName(sourcePath)}'.",
+                        new Win32Exception(Marshal.GetLastWin32Error()));
+
+                if ((fileInformation.FileAttributes & FileAttributes.ReparsePoint) != 0)
+                    throw new IOException(
+                        $"Legacy profile '{Path.GetFileName(sourcePath)}' is a reparse point.");
+
+                if ((fileInformation.FileAttributes & FileAttributes.Directory) != 0)
+                    throw new IOException(
+                        $"Legacy profile '{Path.GetFileName(sourcePath)}' is a directory.");
+
+                return new FileStream(handle, FileAccess.Read, 81920, false);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
             }
         }
 
@@ -426,14 +554,12 @@ namespace WireSockUI
         {
             try
             {
-                var firstInfo = new FileInfo(firstPath);
-                var secondInfo = new FileInfo(secondPath);
-                if (firstInfo.Length != secondInfo.Length)
-                    return false;
-
-                using (var first = File.OpenRead(firstPath))
+                using (var first = OpenLegacyProfileForRead(firstPath))
                 using (var second = File.OpenRead(secondPath))
                 {
+                    if (first.Length != second.Length)
+                        return false;
+
                     var firstBuffer = new byte[81920];
                     var secondBuffer = new byte[81920];
 
@@ -475,6 +601,20 @@ namespace WireSockUI
             }
 
             return totalRead;
+        }
+
+        private static void TryDeleteTemporaryMigratedProfile(string tmpProfile, string profileName)
+        {
+            try
+            {
+                if (File.Exists(tmpProfile))
+                    File.Delete(tmpProfile);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Failed to delete temporary migrated profile for '{profileName}': {ex.Message}");
+            }
         }
 
         private static void TryDeleteLegacyProfile(string legacyProfilePath, string profileName)

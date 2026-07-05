@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
 
@@ -98,13 +99,20 @@ namespace WireSockUI.Native
                                 GetProcessImage(handle),
                                 GetProcessUser(handle));
                         }
+                        catch (Exception ex)
+                        {
+                            Trace.TraceWarning(
+                                $"Skipping process '{entry.szExeFile}' ({entry.th32ProcessID}) because it could not be inspected: {ex.Message}");
+                            processEntry = null;
+                        }
                         finally
                         {
                             if (handle != IntPtr.Zero)
                                 CloseHandle(handle);
                         }
 
-                        yield return processEntry;
+                        if (processEntry != null)
+                            yield return processEntry;
                     } while (Process32Next(snap, ref entry));
             }
             finally
