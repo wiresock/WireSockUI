@@ -4,7 +4,7 @@
     <OutputType>WinExe</OutputType>
     <Configurations>Debug;Release;Debug UWP;Release UWP</Configurations>
     <Platforms>AnyCPU;x86;x64;ARM64</Platforms>
-    <TargetFrameworks>net472-windows</TargetFrameworks> <!-- or net8.0-windows10.0.19041.0 -->
+    <TargetFrameworks>net472-windows</TargetFrameworks>
     <UseWindowsForms>true</UseWindowsForms>
     <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
     <RootNamespace>WireSockUI</RootNamespace>
@@ -69,17 +69,6 @@
     <Reference Condition=" $(Configuration.Contains('UWP')) " Include="Windows.UI">
       <HintPath>$(SystemRoot)\System32\WinMetadata\Windows.UI.winmd</HintPath>
     </Reference>
-  </ItemGroup>
-
-  <!-- Dependencies when targeting .NET Core -->
-  <ItemGroup Condition=" $(TargetFramework.StartsWith('net8.0')) ">
-    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
-    <PackageReference Include="System.IO.Compression" Version="4.3.0" />
-    <PackageReference Include="System.Runtime" Version="4.3.1" />
-    <PackageReference Include="System.Runtime.InteropServices" Version="4.3.0" />
-    <PackageReference Include="System.Management" Version="8.0.0" />
-    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
-    <PackageReference Include="TaskScheduler" Version="2.10.1" />
   </ItemGroup>
 
   <!-- Conditional UWP support -->

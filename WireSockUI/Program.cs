@@ -146,45 +146,72 @@ namespace WireSockUI
             libraryDirectory = null;
 
             var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            if (ContainsWireSockLibrary(localDirectory))
-            {
-                if (!IsPotentiallyUserWritableDirectory(localDirectory))
-                {
-                    libraryDirectory = localDirectory;
-                    return true;
-                }
-
-                Trace.TraceWarning(
-                    $"Skipping app-local wgbooster.dll in user-writable directory '{localDirectory}'.");
-            }
+            if (TryValidateWireSockLibraryDirectory(localDirectory, out libraryDirectory))
+                return true;
 
             foreach (var installLocation in GetInstallLocations())
             {
                 foreach (var candidate in GetLibraryDirectories(installLocation))
                 {
-                    if (!ContainsWireSockLibrary(candidate))
-                        continue;
-
-                    libraryDirectory = candidate;
-                    return true;
+                    if (TryValidateWireSockLibraryDirectory(candidate, out libraryDirectory))
+                        return true;
                 }
             }
 
             return false;
         }
 
-        private static bool ContainsWireSockLibrary(string directory)
+        private static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
         {
-            try
+            libraryDirectory = null;
+
+            var fullDirectory = NormalizePathDirectory(directory);
+            if (fullDirectory == null ||
+                !TryGetExistingAttributes(fullDirectory, out var directoryAttributes) ||
+                (directoryAttributes & FileAttributes.Directory) == 0)
+                return false;
+
+            if ((directoryAttributes & FileAttributes.ReparsePoint) != 0)
             {
-                return !string.IsNullOrWhiteSpace(directory) &&
-                       File.Exists(Path.Combine(directory, "wgbooster.dll"));
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Skipping invalid WireSock library directory '{directory}': {ex.Message}");
+                Trace.TraceWarning(
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is a reparse point.");
                 return false;
             }
+
+            if (IsPotentiallyUserWritableDirectory(fullDirectory))
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is writable by non-administrative users.");
+                return false;
+            }
+
+            var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
+            if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes))
+                return false;
+
+            if ((libraryAttributes & FileAttributes.Directory) != 0)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is a directory.");
+                return false;
+            }
+
+            if ((libraryAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is a reparse point.");
+                return false;
+            }
+
+            if (IsPotentiallyUserWritableFile(libraryPath))
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is writable by non-administrative users.");
+                return false;
+            }
+
+            libraryDirectory = fullDirectory;
+            return true;
         }
 
         private static string[] GetLibraryDirectories(string installLocation)
@@ -361,14 +388,36 @@ namespace WireSockUI
         {
             isReparsePoint = false;
 
+            if (!TryGetExistingAttributes(path, out var attributes, true))
+                return false;
+
+            isReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0;
+            return true;
+        }
+
+        private static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
+            bool warnOnFailure = false)
+        {
+            attributes = 0;
+
             try
             {
-                isReparsePoint = (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+                attributes = File.GetAttributes(path);
                 return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
+                if (warnOnFailure)
+                    Trace.TraceWarning($"Unable to inspect file system attributes for '{path}': {ex.Message}");
+
                 return false;
             }
         }
@@ -450,43 +499,71 @@ namespace WireSockUI
             {
                 var security = Directory.GetAccessControl(normalizedDirectory);
                 var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                const FileSystemRights writeRights =
-                    FileSystemRights.FullControl |
-                    FileSystemRights.Modify |
-                    FileSystemRights.Write |
-                    FileSystemRights.WriteData |
-                    FileSystemRights.CreateFiles |
-                    FileSystemRights.AppendData |
-                    FileSystemRights.CreateDirectories |
-                    FileSystemRights.WriteAttributes |
-                    FileSystemRights.WriteExtendedAttributes;
-
-                foreach (FileSystemAccessRule rule in rules)
-                {
-                    if (rule.AccessControlType != AccessControlType.Allow ||
-                        !(rule.IdentityReference is SecurityIdentifier sid) ||
-                        (rule.FileSystemRights & writeRights) == 0)
-                        continue;
-
-                    if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
-                    {
-                        if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
-                            continue;
-
-                        return true;
-                    }
-
-                    if (!IsAdministrativeOrServiceSid(sid))
-                        return true;
-                }
-
-                return false;
+                return ContainsPotentiallyUserWritableRule(rules);
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
                 return true;
             }
+        }
+
+        private static bool IsPotentiallyUserWritableFile(string file)
+        {
+            var normalizedFile = NormalizePathFile(file);
+            if (normalizedFile == null)
+                return true;
+
+            try
+            {
+                var security = File.GetAccessControl(normalizedFile);
+                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+                return ContainsPotentiallyUserWritableRule(rules);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect ACL for '{normalizedFile}': {ex.Message}");
+                return true;
+            }
+        }
+
+        private static bool ContainsPotentiallyUserWritableRule(AuthorizationRuleCollection rules)
+        {
+            const FileSystemRights writeRights =
+                FileSystemRights.FullControl |
+                FileSystemRights.Modify |
+                FileSystemRights.Write |
+                FileSystemRights.WriteData |
+                FileSystemRights.CreateFiles |
+                FileSystemRights.AppendData |
+                FileSystemRights.CreateDirectories |
+                FileSystemRights.WriteAttributes |
+                FileSystemRights.WriteExtendedAttributes |
+                FileSystemRights.ChangePermissions |
+                FileSystemRights.TakeOwnership |
+                FileSystemRights.Delete |
+                FileSystemRights.DeleteSubdirectoriesAndFiles;
+
+            foreach (FileSystemAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow ||
+                    !(rule.IdentityReference is SecurityIdentifier sid) ||
+                    (rule.FileSystemRights & writeRights) == 0)
+                    continue;
+
+                if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
+                {
+                    if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
+                        continue;
+
+                    return true;
+                }
+
+                if (!IsAdministrativeOrServiceSid(sid))
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool IsAdministrativeOrServiceSid(SecurityIdentifier sid)
@@ -511,6 +588,22 @@ namespace WireSockUI
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
+                return null;
+            }
+        }
+
+        private static string NormalizePathFile(string file)
+        {
+            if (string.IsNullOrWhiteSpace(file))
+                return null;
+
+            try
+            {
+                return NormalizePathRoot(Path.GetFullPath(file.Trim().Trim('"')));
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Skipping invalid file path '{file}': {ex.Message}");
                 return null;
             }
         }
