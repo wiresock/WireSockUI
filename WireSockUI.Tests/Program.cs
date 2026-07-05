@@ -51,6 +51,8 @@ namespace WireSockUI.Tests
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
+                { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
+                { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
@@ -452,31 +454,103 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void LegacyMigrationRejectsOversizedFiles()
+        {
+            var copyLegacyProfileToTemporaryFile = typeof(WireSockUI.Program).GetMethod(
+                "CopyLegacyProfileToTemporaryFile", BindingFlags.NonPublic | BindingFlags.Static);
+            if (copyLegacyProfileToTemporaryFile == null)
+                throw new InvalidOperationException("CopyLegacyProfileToTemporaryFile helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var source = Path.Combine(directory, "oversized.conf");
+            var destination = Path.Combine(directory, "oversized.tmp");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                using (var stream = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    stream.SetLength(1024 * 1024 + 1);
+                }
+
+                AssertInvocationThrows<InvalidOperationException>(
+                    () => copyLegacyProfileToTemporaryFile.Invoke(null, new object[] { source, destination }),
+                    "too large");
+                AssertFalse(File.Exists(destination),
+                    "Expected oversized legacy profile migrations not to create a temp copy.");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
+        private static void LegacyMigrationRejectsReparsePointSources()
+        {
+            var copyLegacyProfileToTemporaryFile = typeof(WireSockUI.Program).GetMethod(
+                "CopyLegacyProfileToTemporaryFile", BindingFlags.NonPublic | BindingFlags.Static);
+            if (copyLegacyProfileToTemporaryFile == null)
+                throw new InvalidOperationException("CopyLegacyProfileToTemporaryFile helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var target = Path.Combine(directory, "target.conf");
+            var link = Path.Combine(directory, "linked.conf");
+            var destination = Path.Combine(directory, "linked.tmp");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(target, ValidConfig());
+
+                if (!TryCreateFileSymbolicLink(link, target))
+                {
+                    Console.WriteLine("SKIP file symlink creation unavailable; legacy migration reparse check not exercised.");
+                    return;
+                }
+
+                AssertInvocationThrows<IOException>(
+                    () => copyLegacyProfileToTemporaryFile.Invoke(null, new object[] { link, destination }),
+                    "reparse point");
+                AssertFalse(File.Exists(destination),
+                    "Expected reparse point legacy profile migrations not to create a temp copy.");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
         private static void EditorValidatesAmneziaOptions()
         {
-            var isUIntOrRange = typeof(FrmEdit).GetMethod("IsUIntOrRange",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            var isUIntInRange = typeof(FrmEdit).GetMethod("IsUIntInRange",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            var isOneOf = typeof(FrmEdit).GetMethod("IsOneOf",
-                BindingFlags.NonPublic | BindingFlags.Static);
-
-            if (isUIntOrRange == null || isUIntInRange == null || isOneOf == null)
-                throw new InvalidOperationException("Expected Amnezia editor validation helpers were not found.");
-
-            AssertTrue((bool)isUIntOrRange.Invoke(null, new object[] { "1-4", 0u, uint.MaxValue }),
+            AssertTrue(ConfigValueValidator.IsUIntOrRange("1-4", 0, uint.MaxValue),
                 "Expected decimal H ranges to be accepted.");
-            AssertTrue((bool)isUIntOrRange.Invoke(null, new object[] { "0x10-0x20", 0u, uint.MaxValue }),
+            AssertTrue(ConfigValueValidator.IsUIntOrRange("0x10-0x20", 0, uint.MaxValue),
                 "Expected hexadecimal H ranges to be accepted.");
-            AssertFalse((bool)isUIntOrRange.Invoke(null, new object[] { "4-1", 0u, uint.MaxValue }),
+            AssertFalse(ConfigValueValidator.IsUIntOrRange("4-1", 0, uint.MaxValue),
                 "Expected descending H ranges to be rejected.");
-            AssertTrue((bool)isUIntInRange.Invoke(null, new object[] { "1280", 0u, 1280u }),
+            AssertTrue(ConfigValueValidator.IsUIntInRange("1280", 0, 1280),
                 "Expected maximum S1/S2 padding to be accepted.");
-            AssertFalse((bool)isUIntInRange.Invoke(null, new object[] { "1281", 0u, 1280u }),
+            AssertFalse(ConfigValueValidator.IsUIntInRange("1281", 0, 1280),
                 "Expected oversized S1/S2 padding to be rejected.");
-            AssertTrue((bool)isOneOf.Invoke(null, new object[] { "quic", new[] { "quic", "dns", "sip", "stun" } }),
+            AssertTrue(ConfigValueValidator.IsOneOf("quic", "quic", "dns", "sip", "stun"),
                 "Expected known Ip values to be accepted.");
-            AssertFalse((bool)isOneOf.Invoke(null, new object[] { "invalid", new[] { "chrome", "firefox", "curl", "random" } }),
+            AssertFalse(ConfigValueValidator.IsOneOf("invalid", "chrome", "firefox", "curl", "random"),
                 "Expected unknown Ib values to be rejected.");
         }
 
