@@ -617,6 +617,9 @@ namespace WireSockUI.Forms
         {
             connectTask.ContinueWith(task =>
             {
+                if (!TryGetCompletedConnectResult(task, out var result))
+                    return;
+
                 if (_shutdownComplete || IsDisposed || Disposing || !IsHandleCreated)
                     return;
 
@@ -626,7 +629,7 @@ namespace WireSockUI.Forms
                     {
                         try
                         {
-                            await CompleteTimedOutConnectCleanupAsync(task, generation, profile);
+                            await CompleteTimedOutConnectCleanupAsync(result, generation, profile);
                         }
                         catch (Exception ex)
                         {
@@ -643,20 +646,26 @@ namespace WireSockUI.Forms
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
 
-        private async Task CompleteTimedOutConnectCleanupAsync(Task<ConnectAttemptResult> connectTask, int generation,
-            string profile)
+        private static bool TryGetCompletedConnectResult(Task<ConnectAttemptResult> connectTask,
+            out ConnectAttemptResult result)
         {
-            ConnectAttemptResult result;
+            result = null;
+
             try
             {
-                result = await connectTask;
+                result = connectTask.GetAwaiter().GetResult();
+                return true;
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Timed-out tunnel connect finished with an error: {ex.Message}");
-                return;
+                return false;
             }
+        }
 
+        private async Task CompleteTimedOutConnectCleanupAsync(ConnectAttemptResult result, int generation,
+            string profile)
+        {
             try
             {
                 if (result.Connected)
