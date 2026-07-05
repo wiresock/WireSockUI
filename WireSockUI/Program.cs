@@ -484,9 +484,12 @@ namespace WireSockUI
                 IntPtr.Zero);
 
             if (handle.IsInvalid)
+            {
+                handle.Dispose();
                 throw new IOException(
                     $"Unable to open legacy profile '{Path.GetFileName(sourcePath)}'.",
                     new Win32Exception(Marshal.GetLastWin32Error()));
+            }
 
             try
             {

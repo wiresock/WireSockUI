@@ -48,9 +48,12 @@ namespace WireSockUI.Config
 
         public static bool IsBool(string value)
         {
-            return string.IsNullOrWhiteSpace(value) ||
-                   string.Equals(value.Trim(), "true", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value.Trim(), "false", StringComparison.OrdinalIgnoreCase);
+            if (string.IsNullOrWhiteSpace(value))
+                return true;
+
+            var trimmed = value.Trim();
+            return string.Equals(trimmed, "true", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(trimmed, "false", StringComparison.OrdinalIgnoreCase);
         }
 
         public static bool IsOneOf(string value, params string[] values)
@@ -58,8 +61,10 @@ namespace WireSockUI.Config
             if (string.IsNullOrWhiteSpace(value))
                 return true;
 
+            var trimmed = value.Trim();
+
             foreach (var item in values)
-                if (string.Equals(value.Trim(), item, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(trimmed, item, StringComparison.OrdinalIgnoreCase))
                     return true;
 
             return false;
