@@ -40,7 +40,7 @@ Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks req
 
 The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
 
-If a native connect or shutdown cleanup call does not return, WireSockUI attempts to reset the network lock and disables further tunnel operations with a recovery warning instead of leaving the Activate button silently stuck. Restart WireSockUI as administrator and use **Reset Kill Switch** from the tray menu if network access remains blocked.
+If a native connect cleanup call does not return, WireSockUI attempts to reset the network lock and disables further tunnel operations with a recovery warning instead of leaving the Activate button silently stuck. Shutdown cleanup timeouts are written to the diagnostic trace without blocking process exit. Restart WireSockUI as administrator and use **Reset Kill Switch** from the tray menu if network access remains blocked.
 
 ## Compatibility Notes
 

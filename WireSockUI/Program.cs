@@ -452,10 +452,15 @@ namespace WireSockUI
         {
             var parser = new WireguardConfigParser.ConfigParser(migratedProfilePath);
             var interfaceSection = parser.GetSection("Interface");
-            foreach (var key in ScriptHookKeys)
-                if (interfaceSection.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value))
-                    throw new InvalidOperationException(
-                        "The legacy profile contains script hooks. Import this profile manually to review and confirm the scripts.");
+            if (interfaceSection == null)
+                return;
+
+            foreach (var item in interfaceSection)
+                foreach (var key in ScriptHookKeys)
+                    if (string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(item.Value))
+                        throw new InvalidOperationException(
+                            "The legacy profile contains script hooks. Import this profile manually to review and confirm the scripts.");
         }
 
         private static void CopyLegacyProfileToTemporaryFile(string sourcePath, string destinationPath)

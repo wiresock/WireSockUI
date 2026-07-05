@@ -520,9 +520,6 @@
   <data name="TunnelOperationPending" xml:space="preserve">
     <value>A WireSock tunnel operation is already in progress. Wait for it to finish before trying again.</value>
   </data>
-  <data name="TunnelShutdownCleanupUnresolved" xml:space="preserve">
-    <value>WireSock UI could not verify that native tunnel cleanup finished before exit. If network access remains blocked, reopen WireSock UI as administrator and use Reset Kill Switch from the tray menu.</value>
-  </data>
   <data name="InterfaceStatusRecoveryRequired" xml:space="preserve">
     <value>Recovery required</value>
   </data>

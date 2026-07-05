@@ -562,7 +562,7 @@ namespace WireSockUI.Tests
             var path = WriteConfig("[Interface]\n" +
                                    $"PrivateKey = {PrivateKey}\n" +
                                    "Address = 10.0.0.2/32\n" +
-                                   "PostUp = powershell.exe -NoProfile -Command Write-Host test\n" +
+                                   "postup = powershell.exe -NoProfile -Command Write-Host test\n" +
                                    "\n" +
                                    "[Peer]\n" +
                                    $"PublicKey = {PublicKey}\n" +

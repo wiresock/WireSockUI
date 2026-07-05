@@ -321,7 +321,7 @@ namespace WireSockUI.Forms
 
             var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
             if (btnActivate != null)
-                btnActivate.Enabled = false;
+                SetActivateButtonEnabled(false);
 
             var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
             if (txtStatus != null)
@@ -474,9 +474,9 @@ namespace WireSockUI.Forms
                 {
                     Trace.TraceWarning(
                         $"WireSock manager shutdown exceeded {ShutdownDisconnectTimeoutMilliseconds} ms; continuing application exit.");
-                    TryResetNetworkLockAfterNativeCleanupFailure("shutdown timeout");
-                    MessageBox.Show(Resources.TunnelShutdownCleanupUnresolved, Resources.TunnelErrorTitle,
-                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    if (!TryResetNetworkLockAfterNativeCleanupFailure("shutdown timeout"))
+                        Trace.TraceWarning(
+                            "WireSock UI could not verify native tunnel cleanup before exit. Reopen WireSock UI as administrator and use Reset Kill Switch if network access remains blocked.");
 
                     cleanupTask.ContinueWith(task =>
                         {
@@ -796,7 +796,7 @@ namespace WireSockUI.Forms
         {
             Task.Delay(TimedOutConnectCleanupRecoveryMilliseconds).ContinueWith(_ =>
             {
-                if (_shutdownComplete || connectTask.IsCompleted || !IsTimedOutConnectCleanupInProgress())
+                if (_shutdownComplete || !IsTimedOutConnectCleanupInProgress())
                     return;
 
                 TryResetNetworkLockAfterNativeCleanupFailure("stalled timed-out connect cleanup");
@@ -1051,7 +1051,7 @@ namespace WireSockUI.Forms
                     if (btnActivate != null)
                     {
                         btnActivate.Text = Resources.ButtonActivating;
-                        btnActivate.Enabled = false;
+                        SetActivateButtonEnabled(false);
                     }
 
                     imgStatus?.Focus();
@@ -1069,7 +1069,7 @@ namespace WireSockUI.Forms
                     if (btnActivate != null)
                     {
                         btnActivate.Text = Resources.ButtonActive;
-                        btnActivate.Enabled = true;
+                        SetActivateButtonEnabled(true);
                     }
 
                     if (imgStatus != null)
@@ -1725,6 +1725,7 @@ namespace WireSockUI.Forms
                     btnActivate.Click += OnProfileClick;
 
                     layoutInterface.Controls.Add(btnActivate, 1, layoutInterface.RowCount - 1);
+                    SetActivateButtonEnabled(true);
 
                     layoutInterface.RowStyles.Add(new RowStyle(SizeType.AutoSize));
                     gbxInterface.Visible = true;
@@ -1781,7 +1782,7 @@ namespace WireSockUI.Forms
                         if (_wiresock.ProfileName == selectedConf)
                             UpdateState(ConnectionState.Connected, false);
                         else
-                            btnActivate.Enabled = false;
+                            SetActivateButtonEnabled(false);
                     }
                 }
                 catch (Exception ex)

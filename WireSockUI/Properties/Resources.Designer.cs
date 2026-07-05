@@ -1272,15 +1272,6 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to WireSock UI could not verify that native tunnel cleanup finished before exit. If network access remains blocked, reopen WireSock UI as administrator and use Reset Kill Switch from the tray menu..
-        /// </summary>
-        internal static string TunnelShutdownCleanupUnresolved {
-            get {
-                return ResourceManager.GetString("TunnelShutdownCleanupUnresolved", resourceCulture);
-            }
-        }
-
-        /// <summary>
         ///   Looks up a localized string similar to Recovery required.
         /// </summary>
         internal static string InterfaceStatusRecoveryRequired {

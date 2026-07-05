@@ -54,8 +54,6 @@ namespace WireSockUI.Forms
                 Profile.EnsureRegularProfileFile(profilePath);
                 txtEditor.Text = File.ReadAllText(profilePath);
             }
-
-            ApplySyntaxHighlighting();
         }
 
         public string ReturnValue { get; private set; }
