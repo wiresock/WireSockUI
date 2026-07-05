@@ -4,8 +4,11 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
+using WireSockUI.Forms;
 using WireSockUI.Native;
 
 namespace WireSockUI.Tests
@@ -45,7 +48,10 @@ namespace WireSockUI.Tests
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
-                { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi }
+                { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
+                { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
+                { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
+                { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
 
             var failures = 0;
@@ -324,10 +330,98 @@ namespace WireSockUI.Tests
             AssertEqual(Path.Combine(root, "Windows"), normalizedChild);
         }
 
+        private static void ProgramRejectsUserWritableWireSockLibraryDirectories()
+        {
+            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateWireSockLibraryDirectory",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (validate == null)
+                throw new InvalidOperationException("TryValidateWireSockLibraryDirectory helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                File.WriteAllText(Path.Combine(directory, "wgbooster.dll"), string.Empty);
+
+                try
+                {
+                    var security = Directory.GetAccessControl(directory);
+                    security.AddAccessRule(new FileSystemAccessRule(
+                        WindowsIdentity.GetCurrent().User,
+                        FileSystemRights.Modify,
+                        InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                        PropagationFlags.None,
+                        AccessControlType.Allow));
+                    Directory.SetAccessControl(directory, security);
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Temporary test folders are normally user-writable already; explicit ACL setup is best effort.
+                }
+
+                var args = new object[] { directory, null };
+                var accepted = (bool)validate.Invoke(null, args);
+
+                AssertFalse(accepted, "Expected user-writable WireSock library directories to be rejected.");
+                AssertTrue(args[1] == null, "Expected rejected WireSock library directories not to return a path.");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
+        private static void EditorValidatesAmneziaOptions()
+        {
+            var isUIntOrRange = typeof(FrmEdit).GetMethod("IsUIntOrRange",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var isUIntInRange = typeof(FrmEdit).GetMethod("IsUIntInRange",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var isOneOf = typeof(FrmEdit).GetMethod("IsOneOf",
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            if (isUIntOrRange == null || isUIntInRange == null || isOneOf == null)
+                throw new InvalidOperationException("Expected Amnezia editor validation helpers were not found.");
+
+            AssertTrue((bool)isUIntOrRange.Invoke(null, new object[] { "1-4", 0u, uint.MaxValue }),
+                "Expected decimal H ranges to be accepted.");
+            AssertTrue((bool)isUIntOrRange.Invoke(null, new object[] { "0x10-0x20", 0u, uint.MaxValue }),
+                "Expected hexadecimal H ranges to be accepted.");
+            AssertFalse((bool)isUIntOrRange.Invoke(null, new object[] { "4-1", 0u, uint.MaxValue }),
+                "Expected descending H ranges to be rejected.");
+            AssertTrue((bool)isUIntInRange.Invoke(null, new object[] { "1280", 0u, 1280u }),
+                "Expected maximum S1/S2 padding to be accepted.");
+            AssertFalse((bool)isUIntInRange.Invoke(null, new object[] { "1281", 0u, 1280u }),
+                "Expected oversized S1/S2 padding to be rejected.");
+            AssertTrue((bool)isOneOf.Invoke(null, new object[] { "quic", new[] { "quic", "dns", "sip", "stun" } }),
+                "Expected known Ip values to be accepted.");
+            AssertFalse((bool)isOneOf.Invoke(null, new object[] { "invalid", new[] { "chrome", "firefox", "curl", "random" } }),
+                "Expected unknown Ib values to be rejected.");
+        }
+
         private static void NetworkLockEnumMatchesWgboosterAbi()
         {
             AssertEqual(0, (int)WireguardBoosterExports.WgbNetworkLockMode.Disabled);
             AssertEqual(1, (int)WireguardBoosterExports.WgbNetworkLockMode.Enabled);
+        }
+
+        private static void StatsStructMatchesWgboosterAbi()
+        {
+            AssertEqual(32, Marshal.SizeOf<WireguardBoosterExports.WgbStats>());
+            AssertEqual(0, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("time_since_last_handshake").ToInt32());
+            AssertEqual(8, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("tx_bytes").ToInt32());
+            AssertEqual(16, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("rx_bytes").ToInt32());
+            AssertEqual(24, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("estimated_loss").ToInt32());
+            AssertEqual(28, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("estimated_rtt").ToInt32());
         }
 
         private static string WriteConfig(string contents)

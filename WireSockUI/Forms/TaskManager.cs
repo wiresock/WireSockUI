@@ -68,10 +68,11 @@ namespace WireSockUI.Forms
                     displayName = process.Name;
                 var iconKey = process.ProcessId.ToString();
 
-                // If the process's image file exists, extract its associated icon and add it to the list view's image list
-                if (File.Exists(process.ImageName))
+                // If the process's image file exists, extract its associated icon and add it to the list view's image list.
+                if (!string.IsNullOrWhiteSpace(process.ImageName) && File.Exists(process.ImageName))
                 {
-                    if (process.ImageName != null)
+                    try
+                    {
                         using (var icon = Icon.ExtractAssociatedIcon(process.ImageName))
                         {
                             if (icon != null)
@@ -79,8 +80,13 @@ namespace WireSockUI.Forms
                             else
                                 iconKey = defaultIconKey;
                         }
-                    else
+                    }
+                    catch (Exception ex)
+                    {
+                        System.Diagnostics.Trace.TraceWarning(
+                            $"Failed to extract process icon for '{process.ImageName}': {ex.Message}");
                         iconKey = defaultIconKey;
+                    }
                 }
                 else
                 {
@@ -96,26 +102,31 @@ namespace WireSockUI.Forms
         private void FilterProcesses(string filter)
         {
             lstProcesses.BeginUpdate();
-            lstProcesses.Items.Clear();
+            try
+            {
+                lstProcesses.Items.Clear();
 
-            if (string.IsNullOrEmpty(filter))
-            {
-                lstProcesses.Items.AddRange(_cachedProcessListItems.ToArray());
-            }
-            else
-            {
-                foreach (var item in _cachedProcessListItems)
+                if (string.IsNullOrEmpty(filter))
                 {
-                    if (item.Text.IndexOf(filter, StringComparison.OrdinalIgnoreCase) != -1)
+                    lstProcesses.Items.AddRange(_cachedProcessListItems.ToArray());
+                }
+                else
+                {
+                    foreach (var item in _cachedProcessListItems)
                     {
-                        var addedItem = lstProcesses.Items.Add(item);
-                        addedItem.Selected = true;
-                        addedItem.EnsureVisible();
+                        if (item.Text.IndexOf(filter, StringComparison.OrdinalIgnoreCase) != -1)
+                        {
+                            var addedItem = lstProcesses.Items.Add(item);
+                            addedItem.Selected = true;
+                            addedItem.EnsureVisible();
+                        }
                     }
                 }
             }
-
-            lstProcesses.EndUpdate();
+            finally
+            {
+                lstProcesses.EndUpdate();
+            }
         }
 
         private void OnRefreshClick(object sender, EventArgs e)
@@ -131,6 +142,9 @@ namespace WireSockUI.Forms
 
         private void OnProcessSelected(object sender, EventArgs e)
         {
+            if (lstProcesses.SelectedItems.Count == 0)
+                return;
+
             DialogResult = DialogResult.OK;
             ReturnValue = lstProcesses.SelectedItems[0].Text;
             Close();

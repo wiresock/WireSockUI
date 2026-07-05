@@ -146,31 +146,53 @@ namespace WireSockUI
             libraryDirectory = null;
 
             var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            if (ContainsWireSockLibrary(localDirectory))
-            {
-                if (!IsPotentiallyUserWritableDirectory(localDirectory))
-                {
-                    libraryDirectory = localDirectory;
-                    return true;
-                }
-
-                Trace.TraceWarning(
-                    $"Skipping app-local wgbooster.dll in user-writable directory '{localDirectory}'.");
-            }
+            if (TryValidateWireSockLibraryDirectory(localDirectory, out libraryDirectory))
+                return true;
 
             foreach (var installLocation in GetInstallLocations())
             {
                 foreach (var candidate in GetLibraryDirectories(installLocation))
                 {
-                    if (!ContainsWireSockLibrary(candidate))
-                        continue;
-
-                    libraryDirectory = candidate;
-                    return true;
+                    if (TryValidateWireSockLibraryDirectory(candidate, out libraryDirectory))
+                        return true;
                 }
             }
 
             return false;
+        }
+
+        private static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
+        {
+            libraryDirectory = null;
+
+            var fullDirectory = NormalizePathDirectory(directory);
+            if (fullDirectory == null || !ContainsWireSockLibrary(fullDirectory))
+                return false;
+
+            if (!TryIsReparsePoint(fullDirectory, out var directoryIsReparsePoint) || directoryIsReparsePoint)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is a reparse point or cannot be inspected.");
+                return false;
+            }
+
+            var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
+            if (!TryIsReparsePoint(libraryPath, out var libraryIsReparsePoint) || libraryIsReparsePoint)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is a reparse point or cannot be inspected.");
+                return false;
+            }
+
+            if (IsPotentiallyUserWritableDirectory(fullDirectory))
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is writable by non-administrative users.");
+                return false;
+            }
+
+            libraryDirectory = fullDirectory;
+            return true;
         }
 
         private static bool ContainsWireSockLibrary(string directory)

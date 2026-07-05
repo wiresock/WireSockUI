@@ -76,328 +76,339 @@ namespace WireSockUI.Forms
             var originalLength = txtEditor.SelectionLength;
             var originalColor = Color.Black;
 
-            lblName.Focus();
-
-            // removes any previous highlighting
-            txtEditor.SelectionStart = 0;
-            txtEditor.SelectionLength = txtEditor.Text.Length;
-            txtEditor.SelectionColor = originalColor;
-
-            txtEditor.SelectionFont = _editorRegularFont;
-          
-            foreach (Match m in ProfileMatch.Matches(txtEditor.Text))
+            try
             {
-                if (m.Groups["comment"].Success)
-                {
-                    txtEditor.SelectionStart = m.Groups["comment"].Index;
-                    txtEditor.SelectionLength = m.Groups["comment"].Length;
-                    txtEditor.SelectionFont = _editorItalicFont;
+                lblName.Focus();
 
-                    switch (m.Groups["comment"].Value[0])
+                // removes any previous highlighting
+                txtEditor.SelectionStart = 0;
+                txtEditor.SelectionLength = txtEditor.Text.Length;
+                txtEditor.SelectionColor = originalColor;
+
+                txtEditor.SelectionFont = _editorRegularFont;
+
+                foreach (Match m in ProfileMatch.Matches(txtEditor.Text))
+                {
+                    if (m.Groups["comment"].Success)
                     {
-                        case '#':
-                            txtEditor.SelectionColor = Color.LightSlateGray;
-                            break;
-                        case ';':
-                            txtEditor.SelectionColor = Color.SaddleBrown;
-                            break;
+                        txtEditor.SelectionStart = m.Groups["comment"].Index;
+                        txtEditor.SelectionLength = m.Groups["comment"].Length;
+                        txtEditor.SelectionFont = _editorItalicFont;
+
+                        switch (m.Groups["comment"].Value[0])
+                        {
+                            case '#':
+                                txtEditor.SelectionColor = Color.LightSlateGray;
+                                break;
+                            case ';':
+                                txtEditor.SelectionColor = Color.SaddleBrown;
+                                break;
+                        }
+
+                        continue;
                     }
 
-                    continue;
+                    if (m.Groups["section"].Success)
+                    {
+                        txtEditor.SelectionStart = m.Groups["section"].Index;
+                        txtEditor.SelectionLength = m.Groups["section"].Length;
+                        txtEditor.SelectionColor = Color.DarkBlue;
+                        txtEditor.SelectionFont = _editorBoldFont;
+
+                        switch (m.Groups["section"].Value.ToLowerInvariant())
+                        {
+                            case "[interface]":
+                            case "[peer]":
+                                break;
+                            // Unrecognized sections
+                            default:
+                                txtEditor.UnderlineSelection();
+                                hasErrors = true;
+                                break;
+                        }
+
+                        continue;
+                    }
+
+                    if (m.Groups["key"].Success)
+                    {
+                        txtEditor.SelectionStart = m.Groups["key"].Index;
+                        txtEditor.SelectionLength = m.Groups["key"].Length;
+                        txtEditor.SelectionColor = Color.Navy;
+
+                        var key = m.Groups["key"].Value.ToLowerInvariant();
+                        var value = string.Empty;
+
+                        if (m.Groups["value"].Success)
+                        {
+                            txtEditor.SelectionStart = m.Groups["value"].Index;
+                            txtEditor.SelectionLength = m.Groups["value"].Length;
+                            txtEditor.SelectionColor = Color.DarkGreen;
+
+                            value = m.Groups["value"].Value;
+                        }
+
+                        switch (key)
+                        {
+                            // base64 256-bit keys
+                            case "privatekey":
+                                {
+                                    if (string.IsNullOrEmpty(value))
+                                    {
+                                        // Generate a new private key
+                                        var newPrivateKey = Curve25519.CreateRandomPrivateKey();
+                                        var base64PrivateKey = Convert.ToBase64String(newPrivateKey);
+
+                                        // Insert the new private key into the text editor
+                                        txtEditor.SelectionStart = m.Groups["value"].Index;
+                                        txtEditor.SelectionLength = m.Groups["value"].Length;
+                                        txtEditor.SelectedText = base64PrivateKey;
+
+                                        // Update the public key display
+                                        txtPublicKey.Text = Convert.ToBase64String(Curve25519.GetPublicKey(newPrivateKey));
+                                        textChanged = true; // Set flag to true as text is changed
+                                    }
+                                    else
+                                    {
+                                        try
+                                        {
+                                            var binaryKey = Convert.FromBase64String(value);
+                                            if (binaryKey.Length != 32)
+                                                throw new FormatException();
+
+                                            txtPublicKey.Text = Convert.ToBase64String(Curve25519.GetPublicKey(binaryKey));
+                                        }
+                                        catch (FormatException)
+                                        {
+                                            txtEditor.UnderlineSelection();
+                                            hasErrors = true;
+                                        }
+                                    }
+                                }
+                                break;
+                            case "publickey":
+                            case "presharedkey":
+                                {
+                                    if (!string.IsNullOrEmpty(value))
+                                        try
+                                        {
+                                            var binaryKey = Convert.FromBase64String(value);
+
+                                            if (binaryKey.Length != 32)
+                                                throw new FormatException();
+                                        }
+                                        catch (FormatException)
+                                        {
+                                            txtEditor.UnderlineSelection();
+                                            hasErrors = true;
+                                        }
+                                }
+                                break;
+                            // IPv4/IPv6 CIDR notation values
+                            case "address":
+                            case "allowedips":
+                            case "disallowedips":
+                                {
+                                    foreach (Match e in MultiValueMatch.Matches(value))
+                                        if (!string.IsNullOrWhiteSpace(e.Value) &&
+                                            !IpHelper.IsValidSubnetOrSingleIpAddress(e.Value.Trim()))
+                                        {
+                                            txtEditor.SelectionStart = m.Groups["value"].Index + e.Index;
+                                            txtEditor.SelectionLength = e.Length;
+                                            txtEditor.UnderlineSelection();
+                                            hasErrors = true;
+                                        }
+                                }
+                                break;
+                            // IPv4/IPv6 values
+                            case "dns":
+                                {
+                                    foreach (Match e in MultiValueMatch.Matches(value))
+                                        if (!string.IsNullOrWhiteSpace(e.Value) && !IpHelper.IsValidIpAddress(e.Value.Trim()))
+                                        {
+                                            txtEditor.SelectionStart = m.Groups["value"].Index + e.Index;
+                                            txtEditor.SelectionLength = e.Length;
+                                            txtEditor.UnderlineSelection();
+                                            hasErrors = true;
+                                        }
+                                }
+
+                                break;
+                            // IPv4, IPv6 or DNS value
+                            case "endpoint":
+                                if (!IpHelper.IsValidAddress(value.Trim()))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+
+                                break;
+                            case "socks5proxy":
+                                if (!string.IsNullOrWhiteSpace(value) && !IpHelper.IsValidAddress(value.Trim()))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+
+                                break;
+                            // Numerical values
+                            case "mtu":
+                                if (!IsIntInRange(value, 576, 65535))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "listenport":
+                                if (!IsIntInRange(value, 1, 65535))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "persistentkeepalive":
+                            case "scriptexectimeout":
+                                if (!IsIntInRange(value, 0, 65535))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "jc":
+                                if (!IsUIntInRange(value, 0, 128))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "jd":
+                                if (!IsUIntInRange(value, 0, 200))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "jmin":
+                            case "jmax":
+                            case "s1":
+                            case "s2":
+                                if (!IsUIntInRange(value, 0, 1280))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "s3":
+                            case "s4":
+                                if (!IsUIntInRange(value, 0, uint.MaxValue))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "h1":
+                            case "h2":
+                            case "h3":
+                            case "h4":
+                                if (!IsUIntOrRange(value, 0, uint.MaxValue))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            // Comma-delimited string values
+                            case "allowedapps":
+                            case "disallowedapps":
+                                {
+                                    foreach (Match e in MultiValueMatch.Matches(value))
+                                        if (!string.IsNullOrWhiteSpace(e.Value) &&
+                                            !Regex.IsMatch(e.Value.Trim(),
+                                                @"^(?:[a-zA-Z]:\\)?(?:[^<>:\\\""/\\|?*\n\r]+\\)*[^<>:\\\""/\\|?*\n\r]*$",
+                                                RegexOptions.IgnoreCase))
+                                        {
+                                            txtEditor.SelectionStart = m.Groups["value"].Index + e.Index;
+                                            txtEditor.SelectionLength = e.Length;
+                                            txtEditor.UnderlineSelection();
+                                            hasErrors = true;
+                                        }
+                                }
+                                break;
+                            // Boolean values
+                            case "bypasslantraffic":
+                            case "virtualadaptermode":
+                            case "socks5proxyalltraffic":
+                                if (!IsBool(value))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            // Known free-form or WireGuard-managed values
+                            case "table":
+                                break;
+                            case "id":
+                                if (!string.IsNullOrWhiteSpace(value) &&
+                                    Uri.CheckHostName(value.Trim()) == UriHostNameType.Unknown)
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "ip":
+                                if (!IsOneOf(value, "quic", "dns", "sip", "stun"))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "ib":
+                                if (!IsOneOf(value, "chrome", "firefox", "curl", "random"))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "i1":
+                            case "i2":
+                            case "i3":
+                            case "i4":
+                            case "i5":
+                                break;
+                            // String values
+                            case "socks5proxyusername":
+                            case "socks5proxypassword":
+                            case "preup":
+                            case "postup":
+                            case "predown":
+                            case "postdown":
+                                break;
+                            // Unrecognized keys
+                            default:
+                                break;
+                        }
+                    }
                 }
 
-                if (m.Groups["section"].Success)
-                {
-                    txtEditor.SelectionStart = m.Groups["section"].Index;
-                    txtEditor.SelectionLength = m.Groups["section"].Length;
-                    txtEditor.SelectionColor = Color.DarkBlue;
-                    txtEditor.SelectionFont = _editorBoldFont;
-
-                    switch (m.Groups["section"].Value.ToLowerInvariant())
-                    {
-                        case "[interface]":
-                        case "[peer]":
-                            break;
-                        // Unrecognized sections
-                        default:
-                            txtEditor.UnderlineSelection();
-                            hasErrors = true;
-                            break;
-                    }
-
-                    continue;
-                }
-
-                if (m.Groups["key"].Success)
-                {
-                    txtEditor.SelectionStart = m.Groups["key"].Index;
-                    txtEditor.SelectionLength = m.Groups["key"].Length;
-                    txtEditor.SelectionColor = Color.Navy;
-
-                    var key = m.Groups["key"].Value.ToLowerInvariant();
-                    var value = string.Empty;
-
-                    if (m.Groups["value"].Success)
-                    {
-                        txtEditor.SelectionStart = m.Groups["value"].Index;
-                        txtEditor.SelectionLength = m.Groups["value"].Length;
-                        txtEditor.SelectionColor = Color.DarkGreen;
-
-                        value = m.Groups["value"].Value;
-                    }
-
-                    switch (key)
-                    {
-                        // base64 256-bit keys
-                        case "privatekey":
-                        {
-                            if (string.IsNullOrEmpty(value))
-                            {
-                                // Generate a new private key
-                                var newPrivateKey = Curve25519.CreateRandomPrivateKey();
-                                var base64PrivateKey = Convert.ToBase64String(newPrivateKey);
-
-                                // Insert the new private key into the text editor
-                                txtEditor.SelectionStart = m.Groups["value"].Index;
-                                txtEditor.SelectionLength = m.Groups["value"].Length;
-                                txtEditor.SelectedText = base64PrivateKey;
-
-                                // Update the public key display
-                                txtPublicKey.Text = Convert.ToBase64String(Curve25519.GetPublicKey(newPrivateKey));
-                                textChanged = true; // Set flag to true as text is changed
-                            }
-                            else
-                            {
-                                try
-                                {
-                                    var binaryKey = Convert.FromBase64String(value);
-                                    if (binaryKey.Length != 32)
-                                        throw new FormatException();
-
-                                    txtPublicKey.Text = Convert.ToBase64String(Curve25519.GetPublicKey(binaryKey));
-                                }
-                                catch (FormatException)
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                            }
-                        }
-                            break;
-                        case "publickey":
-                        case "presharedkey":
-                        {
-                            if (!string.IsNullOrEmpty(value))
-                                try
-                                {
-                                    var binaryKey = Convert.FromBase64String(value);
-
-                                    if (binaryKey.Length != 32)
-                                        throw new FormatException();
-                                }
-                                catch (FormatException)
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                        }
-                            break;
-                        // IPv4/IPv6 CIDR notation values
-                        case "address":
-                        case "allowedips":
-                        case "disallowedips":
-                        {
-                            foreach (Match e in MultiValueMatch.Matches(value))
-                                if (!string.IsNullOrWhiteSpace(e.Value) &&
-                                    !IpHelper.IsValidSubnetOrSingleIpAddress(e.Value.Trim()))
-                                {
-                                    txtEditor.SelectionStart = m.Groups["value"].Index + e.Index;
-                                    txtEditor.SelectionLength = e.Length;
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                        }
-                            break;
-                        // IPv4/IPv6 values
-                        case "dns":
-                        {
-                            foreach (Match e in MultiValueMatch.Matches(value))
-                                if (!string.IsNullOrWhiteSpace(e.Value) && !IpHelper.IsValidIpAddress(e.Value.Trim()))
-                                {
-                                    txtEditor.SelectionStart = m.Groups["value"].Index + e.Index;
-                                    txtEditor.SelectionLength = e.Length;
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                        }
-
-                            break;
-                        // IPv4, IPv6 or DNS value
-                        case "endpoint":
-                            if (!IpHelper.IsValidAddress(value.Trim()))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-
-                            break;
-                        case "socks5proxy":
-                            if (!string.IsNullOrWhiteSpace(value) && !IpHelper.IsValidAddress(value.Trim()))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-
-                            break;
-                        // Numerical values
-                        case "mtu":
-                            if (!IsIntInRange(value, 576, 65535))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "listenport":
-                            if (!IsIntInRange(value, 1, 65535))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "persistentkeepalive":
-                        case "scriptexectimeout":
-                            if (!IsIntInRange(value, 0, 65535))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "jc":
-                            if (!IsUIntInRange(value, 0, 128))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "jd":
-                            if (!IsUIntInRange(value, 0, 200))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "jmin":
-                        case "jmax":
-                        case "s1":
-                        case "s2":
-                            if (!IsUIntInRange(value, 0, 1280))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "s3":
-                        case "s4":
-                            if (!IsUIntInRange(value, 0, uint.MaxValue))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "h1":
-                        case "h2":
-                        case "h3":
-                        case "h4":
-                            if (!IsUIntOrRange(value, 0, uint.MaxValue))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        // Comma-delimited string values
-                        case "allowedapps":
-                        case "disallowedapps":
-                        {
-                            foreach (Match e in MultiValueMatch.Matches(value))
-                                if (!string.IsNullOrWhiteSpace(e.Value) &&
-                                    !Regex.IsMatch(e.Value.Trim(),
-                                        @"^(?:[a-zA-Z]:\\)?(?:[^<>:\\\""/\\|?*\n\r]+\\)*[^<>:\\\""/\\|?*\n\r]*$",
-                                        RegexOptions.IgnoreCase))
-                                {
-                                    txtEditor.SelectionStart = m.Groups["value"].Index + e.Index;
-                                    txtEditor.SelectionLength = e.Length;
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                        }
-                            break;
-                        // Boolean values
-                        case "bypasslantraffic":
-                        case "virtualadaptermode":
-                        case "socks5proxyalltraffic":
-                            if (!IsBool(value))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        // Known free-form or WireGuard-managed values
-                        case "table":
-                            break;
-                        case "id":
-                            if (!string.IsNullOrWhiteSpace(value) &&
-                                Uri.CheckHostName(value.Trim()) == UriHostNameType.Unknown)
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "ip":
-                            if (!IsOneOf(value, "quic", "dns", "sip", "stun"))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "ib":
-                            if (!IsOneOf(value, "chrome", "firefox", "curl", "random"))
-                            {
-                                txtEditor.UnderlineSelection();
-                                hasErrors = true;
-                            }
-                            break;
-                        case "i1":
-                        case "i2":
-                        case "i3":
-                        case "i4":
-                        case "i5":
-                            break;
-                        // String values
-                        case "socks5proxyusername":
-                        case "socks5proxypassword":
-                        case "preup":
-                        case "postup":
-                        case "predown":
-                        case "postdown":
-                            break;
-                        // Unrecognized keys
-                        default:
-                            break;
-                    }
-                }
+                btnSave.Enabled = !hasErrors;
+                return textChanged;
             }
+            finally
+            {
+                try
+                {
+                    // restoring the original settings
+                    txtEditor.SelectionStart = Math.Min(originalIndex, txtEditor.TextLength);
+                    txtEditor.SelectionLength = Math.Min(originalLength, txtEditor.TextLength - txtEditor.SelectionStart);
+                    txtEditor.SelectionColor = originalColor;
+                    txtEditor.Focus();
+                }
+                catch (Exception ex)
+                {
+                    Trace.TraceWarning($"Failed to restore editor selection after highlighting: {ex.Message}");
+                }
 
-            // restoring the original settings
-            txtEditor.SelectionStart = originalIndex;
-            txtEditor.SelectionLength = originalLength;
-            txtEditor.SelectionColor = originalColor;
-
-            txtEditor.Focus();
-
-            btnSave.Enabled = !hasErrors;
-
-            _highlighting = false;
-            return textChanged;
+                _highlighting = false;
+            }
         }
 
         private static bool IsIntInRange(string value, int minValue, int maxValue)
