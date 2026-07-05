@@ -166,21 +166,15 @@ namespace WireSockUI
             libraryDirectory = null;
 
             var fullDirectory = NormalizePathDirectory(directory);
-            if (fullDirectory == null || !ContainsWireSockLibrary(fullDirectory))
+            if (fullDirectory == null ||
+                !TryGetExistingAttributes(fullDirectory, out var directoryAttributes) ||
+                (directoryAttributes & FileAttributes.Directory) == 0)
                 return false;
 
-            if (!TryIsReparsePoint(fullDirectory, out var directoryIsReparsePoint) || directoryIsReparsePoint)
+            if ((directoryAttributes & FileAttributes.ReparsePoint) != 0)
             {
                 Trace.TraceWarning(
-                    $"Skipping WireSock library directory '{fullDirectory}' because it is a reparse point or cannot be inspected.");
-                return false;
-            }
-
-            var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
-            if (!TryIsReparsePoint(libraryPath, out var libraryIsReparsePoint) || libraryIsReparsePoint)
-            {
-                Trace.TraceWarning(
-                    $"Skipping WireSock library '{libraryPath}' because it is a reparse point or cannot be inspected.");
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is a reparse point.");
                 return false;
             }
 
@@ -188,6 +182,24 @@ namespace WireSockUI
             {
                 Trace.TraceWarning(
                     $"Skipping WireSock library directory '{fullDirectory}' because it is writable by non-administrative users.");
+                return false;
+            }
+
+            var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
+            if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes))
+                return false;
+
+            if ((libraryAttributes & FileAttributes.Directory) != 0)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is a directory.");
+                return false;
+            }
+
+            if ((libraryAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock library '{libraryPath}' because it is a reparse point.");
                 return false;
             }
 
@@ -200,20 +212,6 @@ namespace WireSockUI
 
             libraryDirectory = fullDirectory;
             return true;
-        }
-
-        private static bool ContainsWireSockLibrary(string directory)
-        {
-            try
-            {
-                return !string.IsNullOrWhiteSpace(directory) &&
-                       File.Exists(Path.Combine(directory, "wgbooster.dll"));
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Skipping invalid WireSock library directory '{directory}': {ex.Message}");
-                return false;
-            }
         }
 
         private static string[] GetLibraryDirectories(string installLocation)
@@ -390,14 +388,36 @@ namespace WireSockUI
         {
             isReparsePoint = false;
 
+            if (!TryGetExistingAttributes(path, out var attributes, true))
+                return false;
+
+            isReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0;
+            return true;
+        }
+
+        private static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
+            bool warnOnFailure = false)
+        {
+            attributes = 0;
+
             try
             {
-                isReparsePoint = (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+                attributes = File.GetAttributes(path);
                 return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
+                if (warnOnFailure)
+                    Trace.TraceWarning($"Unable to inspect file system attributes for '{path}': {ex.Message}");
+
                 return false;
             }
         }
