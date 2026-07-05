@@ -327,8 +327,15 @@ namespace WireSockUI
                 }
 
                 var destinationPath = Profile.GetProfilePath(profileName);
-                if (File.Exists(destinationPath))
+                if (Profile.ProfilePathExists(destinationPath))
                 {
+                    if (!Profile.IsRegularProfileFile(destinationPath, out var diagnostic))
+                    {
+                        Trace.TraceWarning(
+                            $"Skipping legacy profile '{profileName}' because the secured profile path is unsafe: {diagnostic}");
+                        continue;
+                    }
+
                     if (FilesHaveSameContent(legacyProfilePath, destinationPath))
                         TryDeleteLegacyProfile(legacyProfilePath, profileName);
                     else

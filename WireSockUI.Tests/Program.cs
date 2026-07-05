@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Native;
@@ -13,6 +14,15 @@ namespace WireSockUI.Tests
     {
         private static readonly string PrivateKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray());
         private static readonly string PublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)2, 32).ToArray());
+        private const int SymbolicLinkFlagFile = 0;
+        private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.I1)]
+        private static extern bool CreateSymbolicLink(
+            string lpSymlinkFileName,
+            string lpTargetFileName,
+            int dwFlags);
 
         private static int Main()
         {
@@ -24,6 +34,9 @@ namespace WireSockUI.Tests
                 { "Profile path rejects unsafe names", ProfilePathRejectsUnsafeNames },
                 { "Profile reports configured script hooks", ProfileReportsConfiguredScriptHooks },
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
+                { "Profile rejects directory profile paths", ProfileRejectsDirectoryProfilePaths },
+                { "Profile rejects reparse point profile files", ProfileRejectsReparsePointProfileFiles },
+                { "Profile reports missing profile paths clearly", ProfileReportsMissingProfilePathsClearly },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
@@ -139,6 +152,57 @@ namespace WireSockUI.Tests
 
                 var profiles = Profile.GetProfiles().ToList();
                 AssertTrue(profiles.Contains("Office"), "Expected .CONF profiles to be listed on Windows.");
+            });
+        }
+
+        private static void ProfileRejectsReparsePointProfileFiles()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var target = Path.Combine(Global.ConfigsFolder, "target.conf");
+                var link = Path.Combine(Global.ConfigsFolder, "linked.conf");
+                File.WriteAllText(target, ValidConfig());
+
+                if (!TryCreateFileSymbolicLink(link, target))
+                {
+                    Console.WriteLine("SKIP file symlink creation unavailable; reparse profile check not exercised.");
+                    return;
+                }
+
+                AssertTrue(Profile.ProfilePathExists(link),
+                    "Expected profile path existence checks to detect reparse point files.");
+                var profiles = Profile.GetProfiles().ToList();
+                AssertFalse(profiles.Contains("linked", StringComparer.OrdinalIgnoreCase),
+                    "Expected reparse point profiles to be excluded from enumeration.");
+                AssertThrows<IOException>(() => new Profile(link), "reparse point");
+            });
+        }
+
+        private static void ProfileRejectsDirectoryProfilePaths()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var profileDirectory = Path.Combine(Global.ConfigsFolder, "folder.conf");
+                Directory.CreateDirectory(profileDirectory);
+
+                var profiles = Profile.GetProfiles().ToList();
+                AssertFalse(profiles.Contains("folder", StringComparer.OrdinalIgnoreCase),
+                    "Expected directory profile paths to be excluded from enumeration.");
+                AssertThrows<IOException>(() => Profile.EnsureRegularProfileFile(profileDirectory), "directory");
+                AssertThrows<IOException>(() => new Profile(profileDirectory), "directory");
+            });
+        }
+
+        private static void ProfileReportsMissingProfilePathsClearly()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var missingProfile = Path.Combine(Global.ConfigsFolder, "missing.conf");
+
+                AssertFalse(Profile.IsRegularProfileFile(missingProfile, out var diagnostic),
+                    "Expected missing profile paths to be rejected.");
+                AssertTrue(diagnostic.IndexOf("does not exist", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected a clear missing-file diagnostic, got '{diagnostic}'.");
             });
         }
 
@@ -274,6 +338,27 @@ namespace WireSockUI.Tests
             var path = Path.Combine(directory, $"{Guid.NewGuid():N}.conf");
             File.WriteAllText(path, contents);
             return path;
+        }
+
+        private static string ValidConfig()
+        {
+            return "[Interface]\n" +
+                   $"PrivateKey = {PrivateKey}\n" +
+                   "Address = 10.0.0.2/32\n" +
+                   "\n" +
+                   "[Peer]\n" +
+                   $"PublicKey = {PublicKey}\n" +
+                   "Endpoint = example.com:51820\n" +
+                   "AllowedIPs = 0.0.0.0/0\n";
+        }
+
+        private static bool TryCreateFileSymbolicLink(string linkPath, string targetPath)
+        {
+            if (CreateSymbolicLink(linkPath, targetPath,
+                    SymbolicLinkFlagFile | SymbolicLinkFlagAllowUnprivilegedCreate))
+                return true;
+
+            return CreateSymbolicLink(linkPath, targetPath, SymbolicLinkFlagFile);
         }
 
         private static void WithTemporaryConfigFolder(Action action)

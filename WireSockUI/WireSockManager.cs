@@ -42,7 +42,9 @@ namespace WireSockUI
 
         private readonly LogPrinter _logPrinter;
 
+        private const int MaxQueuedLogMessages = 1000;
         private readonly BlockingCollection<LogMessage> _logQueue;
+        private readonly object _logQueueSyncRoot = new object();
         private readonly BackgroundWorker _logWorker;
         private readonly object _syncRoot = new object();
 
@@ -60,7 +62,9 @@ namespace WireSockUI
         /// </param>
         public WireSockManager(LogMessageCallback logMessageCallback = null)
         {
-            _logQueue = new BlockingCollection<LogMessage>(new ConcurrentQueue<LogMessage>());
+            _logQueue = new BlockingCollection<LogMessage>(
+                new ConcurrentQueue<LogMessage>(),
+                MaxQueuedLogMessages);
             _logWorker = InitializeLogWorker(logMessageCallback);
             _logWorker.RunWorkerAsync();
 
@@ -337,12 +341,25 @@ namespace WireSockUI
         /// <param name="message">The message to append to the log queue.</param>
         private void PrintLog(string message)
         {
-            if (_disposed || _logQueue.IsAddingCompleted)
+            if (_disposed)
                 return;
 
             try
             {
-                _logQueue.Add(new LogMessage { Message = message });
+                var logMessage = new LogMessage { Message = message };
+
+                lock (_logQueueSyncRoot)
+                {
+                    // CompleteAdding shares this lock, so a failed TryAdd below means the bounded queue is full.
+                    if (_disposed || _logQueue.IsAddingCompleted)
+                        return;
+
+                    if (_logQueue.TryAdd(logMessage))
+                        return;
+
+                    _logQueue.TryTake(out _);
+                    _logQueue.TryAdd(logMessage);
+                }
             }
             catch (InvalidOperationException)
             {
@@ -406,8 +423,11 @@ namespace WireSockUI
         {
             try
             {
-                if (!_logQueue.IsAddingCompleted)
-                    _logQueue.CompleteAdding();
+                lock (_logQueueSyncRoot)
+                {
+                    if (!_logQueue.IsAddingCompleted)
+                        _logQueue.CompleteAdding();
+                }
             }
             catch (ObjectDisposedException)
             {
@@ -481,6 +501,9 @@ namespace WireSockUI
 
                 try
                 {
+                    if (!Profile.IsRegularProfileFile(profilePath, out var profileDiagnostic))
+                        return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
+
                     if (_handle != IntPtr.Zero && !DropCurrentHandle(true))
                         return ShowTunnelError(
                             "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");

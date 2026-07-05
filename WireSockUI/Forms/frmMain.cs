@@ -31,6 +31,8 @@ namespace WireSockUI.Forms
         private readonly BackgroundWorker _tunnelConnectionWorker;
         private readonly BackgroundWorker _tunnelStateWorker;
         private const int TunnelConnectionTimeoutMilliseconds = 30000;
+        private const int MaxVisibleLogMessages = 2000;
+        private const int ShutdownDisconnectTimeoutMilliseconds = 5000;
 
         /**
          * @brief The manager that handles the Wireguard connections.
@@ -44,6 +46,8 @@ namespace WireSockUI.Forms
         private int _tunnelGeneration;
         private int _tunnelConnectionTimeoutGeneration;
         private Icon _ownedTrayIcon;
+        private Image _inactiveStatusImage;
+        private Image _connectedStatusImage;
 
         private sealed class TunnelConnectionProgress
         {
@@ -77,8 +81,10 @@ namespace WireSockUI.Forms
 
             // Configure icons
             Icon = Resources.ico;
+            _inactiveStatusImage = BitmapExtensions.DrawCircle(16, 15, Brushes.DarkGray);
+            _connectedStatusImage = GetWindowsIconBitmap(WindowsIcons.Icons.Activated, 16);
             SetTrayIcon(Resources.ico, false);
-            cmiStatus.Image = BitmapExtensions.DrawCircle(16, 15, Brushes.DarkGray);
+            SetStatusImage(null, _inactiveStatusImage);
 
             // Populate menu items with Windows supplied icons
             ddmAddTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Addtunnel, 16);
@@ -154,6 +160,49 @@ namespace WireSockUI.Forms
         {
             if (layoutInterface.Controls["btnActivate"] is Button btnActivate)
                 btnActivate.Enabled = enabled;
+        }
+
+        private void SetStatusImage(PictureBox imgStatus, Image image)
+        {
+            if (imgStatus != null)
+                imgStatus.Image = image;
+
+            cmiStatus.Image = image;
+        }
+
+        private void DisposeStatusImages()
+        {
+            foreach (var control in layoutInterface.Controls.Find("imgStatus", true))
+                if (control is PictureBox pictureBox)
+                    pictureBox.Image = null;
+
+            cmiStatus.Image = null;
+            _inactiveStatusImage?.Dispose();
+            _inactiveStatusImage = null;
+            _connectedStatusImage?.Dispose();
+            _connectedStatusImage = null;
+        }
+
+        private void ClearDynamicLayout(TableLayoutPanel panel)
+        {
+            while (panel.Controls.Count > 0)
+            {
+                var control = panel.Controls[0];
+                DetachSharedStatusImages(control);
+                panel.Controls.RemoveAt(0);
+                control.Dispose();
+            }
+        }
+
+        private void DetachSharedStatusImages(Control control)
+        {
+            if (control is PictureBox pictureBox &&
+                (ReferenceEquals(pictureBox.Image, _inactiveStatusImage) ||
+                 ReferenceEquals(pictureBox.Image, _connectedStatusImage)))
+                pictureBox.Image = null;
+
+            foreach (Control child in control.Controls)
+                DetachSharedStatusImages(child);
         }
 
         private bool TryGetProfileItem(string profileName, out ListViewItem profileItem)
@@ -261,23 +310,59 @@ namespace WireSockUI.Forms
             _tunnelConnectionWorker.CancelAsync();
             _tunnelStateWorker.CancelAsync();
 
-            try
-            {
-                _wiresock?.Disconnect();
-                _wiresock?.Dispose();
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to cleanly shut down WireSock manager: {ex.Message}");
-            }
+            DisposeWireSockWithTimeout();
 
             trayIcon.Visible = false;
             SetTrayIcon(null, false);
+            DisposeStatusImages();
 
             if (Global.AlreadyRunning != null)
             {
                 Global.AlreadyRunning.Dispose();
                 Global.AlreadyRunning = null;
+            }
+        }
+
+        private void DisposeWireSockWithTimeout()
+        {
+            if (_wiresock == null)
+                return;
+
+            try
+            {
+                var cleanupTask = Task.Run(() =>
+                {
+                    try
+                    {
+                        _wiresock.Disconnect();
+                    }
+                    finally
+                    {
+                        _wiresock.Dispose();
+                    }
+                });
+
+                if (!cleanupTask.Wait(ShutdownDisconnectTimeoutMilliseconds))
+                {
+                    Trace.TraceWarning(
+                        $"WireSock manager shutdown exceeded {ShutdownDisconnectTimeoutMilliseconds} ms; continuing application exit.");
+
+                    cleanupTask.ContinueWith(task =>
+                            Trace.TraceWarning(
+                                $"WireSock manager shutdown completed with an error after exit continued: {task.Exception?.GetBaseException().Message}"),
+                        CancellationToken.None,
+                        TaskContinuationOptions.OnlyOnFaulted,
+                        TaskScheduler.Default);
+                }
+            }
+            catch (AggregateException ex)
+            {
+                Trace.TraceWarning(
+                    $"Failed to cleanly shut down WireSock manager: {ex.GetBaseException().Message}");
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to cleanly shut down WireSock manager: {ex.Message}");
             }
         }
 
@@ -390,8 +475,14 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing)
                     return;
+
+                if (e.Error != null)
+                {
+                    Trace.TraceWarning($"Tunnel connection monitor stopped unexpectedly: {e.Error.Message}");
+                    return;
+                }
 
                 if (_currentState == ConnectionState.Connecting && !_wiresock.Connected && !worker.IsBusy)
                     worker.RunWorkerAsync(CurrentTunnelGeneration());
@@ -518,8 +609,14 @@ namespace WireSockUI.Forms
 
             worker.RunWorkerCompleted += (s, e) =>
             {
-                if (_shutdownComplete || IsDisposed || Disposing || e.Cancelled || e.Error != null)
+                if (_shutdownComplete || IsDisposed || Disposing)
                     return;
+
+                if (e.Error != null)
+                {
+                    Trace.TraceWarning($"Tunnel state monitor stopped unexpectedly: {e.Error.Message}");
+                    return;
+                }
 
                 if (_currentState == ConnectionState.Connected && _wiresock.Connected && !worker.IsBusy)
                     worker.RunWorkerAsync(CurrentTunnelGeneration());
@@ -636,13 +733,11 @@ namespace WireSockUI.Forms
 
                     if (imgStatus != null)
                     {
-                        imgStatus.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Activated, 16);
+                        SetStatusImage(imgStatus, _connectedStatusImage);
                         if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusActive;
 
                         SetTrayIcon(Resources.ico.SuperImpose(64, WindowsIcons.Icons.Activated, 48, 24), true);
                         trayIcon.Text = Resources.TrayActive;
-
-                        cmiStatus.Image = imgStatus.Image;
                     }
 
                     cmiStatus.Text = Resources.ContextMenuActive;
@@ -693,13 +788,11 @@ namespace WireSockUI.Forms
 
                     if (imgStatus != null)
                     {
-                        imgStatus.Image = BitmapExtensions.DrawCircle(16, 15, Brushes.DarkGray);
+                        SetStatusImage(imgStatus, _inactiveStatusImage);
                         if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusInactive;
 
                         SetTrayIcon(Resources.ico, false);
                         trayIcon.Text = Resources.TrayInactive;
-
-                        cmiStatus.Image = imgStatus.Image;
                     }
 
                     cmiStatus.Text = Resources.ContextMenuInactive;
@@ -837,18 +930,23 @@ namespace WireSockUI.Forms
 
                 var profileName = Path.GetFileNameWithoutExtension(filePath);
 
-                if (Profile.GetProfiles().Contains(profileName, StringComparer.OrdinalIgnoreCase))
-                {
-                    MessageBox.Show(string.Format(Resources.AddProfileExistsMsg, profileName),
-                        Resources.AddProfileExistsTitle,
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return;
-                }
-
                 if (!Profile.IsValidProfileName(profileName))
                 {
                     MessageBox.Show(Resources.EditProfileNameError, Resources.ProfileError, MessageBoxButtons.OK,
                         MessageBoxIcon.Error);
+                    return;
+                }
+
+                var destinationPath = Profile.GetProfilePath(profileName);
+                if (Profile.ProfilePathExists(destinationPath))
+                {
+                    var message = Profile.IsRegularProfileFile(destinationPath, out var diagnostic)
+                        ? string.Format(Resources.AddProfileExistsMsg, profileName)
+                        : diagnostic;
+
+                    MessageBox.Show(message,
+                        Resources.AddProfileExistsTitle,
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return;
                 }
 
@@ -858,7 +956,7 @@ namespace WireSockUI.Forms
                     if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profile))
                         return;
 
-                    File.Copy(filePath, Profile.GetProfilePath(profileName));
+                    File.Copy(filePath, destinationPath);
                     LoadProfiles(profileName);
                 }
                 catch (Exception ex)
@@ -911,7 +1009,9 @@ namespace WireSockUI.Forms
                     if (!await DisconnectCurrentTunnelAsync())
                         return;
 
-                File.Delete(Profile.GetProfilePath(selectedConf));
+                var profilePath = Profile.GetProfilePath(selectedConf);
+                Profile.EnsureRegularProfileFile(profilePath);
+                File.Delete(profilePath);
                 LoadProfiles();
             }
             catch (Exception ex)
@@ -1135,6 +1235,9 @@ namespace WireSockUI.Forms
                 ListViewItem item = new ListViewItem(new[]
                     { logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message });
                 lstLog.Items.Add(item);
+                while (lstLog.Items.Count > MaxVisibleLogMessages)
+                    lstLog.Items.RemoveAt(0);
+
                 lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
             }
             catch (ObjectDisposedException)
@@ -1167,15 +1270,15 @@ namespace WireSockUI.Forms
         {
             gbxInterface.Visible = false;
             gbxInterface.Text = string.Empty;
-            layoutInterface.Controls.Clear();
+            ClearDynamicLayout(layoutInterface);
             layoutInterface.RowStyles.Clear();
 
             gbxPeer.Visible = false;
-            layoutPeer.Controls.Clear();
+            ClearDynamicLayout(layoutPeer);
             layoutPeer.RowStyles.Clear();
 
             gbxState.Visible = false;
-            layoutState.Controls.Clear();
+            ClearDynamicLayout(layoutState);
             layoutState.RowStyles.Clear();
 
             if (e.IsSelected)
@@ -1190,7 +1293,7 @@ namespace WireSockUI.Forms
                     gbxInterface.Text = string.Format(Resources.InterfaceTitle, selectedConf);
 
                     AddRow(layoutInterface, "Status", Resources.InterfaceStatus, Resources.InterfaceStatusInactive,
-                        false, BitmapExtensions.DrawCircle(16, 15, Brushes.DarkGray));
+                        false, _inactiveStatusImage);
                     AddRow(layoutInterface, "PrivateKey", Resources.InterfacePublicKey, profile.PublicKey);
                     AddRow(layoutInterface, "MTU", Resources.InterfaceMTU, profile.Mtu, true);
                     AddRow(layoutInterface, "ListenPort", Resources.InterfaceListenPort, profile.ListenPort, true);
@@ -1282,7 +1385,7 @@ namespace WireSockUI.Forms
             return;
 
             void AddRow(TableLayoutPanel container, string name, string key, string value, bool isOptional = false,
-                Bitmap icon = null)
+                Image icon = null)
             {
                 if (isOptional && string.IsNullOrWhiteSpace(value)) return;
 

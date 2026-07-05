@@ -119,7 +119,7 @@ namespace WireSockUI
                 {
                     if (IsReparsePoint(file))
                     {
-                        Trace.TraceWarning($"Skipping WireSock UI configuration file reparse point '{file}'.");
+                        DeleteConfigurationFileReparsePoint(file);
                         continue;
                     }
 
@@ -177,6 +177,40 @@ namespace WireSockUI
             {
                 Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
                 return true;
+            }
+        }
+
+        private static void DeleteConfigurationFileReparsePoint(string file)
+        {
+            FileAttributes attributes;
+
+            try
+            {
+                attributes = File.GetAttributes(file);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock UI configuration file reparse point '{file}' because its attributes could not be inspected: {ex.Message}");
+                return;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) == 0)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock UI configuration file '{file}' because it is no longer a reparse point.");
+                return;
+            }
+
+            try
+            {
+                File.Delete(file);
+                Trace.TraceWarning($"Deleted WireSock UI configuration file reparse point '{file}'.");
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Skipping WireSock UI configuration file reparse point '{file}' because it could not be deleted: {ex.Message}");
             }
         }
     }
