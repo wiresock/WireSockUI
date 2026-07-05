@@ -44,7 +44,7 @@ namespace WireSockUI
             SafeFileHandle hFile,
             out ByHandleFileInformation lpFileInformation);
 
-        [StructLayout(LayoutKind.Sequential)]
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
         private struct ByHandleFileInformation
         {
             public FileAttributes FileAttributes;
