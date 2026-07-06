@@ -363,13 +363,13 @@ namespace WireSockUI.Forms
                 _tunnelStateWorker.RunWorkerAsync(CurrentTunnelGeneration());
         }
 
-        private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true)
+        private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true, bool preserveNetworkLock = false)
         {
             var profileName = _wiresock.ProfileName;
 
             CancelTunnelMonitoring();
 
-            if (await DisconnectNativeTunnelAsync())
+            if (await DisconnectNativeTunnelAsync(preserveNetworkLock: preserveNetworkLock))
             {
                 UpdateState(ConnectionState.Disconnected, notify, profileName);
                 return true;
@@ -383,15 +383,16 @@ namespace WireSockUI.Forms
             return false;
         }
 
-        private async Task<bool> DisconnectNativeTunnelAsync(long? connectionSequence = null, bool showWarning = true)
+        private async Task<bool> DisconnectNativeTunnelAsync(long? connectionSequence = null, bool showWarning = true,
+            bool preserveNetworkLock = false)
         {
             bool disconnected;
 
             try
             {
                 disconnected = await Task.Run(() => connectionSequence.HasValue
-                    ? _wiresock.DisconnectIfConnectionSequence(connectionSequence.Value)
-                    : _wiresock.Disconnect());
+                    ? _wiresock.DisconnectIfConnectionSequence(connectionSequence.Value, preserveNetworkLock)
+                    : _wiresock.Disconnect(preserveNetworkLock));
             }
             catch (Exception ex)
             {
@@ -454,7 +455,7 @@ namespace WireSockUI.Forms
                 {
                     Trace.TraceWarning(
                         $"WireSock manager shutdown exceeded {ShutdownDisconnectTimeoutMilliseconds} ms; continuing application exit.");
-                    if (!TryResetNetworkLockAfterNativeCleanupFailure("shutdown timeout"))
+                    if (!TryResetNetworkLockAfterNativeCleanupFailure("shutdown timeout", true))
                         Trace.TraceWarning(
                             "WireSock UI could not verify native tunnel cleanup before exit. Reopen WireSock UI as administrator and use Reset Kill Switch if network access remains blocked.");
 
@@ -464,7 +465,7 @@ namespace WireSockUI.Forms
                                 Trace.TraceWarning(
                                     $"WireSock manager shutdown completed with an error after exit continued: {task.Exception?.GetBaseException().Message}");
 
-                            TryResetNetworkLockAfterNativeCleanupFailure("late shutdown cleanup");
+                            TryResetNetworkLockAfterNativeCleanupFailure("late shutdown cleanup", true);
                         },
                         CancellationToken.None,
                         TaskContinuationOptions.None,
@@ -482,34 +483,71 @@ namespace WireSockUI.Forms
             }
         }
 
-        private static bool TryResetNetworkLockAfterNativeCleanupFailure(string context)
+        private static bool TryResetNetworkLockAfterNativeCleanupFailure(string context,
+            bool recordRecoveryMarkerOnFailure = false)
         {
             try
             {
                 if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
                 {
+                    var diagnostic = queryDiagnostic ?? "Unable to query WireSock network lock state.";
                     Trace.TraceWarning(
-                        $"Unable to query WireSock network lock after {context}: {queryDiagnostic}");
+                        $"Unable to query WireSock network lock after {context}: {diagnostic}");
+                    if (recordRecoveryMarkerOnFailure)
+                        Global.WriteNativeRecoveryMarker(context, diagnostic);
                     return false;
                 }
 
                 if (!networkLockActive)
+                {
+                    if (recordRecoveryMarkerOnFailure)
+                        Global.TryDeleteNativeRecoveryMarker();
                     return true;
+                }
 
                 if (!WireSockManager.TryResetNetworkLock(out var resetDiagnostic))
                 {
+                    var diagnostic = resetDiagnostic ?? "Unable to reset WireSock network lock.";
                     Trace.TraceWarning(
-                        $"Unable to reset WireSock network lock after {context}: {resetDiagnostic}");
+                        $"Unable to reset WireSock network lock after {context}: {diagnostic}");
+                    if (recordRecoveryMarkerOnFailure)
+                        Global.WriteNativeRecoveryMarker(context, diagnostic);
                     return false;
                 }
 
+                if (recordRecoveryMarkerOnFailure)
+                    Global.TryDeleteNativeRecoveryMarker();
                 return true;
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to reset WireSock network lock after {context}: {ex.Message}");
+                if (recordRecoveryMarkerOnFailure)
+                    Global.WriteNativeRecoveryMarker(context, ex.Message);
                 return false;
             }
+        }
+
+        private void ShowPendingNativeRecoveryWarning()
+        {
+            var marker = Global.ReadNativeRecoveryMarker();
+            if (string.IsNullOrWhiteSpace(marker))
+                return;
+
+            var recovered = TryResetNetworkLockAfterNativeCleanupFailure("startup recovery", true);
+            if (!recovered)
+            {
+                Interlocked.Exchange(ref _nativeRecoveryRequired, 1);
+                SetNativeRecoveryUi(null);
+            }
+
+            var recoveryStatus = recovered
+                ? "Startup recovery completed successfully. WireSock UI will continue normally."
+                : "Startup recovery could not verify or reset the WireSock Kill Switch. Tunnel operations are disabled until WireSock UI is restarted after network access is restored.";
+
+            MessageBox.Show(
+                $"{Resources.TunnelNativeRecoveryRequired}{Environment.NewLine}{Environment.NewLine}{recoveryStatus}{Environment.NewLine}{Environment.NewLine}{marker}",
+                Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void TryRunOnUiThread(Action action)
@@ -1129,6 +1167,9 @@ namespace WireSockUI.Forms
         {
             base.OnLoad(e);
 
+            ShowPendingNativeRecoveryWarning();
+            var recoveryBlocksTunnelOperations = IsNativeRecoveryRequired();
+
             if (Settings.Default.AutoMinimize)
             {
                 WindowState = FormWindowState.Minimized;
@@ -1140,7 +1181,7 @@ namespace WireSockUI.Forms
                 lstProfiles.Items[Settings.Default.LastProfile].Selected = true;
 
             // Connect to the last used configuration, if required.
-            if (!Settings.Default.AutoConnect) return;
+            if (!Settings.Default.AutoConnect || recoveryBlocksTunnelOperations) return;
 
             if (lstProfiles.Items.ContainsKey(Settings.Default.LastProfile))
                 OnProfileClick(lstProfiles, EventArgs.Empty);
@@ -1291,29 +1332,12 @@ namespace WireSockUI.Forms
 
         private static void CopyProfileToTemporaryFile(string sourcePath, string destinationPath)
         {
-            using (var source = new FileStream(sourcePath, FileMode.Open, FileAccess.Read, FileShare.Read,
-                       81920, FileOptions.SequentialScan))
-            {
-                if (source.Length > MaxImportedProfileSizeBytes)
-                    throw new InvalidOperationException("The profile file is too large to be imported.");
-
-                using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
-                           FileShare.None))
-                {
-                    var buffer = new byte[81920];
-                    long bytesCopied = 0;
-                    int bytesRead;
-
-                    while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
-                    {
-                        bytesCopied += bytesRead;
-                        if (bytesCopied > MaxImportedProfileSizeBytes)
-                            throw new InvalidOperationException("The profile file is too large to be imported.");
-
-                        destination.Write(buffer, 0, bytesRead);
-                    }
-                }
-            }
+            RegularFileSource.CopyToTemporaryFile(
+                sourcePath,
+                destinationPath,
+                MaxImportedProfileSizeBytes,
+                "profile",
+                "The profile file is too large to be imported.");
         }
 
         private static void TryDeleteTemporaryProfile(string tmpProfile)
@@ -1331,6 +1355,9 @@ namespace WireSockUI.Forms
 
         private void OnEditProfileClick(object sender, EventArgs e)
         {
+            if (lstProfiles.SelectedItems.Count == 0)
+                return;
+
             var profile = lstProfiles.SelectedItems[0].Text;
 
             try
@@ -1500,9 +1527,11 @@ namespace WireSockUI.Forms
                         useAdapter = profileUseAdapter;
                 }
 
+                var preserveNetworkLockForReconnect = Settings.Default.EnableKillSwitch && !disconnectOnly;
+
                 if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
                 {
-                    if (!await DisconnectCurrentTunnelAsync(e != EventArgs.Empty))
+                    if (!await DisconnectCurrentTunnelAsync(e != EventArgs.Empty, preserveNetworkLockForReconnect))
                         return;
 
                     if (disconnectOnly)
@@ -1510,13 +1539,14 @@ namespace WireSockUI.Forms
                 }
                 else if (e == EventArgs.Empty && _wiresock.HasTunnelHandle)
                 {
-                    if (!await DisconnectCurrentTunnelAsync(false))
+                    if (!await DisconnectCurrentTunnelAsync(false, preserveNetworkLockForReconnect))
                         return;
                 }
 
                 try
                 {
-                    if (_wiresock.HasTunnelHandle && !await DisconnectNativeTunnelAsync())
+                    if (_wiresock.HasTunnelHandle &&
+                        !await DisconnectNativeTunnelAsync(preserveNetworkLock: preserveNetworkLockForReconnect))
                     {
                         return;
                     }

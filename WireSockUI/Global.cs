@@ -22,6 +22,9 @@ namespace WireSockUI
 
         public static string LegacyConfigsFolder = Path.Combine(MainFolder, "Configs");
 
+        public static string NativeRecoveryMarkerPath =>
+            Path.Combine(SecureMainFolder, "NativeRecoveryRequired.txt");
+
         public static EventWaitHandle AlreadyRunning;
 
         public static void EnsureApplicationFolders()
@@ -47,6 +50,69 @@ namespace WireSockUI
             {
                 Trace.TraceWarning($"Failed to secure WireSock UI directory '{path}': {ex.Message}");
                 throw;
+            }
+        }
+
+        public static void WriteNativeRecoveryMarker(string context, string diagnostic)
+        {
+            try
+            {
+                Directory.CreateDirectory(SecureMainFolder, CreateAdministratorsOnlyDirectorySecurity());
+                if (File.Exists(NativeRecoveryMarkerPath) && IsReparsePoint(NativeRecoveryMarkerPath))
+                    File.Delete(NativeRecoveryMarkerPath);
+
+                var message =
+                    $"UTC: {DateTime.UtcNow:o}{Environment.NewLine}" +
+                    $"Context: {context}{Environment.NewLine}" +
+                    $"Diagnostic: {diagnostic ?? "No diagnostic available."}{Environment.NewLine}";
+
+                File.WriteAllText(NativeRecoveryMarkerPath, message);
+                File.SetAccessControl(NativeRecoveryMarkerPath, CreateAdministratorsOnlyFileSecurity());
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to write WireSock UI native recovery marker: {ex.Message}");
+            }
+        }
+
+        public static string ReadNativeRecoveryMarker()
+        {
+            try
+            {
+                if (!File.Exists(NativeRecoveryMarkerPath))
+                    return null;
+
+                if (IsReparsePoint(NativeRecoveryMarkerPath))
+                    return "The native recovery marker is a reparse point and was not read.";
+
+                return File.ReadAllText(NativeRecoveryMarkerPath);
+            }
+            catch (FileNotFoundException)
+            {
+                return null;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return null;
+            }
+            catch (Exception ex)
+            {
+                var diagnostic = $"The native recovery marker could not be read: {ex.Message}";
+                Trace.TraceWarning($"Failed to read WireSock UI native recovery marker: {ex.Message}");
+                return diagnostic;
+            }
+        }
+
+        public static void TryDeleteNativeRecoveryMarker()
+        {
+            try
+            {
+                if (File.Exists(NativeRecoveryMarkerPath))
+                    File.Delete(NativeRecoveryMarkerPath);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to delete WireSock UI native recovery marker: {ex.Message}");
             }
         }
 

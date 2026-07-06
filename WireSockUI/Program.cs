@@ -9,7 +9,6 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Windows.Forms;
 using Microsoft.Win32;
-using Microsoft.Win32.SafeHandles;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
@@ -21,52 +20,10 @@ namespace WireSockUI
     internal static class Program
     {
         private const long MaxMigratedProfileSizeBytes = 1024 * 1024;
-        private const uint GenericRead = 0x80000000;
-        private const uint FileShareRead = 0x00000001;
-        private const uint OpenExisting = 3;
-        private const uint FileFlagOpenReparsePoint = 0x00200000;
-        private const uint FileFlagSequentialScan = 0x08000000;
         private static readonly string[] ScriptHookKeys = { "PreUp", "PostUp", "PreDown", "PostDown" };
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectory(string lpPathName);
-
-        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern SafeFileHandle CreateFile(
-            string lpFileName,
-            uint dwDesiredAccess,
-            uint dwShareMode,
-            IntPtr lpSecurityAttributes,
-            uint dwCreationDisposition,
-            uint dwFlagsAndAttributes,
-            IntPtr hTemplateFile);
-
-        [DllImport("kernel32.dll", SetLastError = true)]
-        private static extern bool GetFileInformationByHandle(
-            SafeFileHandle hFile,
-            out ByHandleFileInformation lpFileInformation);
-
-        [StructLayout(LayoutKind.Sequential, Pack = 4)]
-        private struct ByHandleFileInformation
-        {
-            public FileAttributes FileAttributes;
-            public FileTime CreationTime;
-            public FileTime LastAccessTime;
-            public FileTime LastWriteTime;
-            public uint VolumeSerialNumber;
-            public uint FileSizeHigh;
-            public uint FileSizeLow;
-            public uint NumberOfLinks;
-            public uint FileIndexHigh;
-            public uint FileIndexLow;
-        }
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct FileTime
-        {
-            public uint LowDateTime;
-            public uint HighDateTime;
-        }
 
         [STAThread]
         private static void Main()
@@ -465,71 +422,12 @@ namespace WireSockUI
 
         private static void CopyLegacyProfileToTemporaryFile(string sourcePath, string destinationPath)
         {
-            using (var source = OpenLegacyProfileForRead(sourcePath))
-            {
-                if (source.Length > MaxMigratedProfileSizeBytes)
-                    throw new InvalidOperationException("The legacy profile file is too large to be migrated.");
-
-                using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
-                           FileShare.None))
-                {
-                    var buffer = new byte[81920];
-                    long bytesCopied = 0;
-                    int bytesRead;
-
-                    while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
-                    {
-                        bytesCopied += bytesRead;
-                        if (bytesCopied > MaxMigratedProfileSizeBytes)
-                            throw new InvalidOperationException("The legacy profile file is too large to be migrated.");
-
-                        destination.Write(buffer, 0, bytesRead);
-                    }
-                }
-            }
-        }
-
-        private static FileStream OpenLegacyProfileForRead(string sourcePath)
-        {
-            var handle = CreateFile(
+            RegularFileSource.CopyToTemporaryFile(
                 sourcePath,
-                GenericRead,
-                FileShareRead,
-                IntPtr.Zero,
-                OpenExisting,
-                FileFlagOpenReparsePoint | FileFlagSequentialScan,
-                IntPtr.Zero);
-
-            if (handle.IsInvalid)
-            {
-                handle.Dispose();
-                throw new IOException(
-                    $"Unable to open legacy profile '{Path.GetFileName(sourcePath)}'.",
-                    new Win32Exception(Marshal.GetLastWin32Error()));
-            }
-
-            try
-            {
-                if (!GetFileInformationByHandle(handle, out var fileInformation))
-                    throw new IOException(
-                        $"Unable to inspect legacy profile '{Path.GetFileName(sourcePath)}'.",
-                        new Win32Exception(Marshal.GetLastWin32Error()));
-
-                if ((fileInformation.FileAttributes & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException(
-                        $"Legacy profile '{Path.GetFileName(sourcePath)}' is a reparse point.");
-
-                if ((fileInformation.FileAttributes & FileAttributes.Directory) != 0)
-                    throw new IOException(
-                        $"Legacy profile '{Path.GetFileName(sourcePath)}' is a directory.");
-
-                return new FileStream(handle, FileAccess.Read, 81920, false);
-            }
-            catch
-            {
-                handle.Dispose();
-                throw;
-            }
+                destinationPath,
+                MaxMigratedProfileSizeBytes,
+                "legacy profile",
+                "The legacy profile file is too large to be migrated.");
         }
 
         private static bool TryIsReparsePoint(string path, out bool isReparsePoint)
@@ -574,7 +472,7 @@ namespace WireSockUI
         {
             try
             {
-                using (var first = OpenLegacyProfileForRead(firstPath))
+                using (var first = RegularFileSource.OpenForRead(firstPath, "legacy profile"))
                 using (var second = File.OpenRead(secondPath))
                 {
                     if (first.Length != second.Length)
