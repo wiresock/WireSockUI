@@ -53,7 +53,10 @@ namespace WireSockUI.Tests
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
                 { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
                 { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
+                { "Legacy migration rejects script hooks", LegacyMigrationRejectsScriptHooks },
+                { "Legacy migration script-hook check is narrow", LegacyMigrationScriptHookCheckIsNarrow },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
+                { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
@@ -554,6 +557,74 @@ namespace WireSockUI.Tests
                 "Expected unknown Ib values to be rejected.");
         }
 
+        private static void LegacyMigrationRejectsScriptHooks()
+        {
+            var path = WriteConfig("[Interface]\n" +
+                                   $"PrivateKey = {PrivateKey}\n" +
+                                   "Address = 10.0.0.2/32\n" +
+                                   "postup = powershell.exe -NoProfile -Command Write-Host test\n" +
+                                   "\n" +
+                                   "[Peer]\n" +
+                                   $"PublicKey = {PublicKey}\n" +
+                                   "Endpoint = example.com:51820\n" +
+                                   "AllowedIPs = 0.0.0.0/0\n");
+
+            try
+            {
+                AssertInvocationThrows<InvalidOperationException>(
+                    () => EnsureMigratedProfileCanBePromoted(path),
+                    "script hooks");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void LegacyMigrationScriptHookCheckIsNarrow()
+        {
+            var path = WriteConfig("[Interface]\nAddress = 10.0.0.2/32\n");
+
+            try
+            {
+                EnsureMigratedProfileCanBePromoted(path);
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void EnsureMigratedProfileCanBePromoted(string path)
+        {
+            var ensureMigratedProfileCanBePromoted = typeof(WireSockUI.Program).GetMethod(
+                "EnsureMigratedProfileCanBePromoted", BindingFlags.NonPublic | BindingFlags.Static);
+            if (ensureMigratedProfileCanBePromoted == null)
+                throw new InvalidOperationException("EnsureMigratedProfileCanBePromoted helper was not found.");
+
+            ensureMigratedProfileCanBePromoted.Invoke(null, new object[] { path });
+        }
+
+        private static void AppUserModelIdIsPathSeeded()
+        {
+            var buildDefaultAppUserModelId = typeof(WindowsApplicationContext).GetMethod(
+                "BuildDefaultAppUserModelId", BindingFlags.NonPublic | BindingFlags.Static);
+            if (buildDefaultAppUserModelId == null)
+                throw new InvalidOperationException("BuildDefaultAppUserModelId helper was not found.");
+
+            var first = (string)buildDefaultAppUserModelId.Invoke(null,
+                new object[] { "WireSock UI", @"C:\Program Files\WireSockUI\WireSockUI.exe" });
+            var firstAgain = (string)buildDefaultAppUserModelId.Invoke(null,
+                new object[] { "WireSock UI", @"C:\Program Files\WireSockUI\WireSockUI.exe" });
+            var second = (string)buildDefaultAppUserModelId.Invoke(null,
+                new object[] { "WireSock UI", @"D:\Tools\WireSockUI\WireSockUI.exe" });
+
+            AssertEqual(first, firstAgain);
+            AssertFalse(string.Equals(first, second, StringComparison.Ordinal),
+                "Expected AppUserModelID to differ for side-by-side executable paths.");
+            AssertTrue(first.Length <= 128, "Expected AppUserModelID to fit the Windows shell length limit.");
+        }
+
         private static void NetworkLockEnumMatchesWgboosterAbi()
         {
             AssertEqual(0, (int)WireguardBoosterExports.WgbNetworkLockMode.Disabled);
@@ -599,6 +670,19 @@ namespace WireSockUI.Tests
                 return true;
 
             return CreateSymbolicLink(linkPath, targetPath, SymbolicLinkFlagFile);
+        }
+
+        private static void TryDeleteFile(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch
+            {
+                // Best-effort cleanup must not hide the original test failure.
+            }
         }
 
         private static void WithTemporaryConfigFolder(Action action)

@@ -23,3 +23,6 @@ jobs:
 
       - name: Build solution
         run: dotnet build WireSockUI.sln --configuration Release /p:Platform=x64 /p:UseSharedCompilation=false -m:1
+
+      - name: Build UWP-enabled solution
+        run: dotnet build WireSockUI.sln --configuration "Release UWP" /p:Platform=x64 /p:UseSharedCompilation=false -m:1

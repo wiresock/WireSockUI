@@ -1227,6 +1227,15 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to WireSock UI is still cleaning up a timed-out tunnel connection. Wait for cleanup to finish before trying another tunnel operation..
+        /// </summary>
+        internal static string TunnelConnectCleanupPending {
+            get {
+                return ResourceManager.GetString("TunnelConnectCleanupPending", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Tunnel has failed to start. Please check log..
         /// </summary>
         internal static string TunnelErrorStart {
@@ -1241,6 +1250,33 @@ namespace WireSockUI.Properties {
         internal static string TunnelErrorTitle {
             get {
                 return ResourceManager.GetString("TunnelErrorTitle", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to WireSock UI could not finish cleaning up a native tunnel operation. New tunnel operations are disabled to avoid unsafe network state. Restart WireSock UI as administrator; if network access remains blocked, use Reset Kill Switch from the tray menu..
+        /// </summary>
+        internal static string TunnelNativeRecoveryRequired {
+            get {
+                return ResourceManager.GetString("TunnelNativeRecoveryRequired", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to A WireSock tunnel operation is already in progress. Wait for it to finish before trying again..
+        /// </summary>
+        internal static string TunnelOperationPending {
+            get {
+                return ResourceManager.GetString("TunnelOperationPending", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Recovery required.
+        /// </summary>
+        internal static string InterfaceStatusRecoveryRequired {
+            get {
+                return ResourceManager.GetString("InterfaceStatusRecoveryRequired", resourceCulture);
             }
         }
     }

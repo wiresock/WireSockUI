@@ -43,6 +43,7 @@ namespace WireSockUI.Forms
             {
                 Text = Resources.EditProfileTitleNew;
                 txtEditor.Text = Resources.template_conf;
+                GenerateMissingPrivateKey();
             }
             else
             {
@@ -53,22 +54,36 @@ namespace WireSockUI.Forms
                 Profile.EnsureRegularProfileFile(profilePath);
                 txtEditor.Text = File.ReadAllText(profilePath);
             }
-
-            var textChanged = ApplySyntaxHighlighting();
-            if (textChanged)
-                // Call it again to reapply highlighting
-                ApplySyntaxHighlighting();
         }
 
         public string ReturnValue { get; private set; }
 
-        private bool ApplySyntaxHighlighting()
+        private void GenerateMissingPrivateKey()
         {
-            if (_highlighting) return false;
+            foreach (Match m in ProfileMatch.Matches(txtEditor.Text))
+            {
+                if (!m.Groups["key"].Success ||
+                    !string.Equals(m.Groups["key"].Value, "privatekey", StringComparison.OrdinalIgnoreCase) ||
+                    !m.Groups["value"].Success ||
+                    !string.IsNullOrEmpty(m.Groups["value"].Value))
+                    continue;
+
+                var newPrivateKey = Curve25519.CreateRandomPrivateKey();
+                var base64PrivateKey = Convert.ToBase64String(newPrivateKey);
+                txtEditor.Text = txtEditor.Text
+                    .Remove(m.Groups["value"].Index, m.Groups["value"].Length)
+                    .Insert(m.Groups["value"].Index, base64PrivateKey);
+                txtPublicKey.Text = Convert.ToBase64String(Curve25519.GetPublicKey(newPrivateKey));
+                return;
+            }
+        }
+
+        private void ApplySyntaxHighlighting()
+        {
+            if (_highlighting) return;
             _highlighting = true;
 
             var hasErrors = false;
-            var textChanged = false;
 
             // Saving the original settings
             var originalIndex = txtEditor.SelectionStart;
@@ -154,18 +169,9 @@ namespace WireSockUI.Forms
                                 {
                                     if (string.IsNullOrEmpty(value))
                                     {
-                                        // Generate a new private key
-                                        var newPrivateKey = Curve25519.CreateRandomPrivateKey();
-                                        var base64PrivateKey = Convert.ToBase64String(newPrivateKey);
-
-                                        // Insert the new private key into the text editor
-                                        txtEditor.SelectionStart = m.Groups["value"].Index;
-                                        txtEditor.SelectionLength = m.Groups["value"].Length;
-                                        txtEditor.SelectedText = base64PrivateKey;
-
-                                        // Update the public key display
-                                        txtPublicKey.Text = Convert.ToBase64String(Curve25519.GetPublicKey(newPrivateKey));
-                                        textChanged = true; // Set flag to true as text is changed
+                                        txtPublicKey.Text = string.Empty;
+                                        txtEditor.UnderlineSelection();
+                                        hasErrors = true;
                                     }
                                     else
                                     {
@@ -389,7 +395,6 @@ namespace WireSockUI.Forms
                 }
 
                 btnSave.Enabled = !hasErrors;
-                return textChanged;
             }
             finally
             {
@@ -590,10 +595,7 @@ namespace WireSockUI.Forms
 
         private void OnProfileChanged(object sender, EventArgs e)
         {
-            var textChanged = ApplySyntaxHighlighting();
-            if (textChanged)
-                // Call it again to reapply highlighting
-                ApplySyntaxHighlighting();
+            ApplySyntaxHighlighting();
         }
 
         private void OnAddAllowedAppClick(object sender, EventArgs e)

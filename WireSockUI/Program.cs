@@ -13,6 +13,7 @@ using Microsoft.Win32.SafeHandles;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
+using WireSockUI.Native;
 using WireSockUI.Properties;
 
 namespace WireSockUI
@@ -25,6 +26,7 @@ namespace WireSockUI
         private const uint OpenExisting = 3;
         private const uint FileFlagOpenReparsePoint = 0x00200000;
         private const uint FileFlagSequentialScan = 0x08000000;
+        private static readonly string[] ScriptHookKeys = { "PreUp", "PostUp", "PreDown", "PostDown" };
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern bool SetDllDirectory(string lpPathName);
@@ -167,8 +169,7 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                // user possibly doesn't have internet
-                
+                Trace.TraceWarning($"Unable to check for WireSock UI updates: {ex.Message}");
             }
         }
 #endif
@@ -430,6 +431,7 @@ namespace WireSockUI
             try
             {
                 CopyLegacyProfileToTemporaryFile(legacyProfilePath, tmpProfile);
+                EnsureMigratedProfileCanBePromoted(tmpProfile);
                 File.Move(tmpProfile, destinationPath);
                 tmpProfile = null;
                 return true;
@@ -444,6 +446,21 @@ namespace WireSockUI
                 if (tmpProfile != null)
                     TryDeleteTemporaryMigratedProfile(tmpProfile, profileName);
             }
+        }
+
+        private static void EnsureMigratedProfileCanBePromoted(string migratedProfilePath)
+        {
+            var parser = new WireguardConfigParser.ConfigParser(migratedProfilePath);
+            var interfaceSection = parser.GetSection("Interface");
+            if (interfaceSection.Count == 0)
+                return;
+
+            foreach (var item in interfaceSection)
+                foreach (var key in ScriptHookKeys)
+                    if (string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase) &&
+                        !string.IsNullOrWhiteSpace(item.Value))
+                        throw new InvalidOperationException(
+                            "The legacy profile contains script hooks. Import this profile manually to review and confirm the scripts.");
         }
 
         private static void CopyLegacyProfileToTemporaryFile(string sourcePath, string destinationPath)

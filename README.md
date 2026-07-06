@@ -34,11 +34,13 @@ WireSock-specific directives may use the current SDK comment-extension syntax:
 
 Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK fields such as script hooks, masking parameters, SOCKS5 settings, `BypassLanTraffic`, and profile-level `VirtualAdapterMode` while preserving the file-based profile workflow.
 
-Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration uses a bounded temporary copy and rejects reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening when possible.
+Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration uses a bounded temporary copy and rejects reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening when possible. Legacy profiles containing script hooks are not auto-migrated; import them manually so the hook warning can be reviewed.
 
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
 
 The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
+
+If a native connect cleanup call does not return, WireSockUI attempts to reset the network lock and disables further tunnel operations with a recovery warning instead of leaving the Activate button silently stuck. Shutdown cleanup timeouts are written to the diagnostic trace without blocking process exit. Restart WireSockUI as administrator and use **Reset Kill Switch** from the tray menu if network access remains blocked.
 
 ## Compatibility Notes
 
@@ -52,6 +54,7 @@ The Settings dialog includes an optional Kill Switch toggle. When enabled, WireS
 ```powershell
 dotnet run --project WireSockUI.Tests\WireSockUI.Tests.csproj --configuration Release --framework net472-windows
 dotnet build WireSockUI.sln --configuration Release -p:Platform=x64 -p:UseSharedCompilation=false -m:1
+dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:UseSharedCompilation=false -m:1
 ```
 
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
