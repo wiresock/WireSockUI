@@ -292,26 +292,6 @@ namespace WireSockUI.Forms
             });
         }
 
-        private void ClearNativeRecoveryRequired(string profile)
-        {
-            if (Interlocked.Exchange(ref _nativeRecoveryRequired, 0) == 0)
-                return;
-
-            TryRunOnUiThread(() =>
-            {
-                if (_currentState != ConnectionState.Disconnected)
-                    return;
-
-                var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
-                if (txtStatus != null)
-                    txtStatus.Text = Resources.InterfaceStatusInactive;
-
-                SetActivateButtonEnabled(true);
-                if (TryGetProfileItem(profile, out var profileItem))
-                    profileItem.ImageKey = ConnectionState.Disconnected.ToString();
-            });
-        }
-
         private void SetNativeRecoveryUi(string profile)
         {
             if (_shutdownComplete || IsDisposed || Disposing)
@@ -827,15 +807,10 @@ namespace WireSockUI.Forms
         {
             ConnectAttemptResult result = null;
             var cleanupFailed = false;
-            var cleanupCompletedSafely = false;
 
             try
             {
-                if (!TryGetCompletedConnectResult(connectTask, out result))
-                {
-                    cleanupCompletedSafely = true;
-                }
-                else if (result.Connected)
+                if (TryGetCompletedConnectResult(connectTask, out result) && result.Connected)
                 {
                     var disconnected = await DisconnectNativeTunnelAsync(result.ConnectionSequence, false);
                     if (!disconnected)
@@ -844,14 +819,6 @@ namespace WireSockUI.Forms
                             $"Timed-out tunnel sequence {result.ConnectionSequence} could not be disconnected. The tunnel may still be active.");
                         cleanupFailed = true;
                     }
-                    else
-                    {
-                        cleanupCompletedSafely = true;
-                    }
-                }
-                else
-                {
-                    cleanupCompletedSafely = true;
                 }
             }
             catch (Exception ex)
@@ -865,10 +832,6 @@ namespace WireSockUI.Forms
                 {
                     TryResetNetworkLockAfterNativeCleanupFailure("timed-out connect cleanup");
                     MarkNativeRecoveryRequired(profile, "timed-out connect cleanup failure");
-                }
-                else if (cleanupCompletedSafely)
-                {
-                    ClearNativeRecoveryRequired(profile);
                 }
 
                 EndTimedOutConnectCleanup(profile);
