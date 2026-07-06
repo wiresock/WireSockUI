@@ -778,7 +778,7 @@ namespace WireSockUI.Forms
         private void ScheduleTimedOutConnectCleanup(Task<ConnectAttemptResult> connectTask, int generation,
             string profile)
         {
-            ScheduleTimedOutConnectRecoveryWatchdog(connectTask, profile);
+            ScheduleTimedOutConnectRecoveryWatchdog(profile);
 
             connectTask.ContinueWith(task =>
             {
@@ -792,7 +792,7 @@ namespace WireSockUI.Forms
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
 
-        private void ScheduleTimedOutConnectRecoveryWatchdog(Task<ConnectAttemptResult> connectTask, string profile)
+        private void ScheduleTimedOutConnectRecoveryWatchdog(string profile)
         {
             Task.Delay(TimedOutConnectCleanupRecoveryMilliseconds).ContinueWith(_ =>
             {

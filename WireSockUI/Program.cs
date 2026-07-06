@@ -452,7 +452,7 @@ namespace WireSockUI
         {
             var parser = new WireguardConfigParser.ConfigParser(migratedProfilePath);
             var interfaceSection = parser.GetSection("Interface");
-            if (interfaceSection == null)
+            if (interfaceSection.Count == 0)
                 return;
 
             foreach (var item in interfaceSection)
