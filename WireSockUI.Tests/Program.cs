@@ -6,6 +6,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using WireSockUI;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
@@ -19,6 +20,7 @@ namespace WireSockUI.Tests
         private static readonly string PublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)2, 32).ToArray());
         private const int SymbolicLinkFlagFile = 0;
         private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
+        private static bool? LastDropTunnelPreserveNetworkLock;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.I1)]
@@ -51,12 +53,16 @@ namespace WireSockUI.Tests
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
+                { "Profile import preserves pre-existing destination on copy failure", ProfileImportPreservesExistingDestinationOnCopyFailure },
+                { "Profile import rejects reparse point sources", ProfileImportRejectsReparsePointSources },
                 { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
                 { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
                 { "Legacy migration rejects script hooks", LegacyMigrationRejectsScriptHooks },
                 { "Legacy migration script-hook check is narrow", LegacyMigrationScriptHookCheckIsNarrow },
+                { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
+                { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
@@ -178,7 +184,7 @@ namespace WireSockUI.Tests
 
                 if (!TryCreateFileSymbolicLink(link, target))
                 {
-                    Console.WriteLine("SKIP file symlink creation unavailable; reparse profile check not exercised.");
+                    SkipOrFail("file symlink creation unavailable; reparse profile check not exercised.");
                     return;
                 }
 
@@ -457,6 +463,85 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void ProfileImportPreservesExistingDestinationOnCopyFailure()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var source = Path.Combine(directory, "oversized.conf");
+            var destination = Path.Combine(directory, "existing.tmp");
+            const string destinationContents = "keep me";
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                using (var stream = new FileStream(source, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                {
+                    stream.SetLength(2);
+                }
+
+                File.WriteAllText(destination, destinationContents);
+
+                AssertThrows<InvalidOperationException>(
+                    () => RegularFileSource.CopyToTemporaryFile(source, destination, 1, "profile", "too large"),
+                    "too large");
+                AssertEqual(destinationContents, File.ReadAllText(destination));
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
+        private static void ProfileImportRejectsReparsePointSources()
+        {
+            var copyProfileToTemporaryFile = typeof(FrmMain).GetMethod("CopyProfileToTemporaryFile",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (copyProfileToTemporaryFile == null)
+                throw new InvalidOperationException("CopyProfileToTemporaryFile helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var target = Path.Combine(directory, "target.conf");
+            var link = Path.Combine(directory, "linked.conf");
+            var destination = Path.Combine(directory, "linked.tmp");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(target, ValidConfig());
+
+                if (!TryCreateFileSymbolicLink(link, target))
+                {
+                    SkipOrFail("file symlink creation unavailable; profile import reparse check not exercised.");
+                    return;
+                }
+
+                AssertInvocationThrows<IOException>(
+                    () => copyProfileToTemporaryFile.Invoke(null, new object[] { link, destination }),
+                    "reparse point");
+                AssertFalse(File.Exists(destination),
+                    "Expected reparse point profile imports not to create a temp copy.");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
         private static void LegacyMigrationRejectsOversizedFiles()
         {
             var copyLegacyProfileToTemporaryFile = typeof(WireSockUI.Program).GetMethod(
@@ -515,7 +600,7 @@ namespace WireSockUI.Tests
 
                 if (!TryCreateFileSymbolicLink(link, target))
                 {
-                    Console.WriteLine("SKIP file symlink creation unavailable; legacy migration reparse check not exercised.");
+                    SkipOrFail("file symlink creation unavailable; legacy migration reparse check not exercised.");
                     return;
                 }
 
@@ -537,6 +622,22 @@ namespace WireSockUI.Tests
                     // Best-effort cleanup must not hide the original test failure.
                 }
             }
+        }
+
+        private static void NativeRecoveryMarkerCleanupRemovesDirectoryMarkers()
+        {
+            WithTemporarySecureMainFolder(() =>
+            {
+                Directory.CreateDirectory(Global.NativeRecoveryMarkerPath);
+
+                var diagnostic = Global.ReadNativeRecoveryMarker();
+                AssertTrue(diagnostic.IndexOf("directory", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected directory marker diagnostic, got '{diagnostic}'.");
+
+                Global.TryDeleteNativeRecoveryMarker();
+                AssertFalse(Directory.Exists(Global.NativeRecoveryMarkerPath),
+                    "Expected recovery marker cleanup to remove directory markers.");
+            });
         }
 
         private static void EditorValidatesAmneziaOptions()
@@ -625,6 +726,65 @@ namespace WireSockUI.Tests
             AssertTrue(first.Length <= 128, "Expected AppUserModelID to fit the Windows shell length limit.");
         }
 
+        private static void WireSockDisconnectForwardsNetworkLockPreservation()
+        {
+            var manager = new WireSockManager();
+            try
+            {
+                ConfigureFakeNativeTunnelHandle(manager);
+
+                LastDropTunnelPreserveNetworkLock = null;
+                AssertTrue(manager.Disconnect(true), "Expected fake disconnect with preserved network lock to succeed.");
+                AssertTrue(LastDropTunnelPreserveNetworkLock == true,
+                    "Expected preserved reconnect cleanup to pass preserveNetworkLock=true to wgbooster.");
+
+                ConfigureFakeNativeTunnelHandle(manager);
+
+                LastDropTunnelPreserveNetworkLock = null;
+                AssertTrue(manager.Disconnect(), "Expected fake default disconnect to succeed.");
+                AssertTrue(LastDropTunnelPreserveNetworkLock == false,
+                    "Expected explicit disconnect cleanup to pass preserveNetworkLock=false to wgbooster.");
+            }
+            finally
+            {
+                manager.Dispose();
+            }
+        }
+
+        private static void ConfigureFakeNativeTunnelHandle(WireSockManager manager)
+        {
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+
+            var handleField = typeof(WireSockManager).GetField("_handle", flags);
+            var stopTunnelField = typeof(WireSockManager).GetField("_stopTunnel", flags);
+            var dropTunnelField = typeof(WireSockManager).GetField("_dropTunnel", flags);
+
+            if (handleField == null || stopTunnelField == null || dropTunnelField == null)
+                throw new InvalidOperationException("WireSockManager native delegate fields were not found.");
+
+            var successfulTunnelAction = typeof(Program).GetMethod(nameof(SuccessfulTunnelAction),
+                BindingFlags.NonPublic | BindingFlags.Static);
+            var recordingDropTunnel = typeof(Program).GetMethod(nameof(RecordingDropTunnel),
+                BindingFlags.NonPublic | BindingFlags.Static);
+
+            stopTunnelField.SetValue(manager,
+                Delegate.CreateDelegate(stopTunnelField.FieldType, successfulTunnelAction));
+            dropTunnelField.SetValue(manager,
+                Delegate.CreateDelegate(dropTunnelField.FieldType, recordingDropTunnel));
+            handleField.SetValue(manager, new IntPtr(1234));
+        }
+
+        private static bool SuccessfulTunnelAction(IntPtr handle)
+        {
+            return true;
+        }
+
+        private static bool RecordingDropTunnel(IntPtr handle, bool preserveNetworkLock)
+        {
+            LastDropTunnelPreserveNetworkLock = preserveNetworkLock;
+            return true;
+        }
+
         private static void NetworkLockEnumMatchesWgboosterAbi()
         {
             AssertEqual(0, (int)WireguardBoosterExports.WgbNetworkLockMode.Disabled);
@@ -672,6 +832,14 @@ namespace WireSockUI.Tests
             return CreateSymbolicLink(linkPath, targetPath, SymbolicLinkFlagFile);
         }
 
+        private static void SkipOrFail(string message)
+        {
+            if (string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(message);
+
+            Console.WriteLine($"SKIP {message}");
+        }
+
         private static void TryDeleteFile(string path)
         {
             try
@@ -699,6 +867,33 @@ namespace WireSockUI.Tests
             finally
             {
                 Global.ConfigsFolder = originalConfigsFolder;
+
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
+        private static void WithTemporarySecureMainFolder(Action action)
+        {
+            var originalSecureMainFolder = Global.SecureMainFolder;
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                Global.SecureMainFolder = directory;
+                action();
+            }
+            finally
+            {
+                Global.SecureMainFolder = originalSecureMainFolder;
 
                 try
                 {

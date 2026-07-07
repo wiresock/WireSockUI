@@ -25,6 +25,7 @@ namespace WireSockUI.Forms
         private Font _editorBoldFont;
         private Font _editorItalicFont;
         private Font _editorRegularFont;
+        private Timer _highlightTimer;
         private readonly string _originalProfileName;
         private string _targetConfigurationKeyName;
 
@@ -465,6 +466,8 @@ namespace WireSockUI.Forms
             _editorRegularFont = new Font(txtEditor.Font, FontStyle.Regular);
             _editorItalicFont = new Font(txtEditor.Font, FontStyle.Italic);
             _editorBoldFont = new Font(txtEditor.Font, FontStyle.Bold);
+            _highlightTimer = new Timer { Interval = 150 };
+            _highlightTimer.Tick += OnHighlightTimerTick;
 
             Icon = Resources.ico;
             txtProfileName.SetCueBanner(Resources.EditProfileCue);
@@ -475,6 +478,12 @@ namespace WireSockUI.Forms
 
         private void OnSaveClick(object sender, EventArgs e)
         {
+            if (!ValidateEditorBeforeSave())
+            {
+                DialogResult = DialogResult.None;
+                return;
+            }
+
             var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
             Profile profile;
 
@@ -561,6 +570,15 @@ namespace WireSockUI.Forms
             Close();
         }
 
+        private bool ValidateEditorBeforeSave()
+        {
+            if (_highlightTimer != null)
+                _highlightTimer.Stop();
+
+            ApplySyntaxHighlighting();
+            return btnSave.Enabled;
+        }
+
         private static void TryDeleteOriginalProfile(string originalProfileName, string newProfilePath)
         {
             try
@@ -595,6 +613,21 @@ namespace WireSockUI.Forms
 
         private void OnProfileChanged(object sender, EventArgs e)
         {
+            ScheduleSyntaxHighlighting();
+        }
+
+        private void ScheduleSyntaxHighlighting()
+        {
+            if (_highlighting || _highlightTimer == null)
+                return;
+
+            _highlightTimer.Stop();
+            _highlightTimer.Start();
+        }
+
+        private void OnHighlightTimerTick(object sender, EventArgs e)
+        {
+            _highlightTimer.Stop();
             ApplySyntaxHighlighting();
         }
 
@@ -641,6 +674,13 @@ namespace WireSockUI.Forms
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
+            if (_highlightTimer != null)
+            {
+                _highlightTimer.Stop();
+                _highlightTimer.Dispose();
+                _highlightTimer = null;
+            }
+
             _editorRegularFont?.Dispose();
             _editorItalicFont?.Dispose();
             _editorBoldFont?.Dispose();

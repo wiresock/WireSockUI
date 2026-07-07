@@ -504,7 +504,7 @@ namespace WireSockUI
                     if (!Profile.IsRegularProfileFile(profilePath, out var profileDiagnostic))
                         return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
 
-                    if (_handle != IntPtr.Zero && !DropCurrentHandle(true))
+                    if (_handle != IntPtr.Zero && !DropCurrentHandle(true, preserveNetworkLock: Settings.Default.EnableKillSwitch))
                         return ShowTunnelError(
                             "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");
 
@@ -577,21 +577,21 @@ namespace WireSockUI
             }
         }
 
-        public bool DisconnectIfConnectionSequence(long connectionSequence)
+        public bool DisconnectIfConnectionSequence(long connectionSequence, bool preserveNetworkLock = false)
         {
             lock (_syncRoot)
             {
                 if (_connectionSequence != connectionSequence)
                     return true;
 
-                return Disconnect();
+                return Disconnect(preserveNetworkLock);
             }
         }
 
         /// <summary>
         ///     Stops and disconnects from the Wireguard tunnel asynchronously.
         /// </summary>
-        public bool Disconnect()
+        public bool Disconnect(bool preserveNetworkLock = false)
         {
             lock (_syncRoot)
             {
@@ -613,7 +613,7 @@ namespace WireSockUI
                     PrintLog($"Failed to stop tunnel cleanly: {ex.Message}");
                 }
 
-                return DropCurrentHandle(true);
+                return DropCurrentHandle(true, preserveNetworkLock: preserveNetworkLock);
             }
         }
 
@@ -789,7 +789,7 @@ namespace WireSockUI
                 PrintLog("Discarding failed tunnel handle after cleanup failure. Restart WireSock UI if the next connection attempt fails.");
         }
 
-        private bool DropCurrentHandle(bool logFailure, bool clearOnFailure = false)
+        private bool DropCurrentHandle(bool logFailure, bool clearOnFailure = false, bool preserveNetworkLock = false)
         {
             if (_handle == IntPtr.Zero)
                 return true;
@@ -798,7 +798,7 @@ namespace WireSockUI
 
             try
             {
-                dropped = _dropTunnel(_handle, false);
+                dropped = _dropTunnel(_handle, preserveNetworkLock);
                 if (!dropped && logFailure)
                     PrintLog(
                         $"Failed to release tunnel handle: {GetLastNativeErrorOrDefault("native drop_tunnel returned false.")}");
