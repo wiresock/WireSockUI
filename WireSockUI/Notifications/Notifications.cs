@@ -21,6 +21,7 @@ namespace WireSockUI.Notifications
 
             if (File.Exists(Icon)) return;
 
+            Directory.CreateDirectory(Global.MainFolder);
             using (var stream = new FileStream(Icon, FileMode.CreateNew))
             {
                 Resources.ico.Save(stream);

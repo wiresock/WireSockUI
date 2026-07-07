@@ -124,7 +124,7 @@ namespace WireSockUI.Config
             return rules;
         }
 
-        private static bool TryParseUInt(string value, out uint result)
+        internal static bool TryParseUInt(string value, out uint result)
         {
             var trimmed = value.Trim();
             if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))

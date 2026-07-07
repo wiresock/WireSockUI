@@ -431,6 +431,7 @@ namespace WireSockUI.Forms
                 return;
             }
 
+            Global.EnsureConfigsFolder();
             var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
             Profile profile;
 

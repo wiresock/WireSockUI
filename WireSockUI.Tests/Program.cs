@@ -39,6 +39,7 @@ namespace WireSockUI.Tests
                 { "Profile path rejects unsafe names", ProfilePathRejectsUnsafeNames },
                 { "Profile reports configured script hooks", ProfileReportsConfiguredScriptHooks },
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
+                { "Profile enumeration creates missing overridden config folder", ProfileEnumerationCreatesMissingOverriddenConfigFolder },
                 { "Profile rejects directory profile paths", ProfileRejectsDirectoryProfilePaths },
                 { "Profile rejects reparse point profile files", ProfileRejectsReparsePointProfileFiles },
                 { "Profile reports missing profile paths clearly", ProfileReportsMissingProfilePathsClearly },
@@ -52,6 +53,7 @@ namespace WireSockUI.Tests
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
+                { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
@@ -180,6 +182,39 @@ namespace WireSockUI.Tests
             });
         }
 
+        private static void ProfileEnumerationCreatesMissingOverriddenConfigFolder()
+        {
+            var originalConfigsFolder = Global.ConfigsFolder;
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"),
+                "Configs");
+
+            try
+            {
+                Global.ConfigsFolder = directory;
+
+                var profiles = Profile.GetProfiles().ToList();
+
+                AssertEqual(0, profiles.Count);
+                AssertTrue(Directory.Exists(directory),
+                    "Expected profile enumeration to create a missing overridden config folder.");
+            }
+            finally
+            {
+                Global.ConfigsFolder = originalConfigsFolder;
+
+                try
+                {
+                    var root = Path.GetDirectoryName(directory);
+                    if (!string.IsNullOrEmpty(root) && Directory.Exists(root))
+                        Directory.Delete(root, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
         private static void ProfileRejectsReparsePointProfileFiles()
         {
             WithTemporaryConfigFolder(() =>
@@ -289,6 +324,8 @@ namespace WireSockUI.Tests
                 "Address = 10.0.0.2/32\n" +
                 "#@ws:H1 = 1-4\n" +
                 "#@ws:H2 = 0x10-0x20\n" +
+                "#@ws:Jmin = 4\n" +
+                "#@ws:Jmax = 10\n" +
                 "#@ws:S1 = 1280\n" +
                 "#@ws:S2 = 0\n" +
                 "#@ws:S3 = 4294967295\n" +
@@ -319,6 +356,7 @@ namespace WireSockUI.Tests
             AssertProfileRejectsInterfaceOption("#@ws:Id = ***", "Id");
             AssertProfileRejectsInterfaceOption("#@ws:Ip = ftp", "Ip");
             AssertProfileRejectsInterfaceOption("#@ws:Ib = safari", "Ib");
+            AssertProfileRejectsInterfaceOption("#@ws:Jmin = 10\n#@ws:Jmax = 4", "Jmin");
         }
 
         private static void InterfaceExtensionValidationRulesAreShared()
@@ -394,6 +432,22 @@ namespace WireSockUI.Tests
             AssertTrue(value.Contains("2"), "Expected future two-hour durations to include the absolute hour count.");
             AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected future two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void GlobalConfigFolderContainmentHandlesDriveRoots()
+        {
+            var isSameOrChildPath = typeof(Global).GetMethod("IsSameOrChildPath",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (isSameOrChildPath == null)
+                throw new InvalidOperationException("IsSameOrChildPath helper was not found.");
+
+            var root = Path.GetPathRoot(Environment.SystemDirectory);
+            var child = Path.Combine(root, "Windows");
+
+            AssertTrue((bool)isSameOrChildPath.Invoke(null, new object[] { root, root }),
+                "Expected a root path to be treated as itself.");
+            AssertTrue((bool)isSameOrChildPath.Invoke(null, new object[] { child, root }),
+                "Expected a child of a drive root to be detected.");
         }
 
         private static void ProgramPathNormalizationPreservesDriveRoots()

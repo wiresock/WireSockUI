@@ -499,6 +499,24 @@ namespace WireSockUI.Config
                     throw new FormatException(
                         $"\"{rule.Key}\" in \"Interface\", invalid value. Expected {rule.ExpectedValueDescription}.");
             }
+
+            ValidateUIntOrdering(section, "Jmin", "Jmax");
+        }
+
+        private static void ValidateUIntOrdering(Dictionary<string, string> section, string minKey, string maxKey)
+        {
+            var minValue = section.Get(minKey);
+            var maxValue = section.Get(maxKey);
+            if (string.IsNullOrWhiteSpace(minValue) || string.IsNullOrWhiteSpace(maxValue))
+                return;
+
+            if (!ConfigValueValidator.TryParseUInt(minValue, out var min) ||
+                !ConfigValueValidator.TryParseUInt(maxValue, out var max))
+                return;
+
+            if (min > max)
+                throw new FormatException(
+                    $"\"{minKey}\" in \"Interface\" must be less than or equal to \"{maxKey}\".");
         }
 
         public static IEnumerable<string> GetProfiles()
@@ -507,7 +525,7 @@ namespace WireSockUI.Config
 
             try
             {
-                Directory.CreateDirectory(Global.ConfigsFolder);
+                Global.EnsureConfigsFolder();
                 files = Directory.GetFiles(Global.ConfigsFolder);
             }
             catch (Exception ex)

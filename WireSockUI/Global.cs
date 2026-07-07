@@ -30,8 +30,19 @@ namespace WireSockUI
         public static void EnsureApplicationFolders()
         {
             Directory.CreateDirectory(MainFolder);
-            EnsureAdministratorsOnlyDirectory(SecureMainFolder);
-            EnsureAdministratorsOnlyDirectory(ConfigsFolder);
+            EnsureConfigsFolder();
+        }
+
+        public static void EnsureConfigsFolder()
+        {
+            if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
+            {
+                EnsureAdministratorsOnlyDirectory(SecureMainFolder);
+                EnsureAdministratorsOnlyDirectory(ConfigsFolder);
+                return;
+            }
+
+            Directory.CreateDirectory(ConfigsFolder);
         }
 
         private static void EnsureAdministratorsOnlyDirectory(string path)
@@ -293,6 +304,45 @@ namespace WireSockUI
             {
                 Trace.TraceWarning($"Unable to inspect reparse point attributes for '{path}': {ex.Message}");
                 return true;
+            }
+        }
+
+        private static bool IsSameOrChildPath(string path, string parentPath)
+        {
+            var normalizedPath = NormalizeDirectoryPath(path);
+            var normalizedParent = NormalizeDirectoryPath(parentPath);
+            if (normalizedPath == null || normalizedParent == null)
+                return false;
+
+            if (string.Equals(normalizedPath, normalizedParent, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            var parentPrefix = normalizedParent.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? normalizedParent
+                : normalizedParent + Path.DirectorySeparatorChar;
+
+            return normalizedPath.StartsWith(parentPrefix, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string NormalizeDirectoryPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return null;
+
+            try
+            {
+                var fullPath = Path.GetFullPath(path);
+                var root = Path.GetPathRoot(fullPath);
+                if (!string.IsNullOrEmpty(root) &&
+                    string.Equals(fullPath, root, StringComparison.OrdinalIgnoreCase))
+                    return fullPath;
+
+                return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to normalize WireSock UI directory path '{path}': {ex.Message}");
+                return null;
             }
         }
 

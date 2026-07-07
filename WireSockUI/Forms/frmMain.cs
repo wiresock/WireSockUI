@@ -591,6 +591,52 @@ namespace WireSockUI.Forms
             }
         }
 
+#if WIRESOCKUI_ENABLE_UWP
+        private void ScheduleVersionCheck()
+        {
+            Task.Run(() =>
+                {
+                    return Program.TryGetAvailableUpdate(out var releasesUrl)
+                        ? releasesUrl
+                        : null;
+                })
+                .ContinueWith(task =>
+                    {
+                        if (task.IsFaulted)
+                        {
+                            Trace.TraceWarning(
+                                $"Unable to check for WireSock UI updates: {task.Exception?.GetBaseException().Message}");
+                            return;
+                        }
+
+                        if (string.IsNullOrWhiteSpace(task.Result))
+                            return;
+
+                        TryRunOnUiThread(() =>
+                        {
+                            if (MessageBox.Show(this, Resources.AppUpdateMessage, Resources.AppUpdateTitle,
+                                    MessageBoxButtons.OKCancel, MessageBoxIcon.Information) == DialogResult.OK)
+                                Program.OpenBrowser(task.Result);
+                        });
+                    },
+                    CancellationToken.None,
+                    TaskContinuationOptions.None,
+                    TaskScheduler.Default);
+        }
+
+        private void TryShowNotification(string title, string body)
+        {
+            try
+            {
+                Notifications.Notifications.Notify(title, body);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to show WireSock UI notification: {ex.Message}");
+            }
+        }
+#endif
+
         /// <summary>
         ///     Determines if another instance of the current application is already running.
         /// </summary>
@@ -992,7 +1038,7 @@ namespace WireSockUI.Forms
             profiles.Sort();
 
             lstProfiles.Items.AddRange(profiles
-                .Select(p => new ListViewItem(p, "disconnected") { Name = p }).ToArray());
+                .Select(p => new ListViewItem(p, ConnectionState.Disconnected.ToString()) { Name = p }).ToArray());
 
             // Clear any previously loaded tunnels
             for (var i = mnuContext.Items.Count - 1; i >= 0; i--)
@@ -1131,7 +1177,7 @@ namespace WireSockUI.Forms
 
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
-                        Notifications.Notifications.Notify(Resources.ToastActiveTitle,
+                        TryShowNotification(Resources.ToastActiveTitle,
                             string.Format(Resources.ToastActiveMessage, activeProfileName));
 #endif
                     break;
@@ -1172,7 +1218,7 @@ namespace WireSockUI.Forms
 
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
-                        Notifications.Notifications.Notify(Resources.ToastInactiveTitle,
+                        TryShowNotification(Resources.ToastInactiveTitle,
                             string.Format(Resources.ToastInactiveMessage, activeProfileName));
 #endif
                     break;
@@ -1183,6 +1229,10 @@ namespace WireSockUI.Forms
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+
+#if WIRESOCKUI_ENABLE_UWP
+            ScheduleVersionCheck();
+#endif
 
             ShowPendingNativeRecoveryWarning();
             var recoveryBlocksTunnelOperations = IsNativeRecoveryRequired();
@@ -1326,6 +1376,7 @@ namespace WireSockUI.Forms
 
         private bool ImportProfileFromFile(string filePath, string destinationPath)
         {
+            Global.EnsureConfigsFolder();
             var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
 
             try
@@ -1999,7 +2050,7 @@ namespace WireSockUI.Forms
         private void OnLogWindowResize(object sender, EventArgs e)
         {
             // Ensure the log list rows fill the entire width, but no scrollbar appears
-            lstLog.Columns[1].Width = lstLog.Columns[0].Width + lstLog.Size.Width - 4;
+            lstLog.Columns[1].Width = Math.Max(0, lstLog.ClientSize.Width - lstLog.Columns[0].Width - 4);
         }
 
         private void OnLogDrawHeader(object sender, DrawListViewItemEventArgs e)
