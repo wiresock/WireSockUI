@@ -64,10 +64,11 @@ namespace WireSockUI.Native
 
             if (handle.IsInvalid)
             {
+                var errorCode = Marshal.GetLastWin32Error();
                 handle.Dispose();
                 throw new IOException(
                     $"Unable to open {sourceDescription} '{Path.GetFileName(sourcePath)}'.",
-                    new Win32Exception(Marshal.GetLastWin32Error()));
+                    new Win32Exception(errorCode));
             }
 
             try

@@ -58,8 +58,7 @@ namespace WireSockUI
             try
             {
                 Directory.CreateDirectory(SecureMainFolder, CreateAdministratorsOnlyDirectorySecurity());
-                if (File.Exists(NativeRecoveryMarkerPath) && IsReparsePoint(NativeRecoveryMarkerPath))
-                    File.Delete(NativeRecoveryMarkerPath);
+                DeleteNativeRecoveryMarkerPathIfUnsafeForWrite();
 
                 var message =
                     $"UTC: {DateTime.UtcNow:o}{Environment.NewLine}" +
@@ -79,10 +78,13 @@ namespace WireSockUI
         {
             try
             {
-                if (!File.Exists(NativeRecoveryMarkerPath))
+                if (!TryGetAttributes(NativeRecoveryMarkerPath, out var attributes))
                     return null;
 
-                if (IsReparsePoint(NativeRecoveryMarkerPath))
+                if ((attributes & FileAttributes.Directory) != 0)
+                    return "The native recovery marker is a directory and was not read.";
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
                     return "The native recovery marker is a reparse point and was not read.";
 
                 return File.ReadAllText(NativeRecoveryMarkerPath);
@@ -107,12 +109,60 @@ namespace WireSockUI
         {
             try
             {
-                if (File.Exists(NativeRecoveryMarkerPath))
-                    File.Delete(NativeRecoveryMarkerPath);
+                DeleteNativeRecoveryMarkerPath();
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to delete WireSock UI native recovery marker: {ex.Message}");
+            }
+        }
+
+        private static void DeleteNativeRecoveryMarkerPathIfUnsafeForWrite()
+        {
+            if (!TryGetAttributes(NativeRecoveryMarkerPath, out var attributes))
+                return;
+
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0)
+                return;
+
+            DeleteNativeRecoveryMarkerPath(attributes);
+        }
+
+        private static void DeleteNativeRecoveryMarkerPath()
+        {
+            if (TryGetAttributes(NativeRecoveryMarkerPath, out var attributes))
+                DeleteNativeRecoveryMarkerPath(attributes);
+        }
+
+        private static void DeleteNativeRecoveryMarkerPath(FileAttributes attributes)
+        {
+            if ((attributes & FileAttributes.Directory) != 0)
+            {
+                Directory.Delete(
+                    NativeRecoveryMarkerPath,
+                    (attributes & FileAttributes.ReparsePoint) == 0);
+                return;
+            }
+
+            File.Delete(NativeRecoveryMarkerPath);
+        }
+
+        private static bool TryGetAttributes(string path, out FileAttributes attributes)
+        {
+            try
+            {
+                attributes = File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                attributes = 0;
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                attributes = 0;
+                return false;
             }
         }
 

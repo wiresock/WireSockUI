@@ -545,9 +545,12 @@ namespace WireSockUI.Forms
                 ? "Startup recovery completed successfully. WireSock UI will continue normally."
                 : "Startup recovery could not verify or reset the WireSock Kill Switch. Tunnel operations are disabled until WireSock UI is restarted after network access is restored.";
 
-            MessageBox.Show(
-                $"{Resources.TunnelNativeRecoveryRequired}{Environment.NewLine}{Environment.NewLine}{recoveryStatus}{Environment.NewLine}{Environment.NewLine}{marker}",
-                Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            var recoveryMessage =
+                $"{Resources.TunnelNativeRecoveryRequired}{Environment.NewLine}{Environment.NewLine}{recoveryStatus}{Environment.NewLine}{Environment.NewLine}{marker}";
+
+            TryRunOnUiThread(() => MessageBox.Show(
+                recoveryMessage,
+                Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning));
         }
 
         private void TryRunOnUiThread(Action action)

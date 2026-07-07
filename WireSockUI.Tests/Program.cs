@@ -59,6 +59,7 @@ namespace WireSockUI.Tests
                 { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
                 { "Legacy migration rejects script hooks", LegacyMigrationRejectsScriptHooks },
                 { "Legacy migration script-hook check is narrow", LegacyMigrationScriptHookCheckIsNarrow },
+                { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
@@ -623,6 +624,22 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void NativeRecoveryMarkerCleanupRemovesDirectoryMarkers()
+        {
+            WithTemporarySecureMainFolder(() =>
+            {
+                Directory.CreateDirectory(Global.NativeRecoveryMarkerPath);
+
+                var diagnostic = Global.ReadNativeRecoveryMarker();
+                AssertTrue(diagnostic.IndexOf("directory", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected directory marker diagnostic, got '{diagnostic}'.");
+
+                Global.TryDeleteNativeRecoveryMarker();
+                AssertFalse(Directory.Exists(Global.NativeRecoveryMarkerPath),
+                    "Expected recovery marker cleanup to remove directory markers.");
+            });
+        }
+
         private static void EditorValidatesAmneziaOptions()
         {
             AssertTrue(ConfigValueValidator.IsUIntOrRange("1-4", 0, uint.MaxValue),
@@ -850,6 +867,33 @@ namespace WireSockUI.Tests
             finally
             {
                 Global.ConfigsFolder = originalConfigsFolder;
+
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
+        private static void WithTemporarySecureMainFolder(Action action)
+        {
+            var originalSecureMainFolder = Global.SecureMainFolder;
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                Global.SecureMainFolder = directory;
+                action();
+            }
+            finally
+            {
+                Global.SecureMainFolder = originalSecureMainFolder;
 
                 try
                 {
