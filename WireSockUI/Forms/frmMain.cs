@@ -253,6 +253,7 @@ namespace WireSockUI.Forms
         {
             Interlocked.Exchange(ref _timedOutConnectCleanupInProgress, 1);
             SetActivateButtonEnabled(false);
+            cmiResetKillSwitch.Enabled = false;
         }
 
         private void EndTimedOutConnectCleanup(string profile)
@@ -267,6 +268,7 @@ namespace WireSockUI.Forms
                 if (_currentState == ConnectionState.Disconnected)
                 {
                     SetActivateButtonEnabled(true);
+                    cmiResetKillSwitch.Enabled = true;
                     if (TryGetProfileItem(profile, out var profileItem))
                         profileItem.ImageKey = ConnectionState.Disconnected.ToString();
                 }
@@ -312,6 +314,7 @@ namespace WireSockUI.Forms
                 txtStatus.Text = Resources.InterfaceStatusRecoveryRequired;
 
             cmiDeactivateTunnel.Enabled = false;
+            cmiResetKillSwitch.Enabled = true;
         }
 
         private void ShowTunnelOperationBlockedMessage(string message)
@@ -329,24 +332,27 @@ namespace WireSockUI.Forms
             _tunnelStateWorker.CancelAsync();
         }
 
-        private bool TryBeginTunnelOperation()
+        private bool TryBeginTunnelOperation(bool showBlockedMessage = true)
         {
             if (IsTimedOutConnectCleanupInProgress())
             {
-                ShowTunnelOperationBlockedMessage(Resources.TunnelConnectCleanupPending);
+                if (showBlockedMessage)
+                    ShowTunnelOperationBlockedMessage(Resources.TunnelConnectCleanupPending);
                 return false;
             }
 
             if (IsNativeRecoveryRequired())
             {
-                ShowTunnelOperationBlockedMessage(Resources.TunnelNativeRecoveryRequired);
+                if (showBlockedMessage)
+                    ShowTunnelOperationBlockedMessage(Resources.TunnelNativeRecoveryRequired);
                 return false;
             }
 
             if (Interlocked.CompareExchange(ref _tunnelOperationInProgress, 1, 0) == 0)
                 return true;
 
-            ShowTunnelOperationBlockedMessage(Resources.TunnelOperationPending);
+            if (showBlockedMessage)
+                ShowTunnelOperationBlockedMessage(Resources.TunnelOperationPending);
             return false;
         }
 
@@ -712,7 +718,7 @@ namespace WireSockUI.Forms
 
         private async Task HandleTunnelConnectionTimeoutAsync(int generation)
         {
-            if (!RequestTunnelConnectionTimeout(generation) || !TryBeginTunnelOperation())
+            if (!RequestTunnelConnectionTimeout(generation) || !TryBeginTunnelOperation(false))
                 return;
 
             try
@@ -1071,6 +1077,8 @@ namespace WireSockUI.Forms
 
                     trayIcon.Text = Resources.TrayActivating;
 
+                    cmiResetKillSwitch.Enabled = false;
+
                     StartTunnelConnectionWorker();
                     break;
                 case ConnectionState.Connected:
@@ -1095,6 +1103,7 @@ namespace WireSockUI.Forms
                     cmiAddresses.Visible = true;
 
                     cmiDeactivateTunnel.Enabled = true;
+                    cmiResetKillSwitch.Enabled = false;
 
                     foreach (ToolStripItem item in mnuContext.Items)
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
@@ -1150,6 +1159,7 @@ namespace WireSockUI.Forms
                     cmiAddresses.Visible = false;
 
                     cmiDeactivateTunnel.Enabled = false;
+                    cmiResetKillSwitch.Enabled = true;
 
                     foreach (ToolStripItem item in mnuContext.Items)
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
@@ -1425,27 +1435,60 @@ namespace WireSockUI.Forms
         {
             using (var form = new FrmSettings())
             {
+                var previousEnableKillSwitch = Settings.Default.EnableKillSwitch;
+
                 // set the owner of the child form to the main form instance
                 form.Owner = this;
 
                 if (form.ShowDialog() == DialogResult.OK)
                 {
                     _wiresock.LogLevel = _wiresock.LogLevelSetting;
-                    ApplyKillSwitchSetting();
+                    ApplyAndSaveKillSwitchSetting(form.RequestedEnableKillSwitch, previousEnableKillSwitch);
                 }
             }
         }
 
-        private void ApplyKillSwitchSetting()
+        private bool ApplyAndSaveKillSwitchSetting(bool requestedEnableKillSwitch, bool previousEnableKillSwitch)
+        {
+            var shouldApplyNativeState =
+                requestedEnableKillSwitch != previousEnableKillSwitch ||
+                _wiresock.HasTunnelHandle;
+
+            if (shouldApplyNativeState && !ApplyKillSwitchSetting(requestedEnableKillSwitch))
+            {
+                Settings.Default.EnableKillSwitch = previousEnableKillSwitch;
+                return false;
+            }
+
+            Settings.Default.EnableKillSwitch = requestedEnableKillSwitch;
+            try
+            {
+                Settings.Default.Save();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(string.Format(Resources.SettingsSaveError, ex.Message), Resources.TunnelErrorTitle,
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                Settings.Default.EnableKillSwitch = previousEnableKillSwitch;
+                if (requestedEnableKillSwitch != previousEnableKillSwitch)
+                    ApplyKillSwitchSetting(previousEnableKillSwitch);
+
+                return false;
+            }
+        }
+
+        private bool ApplyKillSwitchSetting(bool enableKillSwitch)
         {
             try
             {
                 if (_wiresock.HasTunnelHandle)
                 {
-                    if (Settings.Default.EnableKillSwitch)
+                    if (enableKillSwitch)
                     {
-                        _wiresock.KillSwitchEnabled = Settings.Default.EnableKillSwitch;
-                        return;
+                        _wiresock.KillSwitchEnabled = true;
+                        return true;
                     }
 
                     if (!_wiresock.TryGetKillSwitchEnabled(out var killSwitchEnabled, out var diagnostic))
@@ -1453,35 +1496,60 @@ namespace WireSockUI.Forms
                         MessageBox.Show(
                             $"{Resources.TunnelKillSwitchStateError}{Environment.NewLine}{Environment.NewLine}{diagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
+                        return false;
                     }
 
                     if (killSwitchEnabled)
                         _wiresock.KillSwitchEnabled = false;
 
-                    return;
+                    return true;
                 }
 
-                if (!Settings.Default.EnableKillSwitch)
+                if (!enableKillSwitch)
                 {
                     if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
                     {
                         MessageBox.Show(
                             $"{Resources.TunnelKillSwitchQueryError}{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
+                        return false;
                     }
 
                     if (networkLockActive && !WireSockManager.TryResetNetworkLock(out var resetDiagnostic))
+                    {
                         MessageBox.Show(
                             $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{resetDiagnostic}",
                             Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return false;
+                    }
                 }
+
+                return true;
             }
             catch (Exception ex)
             {
                 MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return false;
             }
+        }
+
+        private void OnResetKillSwitchClick(object sender, EventArgs e)
+        {
+            if (_currentState != ConnectionState.Disconnected || IsTimedOutConnectCleanupInProgress())
+                return;
+
+            if (!WireSockManager.TryResetNetworkLock(out var diagnostic))
+            {
+                MessageBox.Show(
+                    $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{diagnostic}",
+                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            Global.TryDeleteNativeRecoveryMarker();
+
+            MessageBox.Show(Resources.KillSwitchResetSuccess, Resources.KillSwitchResetTitle,
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         /// <summary>

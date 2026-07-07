@@ -163,6 +163,17 @@ namespace WireSockUI.Forms
                             value = m.Groups["value"].Value;
                         }
 
+                        if (ConfigValueValidator.TryGetInterfaceExtensionRule(key, out var interfaceExtensionRule))
+                        {
+                            if (!interfaceExtensionRule.IsValid(value))
+                            {
+                                txtEditor.UnderlineSelection();
+                                hasErrors = true;
+                            }
+
+                            continue;
+                        }
+
                         switch (key)
                         {
                             // base64 256-bit keys
@@ -280,48 +291,6 @@ namespace WireSockUI.Forms
                                     hasErrors = true;
                                 }
                                 break;
-                            case "jc":
-                                if (!ConfigValueValidator.IsUIntInRange(value, 0, 128))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
-                            case "jd":
-                                if (!ConfigValueValidator.IsUIntInRange(value, 0, 200))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
-                            case "jmin":
-                            case "jmax":
-                            case "s1":
-                            case "s2":
-                                if (!ConfigValueValidator.IsUIntInRange(value, 0, 1280))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
-                            case "s3":
-                            case "s4":
-                                if (!ConfigValueValidator.IsUIntInRange(value, 0, uint.MaxValue))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
-                            case "h1":
-                            case "h2":
-                            case "h3":
-                            case "h4":
-                                if (!ConfigValueValidator.IsUIntOrRange(value, 0, uint.MaxValue))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
                             // Comma-delimited string values
                             case "allowedapps":
                             case "disallowedapps":
@@ -351,28 +320,6 @@ namespace WireSockUI.Forms
                                 break;
                             // Known free-form or WireGuard-managed values
                             case "table":
-                                break;
-                            case "id":
-                                if (!string.IsNullOrWhiteSpace(value) &&
-                                    Uri.CheckHostName(value.Trim()) == UriHostNameType.Unknown)
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
-                            case "ip":
-                                if (!ConfigValueValidator.IsOneOf(value, "quic", "dns", "sip", "stun"))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
-                                break;
-                            case "ib":
-                                if (!ConfigValueValidator.IsOneOf(value, "chrome", "firefox", "curl", "random"))
-                                {
-                                    txtEditor.UnderlineSelection();
-                                    hasErrors = true;
-                                }
                                 break;
                             case "i1":
                             case "i2":

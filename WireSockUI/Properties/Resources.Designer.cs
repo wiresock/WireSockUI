@@ -469,6 +469,24 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Kill Switch network lock was reset. Restart WireSock UI before reconnecting if recovery mode is active..
+        /// </summary>
+        internal static string KillSwitchResetSuccess {
+            get {
+                return ResourceManager.GetString("KillSwitchResetSuccess", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Kill Switch Reset.
+        /// </summary>
+        internal static string KillSwitchResetTitle {
+            get {
+                return ResourceManager.GetString("KillSwitchResetTitle", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Duplicate [{0}] sections are not supported by WireSock UI..
         /// </summary>
         internal static string ParserDuplicateSectionError {
@@ -519,6 +537,15 @@ namespace WireSockUI.Properties {
         internal static string MenuImportTunnel {
             get {
                 return ResourceManager.GetString("MenuImportTunnel", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Reset Kill Switch.
+        /// </summary>
+        internal static string MenuResetKillSwitch {
+            get {
+                return ResourceManager.GetString("MenuResetKillSwitch", resourceCulture);
             }
         }
 
@@ -1254,7 +1281,7 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to WireSock UI could not finish cleaning up a native tunnel operation. New tunnel operations are disabled to avoid unsafe network state. Restart WireSock UI as administrator; if network access remains blocked, use Reset Kill Switch from the tray menu..
+        ///   Looks up a localized string similar to WireSock UI could not finish cleaning up a native tunnel operation. New tunnel operations are disabled to avoid unsafe network state. Restart WireSock UI as administrator; if network access remains blocked, use Reset Kill Switch from the tray menu while disconnected or in recovery mode..
         /// </summary>
         internal static string TunnelNativeRecoveryRequired {
             get {
