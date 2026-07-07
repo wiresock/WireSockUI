@@ -259,7 +259,8 @@ namespace WireSockUI.Forms
 
         private static string NormalizeExecutablePath(string path)
         {
-            return Path.GetFullPath((path ?? string.Empty).Trim().Trim('"'));
+            var trimmedPath = (path ?? string.Empty).Trim().Trim('"');
+            return string.IsNullOrEmpty(trimmedPath) ? string.Empty : Path.GetFullPath(trimmedPath);
         }
 
         private static void ShowSettingsError(string messageFormat, Exception ex)

@@ -585,14 +585,22 @@ namespace WireSockUI.Tests
             {
                 Directory.CreateDirectory(directory);
 
-                AssertThrows<IOException>(
-                    () =>
+                try
+                {
+                    using (RegularFileSource.OpenForRead(directory + Path.DirectorySeparatorChar, "profile"))
                     {
-                        using (RegularFileSource.OpenForRead(directory, "profile"))
-                        {
-                        }
-                    },
-                    "directory");
+                    }
+                }
+                catch (IOException ex)
+                {
+                    AssertTrue(ex.Message.IndexOf("directory", StringComparison.OrdinalIgnoreCase) >= 0,
+                        $"Expected directory source diagnostic, got '{ex.Message}'.");
+                    AssertTrue(ex.Message.Contains(Path.GetFileName(directory)),
+                        $"Expected directory source diagnostic to include the selected folder name, got '{ex.Message}'.");
+                    return;
+                }
+
+                throw new InvalidOperationException("Expected directory source imports to be rejected.");
             }
             finally
             {
@@ -822,6 +830,12 @@ namespace WireSockUI.Tests
                     @"""c:\program files\wiresockui\wiresockui.exe"""
                 }),
                 "Expected autorun ownership checks to tolerate quoted task action paths.");
+            AssertFalse((bool)isSameExecutablePath.Invoke(null, new object[]
+                {
+                    string.Empty,
+                    @"C:\Program Files\WireSockUI\WireSockUI.exe"
+                }),
+                "Expected empty autorun paths not to match the current executable.");
         }
 
         private static void WireSockDisconnectForwardsNetworkLockPreservation()
