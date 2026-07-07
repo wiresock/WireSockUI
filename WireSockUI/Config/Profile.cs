@@ -80,6 +80,7 @@ namespace WireSockUI.Config
             PostDownScript = section.Get("PostDown");
             BypassLanTraffic = section.Get("BypassLanTraffic");
             VirtualAdapterMode = section.Get("VirtualAdapterMode");
+            ValidateInterfaceExtensions(section);
 
             if (!configESections.Contains("Peer", StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException(
@@ -488,6 +489,58 @@ namespace WireSockUI.Config
             if (!string.Equals(trimmedValue, "true", StringComparison.OrdinalIgnoreCase) &&
                 !string.Equals(trimmedValue, "false", StringComparison.OrdinalIgnoreCase))
                 throw new FormatException($"\"{key}\" in \"{section}\", must be true or false.");
+        }
+
+        private static void ValidateInterfaceExtensions(Dictionary<string, string> section)
+        {
+            ValidateUInt("Interface", "Jc", section.Get("Jc"), 0, 128);
+            ValidateUInt("Interface", "Jd", section.Get("Jd"), 0, 200);
+            ValidateUInt("Interface", "Jmin", section.Get("Jmin"), 0, 1280);
+            ValidateUInt("Interface", "Jmax", section.Get("Jmax"), 0, 1280);
+            ValidateUInt("Interface", "S1", section.Get("S1"), 0, 1280);
+            ValidateUInt("Interface", "S2", section.Get("S2"), 0, 1280);
+            ValidateUInt("Interface", "S3", section.Get("S3"), 0, uint.MaxValue);
+            ValidateUInt("Interface", "S4", section.Get("S4"), 0, uint.MaxValue);
+
+            ValidateUIntOrRange("Interface", "H1", section.Get("H1"), 0, uint.MaxValue);
+            ValidateUIntOrRange("Interface", "H2", section.Get("H2"), 0, uint.MaxValue);
+            ValidateUIntOrRange("Interface", "H3", section.Get("H3"), 0, uint.MaxValue);
+            ValidateUIntOrRange("Interface", "H4", section.Get("H4"), 0, uint.MaxValue);
+
+            ValidateHostName("Interface", "Id", section.Get("Id"));
+            ValidateOneOf("Interface", "Ip", section.Get("Ip"), "quic", "dns", "sip", "stun");
+            ValidateOneOf("Interface", "Ib", section.Get("Ib"), "chrome", "firefox", "curl", "random");
+        }
+
+        private static void ValidateUInt(string section, string key, string keyValue, uint minValue, uint maxValue)
+        {
+            if (!ConfigValueValidator.IsUIntInRange(keyValue, minValue, maxValue))
+                throw new FormatException(
+                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue}.");
+        }
+
+        private static void ValidateUIntOrRange(string section, string key, string keyValue, uint minValue,
+            uint maxValue)
+        {
+            if (!ConfigValueValidator.IsUIntOrRange(keyValue, minValue, maxValue))
+                throw new FormatException(
+                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue} or an ascending range.");
+        }
+
+        private static void ValidateHostName(string section, string key, string keyValue)
+        {
+            if (string.IsNullOrWhiteSpace(keyValue))
+                return;
+
+            if (Uri.CheckHostName(keyValue.Trim()) == UriHostNameType.Unknown)
+                throw new FormatException($"\"{key}\" in \"{section}\", is not a valid host name.");
+        }
+
+        private static void ValidateOneOf(string section, string key, string keyValue, params string[] values)
+        {
+            if (!ConfigValueValidator.IsOneOf(keyValue, values))
+                throw new FormatException(
+                    $"\"{key}\" in \"{section}\", invalid value. Expected one of: {string.Join(", ", values)}.");
         }
 
         public static IEnumerable<string> GetProfiles()

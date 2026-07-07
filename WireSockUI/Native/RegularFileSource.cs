@@ -12,6 +12,7 @@ namespace WireSockUI.Native
         private const uint FileShareRead = 0x00000001;
         private const uint OpenExisting = 3;
         private const uint FileFlagOpenReparsePoint = 0x00200000;
+        private const uint FileFlagBackupSemantics = 0x02000000;
         private const uint FileFlagSequentialScan = 0x08000000;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -53,13 +54,15 @@ namespace WireSockUI.Native
 
         public static FileStream OpenForRead(string sourcePath, string sourceDescription)
         {
+            RejectUnsupportedSourceAttributes(sourcePath, sourceDescription);
+
             var handle = CreateFile(
                 sourcePath,
                 GenericRead,
                 FileShareRead,
                 IntPtr.Zero,
                 OpenExisting,
-                FileFlagOpenReparsePoint | FileFlagSequentialScan,
+                FileFlagOpenReparsePoint | FileFlagBackupSemantics | FileFlagSequentialScan,
                 IntPtr.Zero);
 
             if (handle.IsInvalid)
@@ -67,7 +70,7 @@ namespace WireSockUI.Native
                 var errorCode = Marshal.GetLastWin32Error();
                 handle.Dispose();
                 throw new IOException(
-                    $"Unable to open {sourceDescription} '{Path.GetFileName(sourcePath)}'.",
+                    $"Unable to open {sourceDescription} '{GetSourceDisplayName(sourcePath)}'.",
                     new Win32Exception(errorCode));
             }
 
@@ -75,16 +78,16 @@ namespace WireSockUI.Native
             {
                 if (!GetFileInformationByHandle(handle, out var fileInformation))
                     throw new IOException(
-                        $"Unable to inspect {sourceDescription} '{Path.GetFileName(sourcePath)}'.",
+                        $"Unable to inspect {sourceDescription} '{GetSourceDisplayName(sourcePath)}'.",
                         new Win32Exception(Marshal.GetLastWin32Error()));
 
                 if ((fileInformation.FileAttributes & FileAttributes.ReparsePoint) != 0)
                     throw new IOException(
-                        $"{ToSentenceCase(sourceDescription)} '{Path.GetFileName(sourcePath)}' is a reparse point.");
+                        $"{ToSentenceCase(sourceDescription)} '{GetSourceDisplayName(sourcePath)}' is a reparse point.");
 
                 if ((fileInformation.FileAttributes & FileAttributes.Directory) != 0)
                     throw new IOException(
-                        $"{ToSentenceCase(sourceDescription)} '{Path.GetFileName(sourcePath)}' is a directory.");
+                        $"{ToSentenceCase(sourceDescription)} '{GetSourceDisplayName(sourcePath)}' is a directory.");
 
                 return new FileStream(handle, FileAccess.Read, 81920, false);
             }
@@ -93,6 +96,84 @@ namespace WireSockUI.Native
                 handle.Dispose();
                 throw;
             }
+        }
+
+        private static void RejectUnsupportedSourceAttributes(string sourcePath, string sourceDescription)
+        {
+            FileAttributes attributes;
+
+            try
+            {
+                attributes = File.GetAttributes(sourcePath);
+            }
+            catch (FileNotFoundException)
+            {
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (ArgumentException)
+            {
+                return;
+            }
+            catch (NotSupportedException)
+            {
+                return;
+            }
+            catch (PathTooLongException)
+            {
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (System.Security.SecurityException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new IOException(
+                    $"{ToSentenceCase(sourceDescription)} '{GetSourceDisplayName(sourcePath)}' is a reparse point.");
+
+            if ((attributes & FileAttributes.Directory) != 0)
+                throw new IOException(
+                    $"{ToSentenceCase(sourceDescription)} '{GetSourceDisplayName(sourcePath)}' is a directory.");
+        }
+
+        private static string GetSourceDisplayName(string sourcePath)
+        {
+            if (string.IsNullOrWhiteSpace(sourcePath))
+                return string.Empty;
+
+            var trimmedPath = sourcePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            try
+            {
+                var fileName = Path.GetFileName(trimmedPath);
+                if (!string.IsNullOrWhiteSpace(fileName))
+                    return fileName;
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (NotSupportedException)
+            {
+            }
+            catch (PathTooLongException)
+            {
+            }
+            catch (System.Security.SecurityException)
+            {
+            }
+
+            return string.IsNullOrWhiteSpace(trimmedPath) ? sourcePath : trimmedPath;
         }
 
         public static void CopyToTemporaryFile(

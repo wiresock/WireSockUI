@@ -7,7 +7,7 @@ on:
   pull_request:
 
 jobs:
-  build-and-test:
+  test:
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -21,8 +21,36 @@ jobs:
       - name: Run focused tests
         run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows
 
-      - name: Build solution
-        run: dotnet build WireSockUI.sln --configuration Release /p:Platform=x64 /p:UseSharedCompilation=false -m:1
+  publish:
+    runs-on: windows-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - Release
+          - Release UWP
+        platform:
+          - AnyCPU
+          - ARM64
+          - x64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - name: Build UWP-enabled solution
-        run: dotnet build WireSockUI.sln --configuration "Release UWP" /p:Platform=x64 /p:UseSharedCompilation=false -m:1
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.x'
+
+      - name: Publish WireSockUI
+        run: >
+          dotnet publish WireSockUI/WireSockUI.csproj
+          --configuration "${{ matrix.configuration }}"
+          --framework net472-windows
+          --no-self-contained
+          /p:Platform="${{ matrix.platform }}"
+          /p:UseSharedCompilation=false
+          /p:Version=0.0.0
+          /p:Repository="${{ github.repository }}"
+          -m:1
