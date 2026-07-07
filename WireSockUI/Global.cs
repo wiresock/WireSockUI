@@ -25,6 +25,8 @@ namespace WireSockUI
         public static string NativeRecoveryMarkerPath =>
             Path.Combine(SecureMainFolder, "NativeRecoveryRequired.txt");
 
+        internal static bool AllowUnsecuredConfigFolderOverrideForTests { get; set; }
+
         public static EventWaitHandle AlreadyRunning;
 
         public static void EnsureApplicationFolders()
@@ -35,17 +37,41 @@ namespace WireSockUI
 
         public static void EnsureConfigsFolder()
         {
+            EnsureConfigsFolder(secureExistingChildren: true);
+        }
+
+        public static void EnsureConfigsFolderExists()
+        {
+            EnsureConfigsFolder(secureExistingChildren: false);
+        }
+
+        public static void EnsureSecureMainFolder()
+        {
+            EnsureAdministratorsOnlyDirectory(SecureMainFolder, true);
+        }
+
+        public static void EnsureSecureMainFolderExists()
+        {
+            EnsureAdministratorsOnlyDirectory(SecureMainFolder, false);
+        }
+
+        private static void EnsureConfigsFolder(bool secureExistingChildren)
+        {
             if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
             {
-                EnsureAdministratorsOnlyDirectory(SecureMainFolder);
-                EnsureAdministratorsOnlyDirectory(ConfigsFolder);
+                EnsureAdministratorsOnlyDirectory(SecureMainFolder, secureExistingChildren);
+                EnsureAdministratorsOnlyDirectory(ConfigsFolder, secureExistingChildren);
                 return;
             }
+
+            if (!AllowUnsecuredConfigFolderOverrideForTests)
+                throw new InvalidOperationException(
+                    $"WireSock UI configuration folder '{ConfigsFolder}' must be inside the secured folder '{SecureMainFolder}'.");
 
             Directory.CreateDirectory(ConfigsFolder);
         }
 
-        private static void EnsureAdministratorsOnlyDirectory(string path)
+        private static void EnsureAdministratorsOnlyDirectory(string path, bool secureExistingChildren)
         {
             try
             {
@@ -55,7 +81,8 @@ namespace WireSockUI
                     throw new IOException($"Refusing to secure WireSock UI directory reparse point '{path}'.");
 
                 Directory.SetAccessControl(path, security);
-                SecureExistingChildren(path);
+                if (secureExistingChildren)
+                    SecureExistingChildren(path);
             }
             catch (Exception ex)
             {
@@ -68,7 +95,7 @@ namespace WireSockUI
         {
             try
             {
-                Directory.CreateDirectory(SecureMainFolder, CreateAdministratorsOnlyDirectorySecurity());
+                EnsureSecureMainFolderExists();
                 DeleteNativeRecoveryMarkerPathIfUnsafeForWrite();
 
                 var message =

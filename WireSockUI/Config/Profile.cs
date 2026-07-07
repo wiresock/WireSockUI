@@ -525,7 +525,7 @@ namespace WireSockUI.Config
 
             try
             {
-                Global.EnsureConfigsFolder();
+                Global.EnsureConfigsFolderExists();
                 files = Directory.GetFiles(Global.ConfigsFolder);
             }
             catch (Exception ex)
@@ -659,17 +659,17 @@ namespace WireSockUI.Config
                 }
 
                 var attributes = File.GetAttributes(profilePath);
-                if ((attributes & FileAttributes.Directory) != 0)
-                {
-                    diagnostic =
-                        $"Profile path '{GetProfileDisplayName(profilePath)}' is a directory and will not be loaded by elevated WireSock UI.";
-                    return false;
-                }
-
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     diagnostic =
                         $"Profile file '{GetProfileDisplayName(profilePath)}' is a reparse point and will not be loaded by elevated WireSock UI.";
+                    return false;
+                }
+
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    diagnostic =
+                        $"Profile path '{GetProfileDisplayName(profilePath)}' is a directory and will not be loaded by elevated WireSock UI.";
                     return false;
                 }
 

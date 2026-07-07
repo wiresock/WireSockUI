@@ -16,14 +16,15 @@ namespace WireSockUI.Notifications
 
         private static string EnsureNotificationIcon()
         {
-            var icon = Path.Combine(Global.MainFolder, "WireSock.ico");
+            var icon = Path.Combine(Global.SecureMainFolder, "WireSock.ico");
 
             lock (IconSyncRoot)
             {
+                Global.EnsureSecureMainFolderExists();
+
                 if (File.Exists(icon))
                     return icon;
 
-                Directory.CreateDirectory(Global.MainFolder);
                 using (var stream = new FileStream(icon, FileMode.Create, FileAccess.Write, FileShare.Read))
                 {
                     Resources.ico.Save(stream);

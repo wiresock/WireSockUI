@@ -36,6 +36,8 @@ Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK 
 
 Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration and manual import use bounded temporary copies and reject reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening when possible. Legacy profiles containing script hooks are not auto-migrated; import them manually so the hook warning can be reviewed.
 
+Runtime state that can be written by the elevated process, including the native recovery marker and UWP notification icon, is kept under the secured `%ProgramData%\WireSockUI` folder rather than per-user AppData.
+
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
 
 The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel, preserves the native lock during reconnect/profile-switch cleanup, and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
@@ -63,7 +65,7 @@ The single-node `-m:1` solution build avoids a silent MSBuild failure that can h
 
 - A clean build does not prove that the installed driver and SDK DLL are present or compatible on the target machine.
 - Tunnel start/stop still depends on driver state and Windows networking permissions after elevation succeeds.
-- The `WireSockUI.Tests` harness covers focused parser/profile validation scenarios, but native driver and `wgbooster.dll` lifecycle behavior still needs runtime validation on a machine with the SDK installed.
+- The `WireSockUI.Tests` harness covers focused parser/profile validation scenarios, including reparse-point rejection through file symlinks or junction fallback, but native driver and `wgbooster.dll` lifecycle behavior still needs runtime validation on a machine with the SDK installed.
 
 ## License
 

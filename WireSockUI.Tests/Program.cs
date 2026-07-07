@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -54,6 +55,8 @@ namespace WireSockUI.Tests
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
+                { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
+                { "Release version parser handles SemVer tags", ReleaseVersionParserHandlesSemVerTags },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
@@ -185,12 +188,14 @@ namespace WireSockUI.Tests
         private static void ProfileEnumerationCreatesMissingOverriddenConfigFolder()
         {
             var originalConfigsFolder = Global.ConfigsFolder;
+            var originalOverride = Global.AllowUnsecuredConfigFolderOverrideForTests;
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"),
                 "Configs");
 
             try
             {
                 Global.ConfigsFolder = directory;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = true;
 
                 var profiles = Profile.GetProfiles().ToList();
 
@@ -201,6 +206,7 @@ namespace WireSockUI.Tests
             finally
             {
                 Global.ConfigsFolder = originalConfigsFolder;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
 
                 try
                 {
@@ -223,9 +229,9 @@ namespace WireSockUI.Tests
                 var link = Path.Combine(Global.ConfigsFolder, "linked.conf");
                 File.WriteAllText(target, ValidConfig());
 
-                if (!TryCreateFileSymbolicLink(link, target))
+                if (!TryCreateProfileReparsePoint(link, target))
                 {
-                    SkipOrFail("file symlink creation unavailable; reparse profile check not exercised.");
+                    SkipOrFail("profile reparse point creation unavailable; reparse profile check not exercised.");
                     return;
                 }
 
@@ -450,6 +456,44 @@ namespace WireSockUI.Tests
                 "Expected a child of a drive root to be detected.");
         }
 
+        private static void GlobalRejectsUnsecuredConfigFolderOverridesByDefault()
+        {
+            var originalConfigsFolder = Global.ConfigsFolder;
+            var originalOverride = Global.AllowUnsecuredConfigFolderOverrideForTests;
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Global.ConfigsFolder = directory;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = false;
+
+                AssertThrows<InvalidOperationException>(() => Global.EnsureConfigsFolder(), "secured folder");
+            }
+            finally
+            {
+                Global.ConfigsFolder = originalConfigsFolder;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
+            }
+        }
+
+        private static void ReleaseVersionParserHandlesSemVerTags()
+        {
+            AssertTrue(ReleaseVersionParser.TryParseReleaseTag("V1.2.3", out var upperV),
+                "Expected uppercase V-prefixed tags to parse.");
+            AssertEqual("1.2.3", upperV.ToString());
+
+            AssertTrue(ReleaseVersionParser.TryParseReleaseTag("v1.2.3-beta.1", out var prerelease),
+                "Expected prerelease tags to parse by comparing their numeric release version.");
+            AssertEqual("1.2.3", prerelease.ToString());
+
+            AssertTrue(ReleaseVersionParser.TryParseReleaseTag("1.2.3+build.5", out var metadata),
+                "Expected build metadata tags to parse by comparing their numeric release version.");
+            AssertEqual("1.2.3", metadata.ToString());
+
+            AssertFalse(ReleaseVersionParser.TryParseReleaseTag("not-a-version", out _),
+                "Expected invalid release tags to be rejected.");
+        }
+
         private static void ProgramPathNormalizationPreservesDriveRoots()
         {
             var normalize = typeof(WireSockUI.Program).GetMethod("NormalizePathDirectory",
@@ -551,11 +595,6 @@ namespace WireSockUI.Tests
 
         private static void ProfileImportRejectsOversizedFiles()
         {
-            var copyProfileToTemporaryFile = typeof(FrmMain).GetMethod("CopyProfileToTemporaryFile",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            if (copyProfileToTemporaryFile == null)
-                throw new InvalidOperationException("CopyProfileToTemporaryFile helper was not found.");
-
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
             var source = Path.Combine(directory, "oversized.conf");
             var destination = Path.Combine(directory, "oversized.tmp");
@@ -568,8 +607,8 @@ namespace WireSockUI.Tests
                     stream.SetLength(1024 * 1024 + 1);
                 }
 
-                AssertInvocationThrows<InvalidOperationException>(
-                    () => copyProfileToTemporaryFile.Invoke(null, new object[] { source, destination }),
+                AssertThrows<InvalidOperationException>(
+                    () => ProfileImportService.CopyProfileToTemporaryFile(source, destination),
                     "too large");
                 AssertFalse(File.Exists(destination), "Expected oversized profile imports not to create a temp copy.");
             }
@@ -625,11 +664,6 @@ namespace WireSockUI.Tests
 
         private static void ProfileImportRejectsReparsePointSources()
         {
-            var copyProfileToTemporaryFile = typeof(FrmMain).GetMethod("CopyProfileToTemporaryFile",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            if (copyProfileToTemporaryFile == null)
-                throw new InvalidOperationException("CopyProfileToTemporaryFile helper was not found.");
-
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
             var target = Path.Combine(directory, "target.conf");
             var link = Path.Combine(directory, "linked.conf");
@@ -640,14 +674,14 @@ namespace WireSockUI.Tests
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(target, ValidConfig());
 
-                if (!TryCreateFileSymbolicLink(link, target))
+                if (!TryCreateProfileReparsePoint(link, target))
                 {
-                    SkipOrFail("file symlink creation unavailable; profile import reparse check not exercised.");
+                    SkipOrFail("profile reparse point creation unavailable; profile import reparse check not exercised.");
                     return;
                 }
 
-                AssertInvocationThrows<IOException>(
-                    () => copyProfileToTemporaryFile.Invoke(null, new object[] { link, destination }),
+                AssertThrows<IOException>(
+                    () => ProfileImportService.CopyProfileToTemporaryFile(link, destination),
                     "reparse point");
                 AssertFalse(File.Exists(destination),
                     "Expected reparse point profile imports not to create a temp copy.");
@@ -776,9 +810,9 @@ namespace WireSockUI.Tests
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(target, ValidConfig());
 
-                if (!TryCreateFileSymbolicLink(link, target))
+                if (!TryCreateProfileReparsePoint(link, target))
                 {
-                    SkipOrFail("file symlink creation unavailable; legacy migration reparse check not exercised.");
+                    SkipOrFail("profile reparse point creation unavailable; legacy migration reparse check not exercised.");
                     return;
                 }
 
@@ -1048,6 +1082,65 @@ namespace WireSockUI.Tests
             return CreateSymbolicLink(linkPath, targetPath, SymbolicLinkFlagFile);
         }
 
+        private static bool TryCreateProfileReparsePoint(string linkPath, string targetPath)
+        {
+            if (TryCreateFileSymbolicLink(linkPath, targetPath))
+                return true;
+
+            var targetDirectory = targetPath + ".junction-target";
+            try
+            {
+                Directory.CreateDirectory(targetDirectory);
+                return TryCreateDirectoryJunction(linkPath, targetDirectory);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryCreateDirectoryJunction(string linkPath, string targetDirectory)
+        {
+            if (linkPath.IndexOf('"') >= 0 || targetDirectory.IndexOf('"') >= 0)
+                return false;
+
+            try
+            {
+                var startInfo = new ProcessStartInfo("cmd.exe",
+                    $"/c mklink /J \"{linkPath}\" \"{targetDirectory}\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false
+                };
+
+                using (var process = Process.Start(startInfo))
+                {
+                    if (process == null)
+                        return false;
+
+                    if (!process.WaitForExit(5000))
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch
+                        {
+                            // Best-effort cleanup; the caller will report the unavailable reparse test.
+                        }
+
+                        return false;
+                    }
+
+                    return process.ExitCode == 0 && Directory.Exists(linkPath);
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
         private static void SkipOrFail(string message)
         {
             if (string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
@@ -1072,17 +1165,20 @@ namespace WireSockUI.Tests
         private static void WithTemporaryConfigFolder(Action action)
         {
             var originalConfigsFolder = Global.ConfigsFolder;
+            var originalOverride = Global.AllowUnsecuredConfigFolderOverrideForTests;
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
 
             try
             {
                 Directory.CreateDirectory(directory);
                 Global.ConfigsFolder = directory;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = true;
                 action();
             }
             finally
             {
                 Global.ConfigsFolder = originalConfigsFolder;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
 
                 try
                 {

@@ -31,10 +31,10 @@ namespace WireSockUI.Extensions
                     var data = reader.ReadToEnd();
 
                     if (!JsonObject.TryParse(data, out var json)) return null;
-                    var tag = json.GetNamedString("tag_name");
-                    tag = tag.Trim('v');
+                    if (!ReleaseVersionParser.TryParseReleaseTag(json.GetNamedString("tag_name"), out var version))
+                        return null;
 
-                    return new Version(tag);
+                    return version;
                 }
             }
         }

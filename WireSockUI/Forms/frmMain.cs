@@ -34,7 +34,6 @@ namespace WireSockUI.Forms
         private const int TimedOutConnectCleanupRecoveryMilliseconds = 30000;
         private const int MaxVisibleLogMessages = 2000;
         private const int ShutdownDisconnectTimeoutMilliseconds = 5000;
-        private const long MaxImportedProfileSizeBytes = 1024 * 1024;
 
         /**
          * @brief The manager that handles the Wireguard connections.
@@ -1376,13 +1375,10 @@ namespace WireSockUI.Forms
 
         private bool ImportProfileFromFile(string filePath, string destinationPath)
         {
-            Global.EnsureConfigsFolder();
-            var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
+            var tmpProfile = ProfileImportService.CopyToTemporaryProfileFile(filePath);
 
             try
             {
-                CopyProfileToTemporaryFile(filePath, tmpProfile);
-
                 var profile = new Profile(tmpProfile);
                 if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profile))
                     return false;
@@ -1394,30 +1390,7 @@ namespace WireSockUI.Forms
             finally
             {
                 if (tmpProfile != null)
-                    TryDeleteTemporaryProfile(tmpProfile);
-            }
-        }
-
-        private static void CopyProfileToTemporaryFile(string sourcePath, string destinationPath)
-        {
-            RegularFileSource.CopyToTemporaryFile(
-                sourcePath,
-                destinationPath,
-                MaxImportedProfileSizeBytes,
-                "profile",
-                "The profile file is too large to be imported.");
-        }
-
-        private static void TryDeleteTemporaryProfile(string tmpProfile)
-        {
-            try
-            {
-                if (File.Exists(tmpProfile))
-                    File.Delete(tmpProfile);
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to delete temporary imported profile '{tmpProfile}': {ex.Message}");
+                    ProfileImportService.TryDeleteTemporaryProfile(tmpProfile);
             }
         }
 

@@ -305,19 +305,12 @@ namespace WireSockUI
                 if (_disposed)
                     return;
 
-                if (_handle != IntPtr.Zero)
+                if (_handle != IntPtr.Zero && disposing)
                 {
-                    if (disposing)
+                    if (!Disconnect() && _handle != IntPtr.Zero)
                     {
-                        if (!Disconnect() && _handle != IntPtr.Zero)
-                        {
-                            PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
-                            DropCurrentHandle(true, true);
-                        }
-                    }
-                    else
-                    {
-                        DropCurrentHandle(false, true);
+                        PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
+                        DropCurrentHandle(true, true);
                     }
                 }
 
@@ -330,7 +323,7 @@ namespace WireSockUI
                         _logWorker.Dispose();
                 }
 
-                if (_logPrinterHandle.IsAllocated)
+                if (disposing && _logPrinterHandle.IsAllocated)
                     _logPrinterHandle.Free();
             }
         }
@@ -437,11 +430,6 @@ namespace WireSockUI
             {
                 // CompleteAdding can race with another shutdown path after IsAddingCompleted is checked.
             }
-        }
-
-        ~WireSockManager()
-        {
-            Dispose(false);
         }
 
         /// <summary>
