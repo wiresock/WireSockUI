@@ -319,6 +319,7 @@ namespace WireSockUI
                 if (disposing)
                 {
                     CompleteLogQueue();
+                    _logQueue.Dispose();
                     if (!_logWorker.IsBusy)
                         _logWorker.Dispose();
                 }

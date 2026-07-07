@@ -20,7 +20,7 @@ namespace WireSockUI.Notifications
 
             lock (IconSyncRoot)
             {
-                Global.EnsureSecureMainFolderExists();
+                Global.EnsureSecureMainFolder();
 
                 if (File.Exists(icon))
                     return icon;
