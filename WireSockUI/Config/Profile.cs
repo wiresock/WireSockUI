@@ -700,7 +700,7 @@ namespace WireSockUI.Config
             {
                 var fileName = Path.GetFileName(trimmedPath);
                 if (!string.IsNullOrWhiteSpace(fileName))
-                    return fileName;
+                    return EscapeProfileDisplayName(fileName);
             }
             catch (ArgumentException)
             {
@@ -715,7 +715,12 @@ namespace WireSockUI.Config
             {
             }
 
-            return string.IsNullOrWhiteSpace(trimmedPath) ? profilePath : trimmedPath;
+            return EscapeProfileDisplayName(string.IsNullOrWhiteSpace(trimmedPath) ? profilePath : trimmedPath);
+        }
+
+        private static string EscapeProfileDisplayName(string value)
+        {
+            return (value ?? string.Empty).Replace("\0", "\\0");
         }
 
         private static void AddScriptHook(List<KeyValuePair<string, string>> hooks, string name, string value)

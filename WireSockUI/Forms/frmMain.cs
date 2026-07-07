@@ -1452,8 +1452,7 @@ namespace WireSockUI.Forms
         {
             var shouldApplyNativeState =
                 requestedEnableKillSwitch != previousEnableKillSwitch ||
-                _wiresock.HasTunnelHandle ||
-                !requestedEnableKillSwitch;
+                _wiresock.HasTunnelHandle;
 
             if (shouldApplyNativeState && !ApplyKillSwitchSetting(requestedEnableKillSwitch))
             {
@@ -1547,8 +1546,7 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            if (!IsNativeRecoveryRequired())
-                Global.TryDeleteNativeRecoveryMarker();
+            Global.TryDeleteNativeRecoveryMarker();
 
             MessageBox.Show(Resources.KillSwitchResetSuccess, Resources.KillSwitchResetTitle,
                 MessageBoxButtons.OK, MessageBoxIcon.Information);

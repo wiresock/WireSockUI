@@ -239,6 +239,10 @@ namespace WireSockUI.Tests
                 "Expected malformed profile paths to be rejected.");
             AssertTrue(!string.IsNullOrWhiteSpace(diagnostic),
                 "Expected malformed profile paths to produce a diagnostic.");
+            AssertFalse(diagnostic.Contains("\0"),
+                $"Expected malformed profile diagnostics to escape embedded NULs, got '{diagnostic}'.");
+            AssertTrue(diagnostic.Contains("\\0"),
+                $"Expected malformed profile diagnostics to include the escaped NUL marker, got '{diagnostic}'.");
             AssertThrows<IOException>(() => Profile.EnsureRegularProfileFile(malformedPath), "profile");
         }
 

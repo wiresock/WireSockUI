@@ -230,7 +230,7 @@ namespace WireSockUI.Forms
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Failed to delete legacy autorun task '{taskName}': {ex.Message}");
+                Trace.TraceWarning($"Failed to delete legacy autorun task '{taskName}': {ex}");
             }
         }
 
