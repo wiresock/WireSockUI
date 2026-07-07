@@ -318,8 +318,7 @@ namespace WireSockUI
 
                 if (disposing)
                 {
-                    CompleteLogQueue();
-                    _logQueue.Dispose();
+                    CompleteAndDisposeLogQueue();
                     if (!_logWorker.IsBusy)
                         _logWorker.Dispose();
                 }
@@ -354,6 +353,10 @@ namespace WireSockUI
                     _logQueue.TryTake(out _);
                     _logQueue.TryAdd(logMessage);
                 }
+            }
+            catch (ObjectDisposedException)
+            {
+                // The queue can be disposed while native callbacks are still unwinding during shutdown.
             }
             catch (InvalidOperationException)
             {
@@ -413,7 +416,7 @@ namespace WireSockUI
             return worker;
         }
 
-        private void CompleteLogQueue()
+        private void CompleteAndDisposeLogQueue()
         {
             try
             {
@@ -421,6 +424,8 @@ namespace WireSockUI
                 {
                     if (!_logQueue.IsAddingCompleted)
                         _logQueue.CompleteAdding();
+
+                    _logQueue.Dispose();
                 }
             }
             catch (ObjectDisposedException)
