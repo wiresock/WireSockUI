@@ -45,6 +45,7 @@ namespace WireSockUI.Tests
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
+                { "Profile rejects invalid Amnezia passthrough options", ProfileRejectsInvalidAmneziaPassthroughOptions },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
@@ -55,6 +56,7 @@ namespace WireSockUI.Tests
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
                 { "Profile import preserves pre-existing destination on copy failure", ProfileImportPreservesExistingDestinationOnCopyFailure },
                 { "Profile import rejects reparse point sources", ProfileImportRejectsReparsePointSources },
+                { "Profile import rejects directory sources", ProfileImportRejectsDirectorySources },
                 { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
                 { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
                 { "Legacy migration rejects script hooks", LegacyMigrationRejectsScriptHooks },
@@ -62,6 +64,7 @@ namespace WireSockUI.Tests
                 { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
+                { "Autorun task name is path seeded", AutoRunTaskNameIsPathSeeded },
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
@@ -289,6 +292,38 @@ namespace WireSockUI.Tests
             AssertEqual("1280", interfaceSection["S1"]);
             AssertEqual("chrome", interfaceSection["Ib"]);
             new Profile(path);
+        }
+
+        private static void ProfileRejectsInvalidAmneziaPassthroughOptions()
+        {
+            AssertProfileRejectsInterfaceOption("#@ws:H1 = 4-1", "H1");
+            AssertProfileRejectsInterfaceOption("#@ws:S1 = 1281", "S1");
+            AssertProfileRejectsInterfaceOption("#@ws:Id = ***", "Id");
+            AssertProfileRejectsInterfaceOption("#@ws:Ip = ftp", "Ip");
+            AssertProfileRejectsInterfaceOption("#@ws:Ib = safari", "Ib");
+        }
+
+        private static void AssertProfileRejectsInterfaceOption(string optionLine, string messagePart)
+        {
+            var path = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                optionLine + "\n" +
+                "\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+
+            try
+            {
+                AssertThrows<FormatException>(() => new Profile(path), messagePart);
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
         }
 
         private static void StatsFormattingHandlesExtremeValues()
@@ -542,6 +577,37 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void ProfileImportRejectsDirectorySources()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+
+                AssertThrows<IOException>(
+                    () =>
+                    {
+                        using (RegularFileSource.OpenForRead(directory, "profile"))
+                        {
+                        }
+                    },
+                    "directory");
+            }
+            finally
+            {
+                try
+                {
+                    if (Directory.Exists(directory))
+                        Directory.Delete(directory, true);
+                }
+                catch
+                {
+                    // Best-effort cleanup must not hide the original test failure.
+                }
+            }
+        }
+
         private static void LegacyMigrationRejectsOversizedFiles()
         {
             var copyLegacyProfileToTemporaryFile = typeof(WireSockUI.Program).GetMethod(
@@ -724,6 +790,38 @@ namespace WireSockUI.Tests
             AssertFalse(string.Equals(first, second, StringComparison.Ordinal),
                 "Expected AppUserModelID to differ for side-by-side executable paths.");
             AssertTrue(first.Length <= 128, "Expected AppUserModelID to fit the Windows shell length limit.");
+        }
+
+        private static void AutoRunTaskNameIsPathSeeded()
+        {
+            var buildAutoRunTaskName = typeof(FrmSettings).GetMethod(
+                "BuildAutoRunTaskName", BindingFlags.NonPublic | BindingFlags.Static);
+            if (buildAutoRunTaskName == null)
+                throw new InvalidOperationException("BuildAutoRunTaskName helper was not found.");
+
+            var isSameExecutablePath = typeof(FrmSettings).GetMethod(
+                "IsSameExecutablePath", BindingFlags.NonPublic | BindingFlags.Static);
+            if (isSameExecutablePath == null)
+                throw new InvalidOperationException("IsSameExecutablePath helper was not found.");
+
+            var first = (string)buildAutoRunTaskName.Invoke(null,
+                new object[] { @"C:\Program Files\WireSockUI\WireSockUI.exe" });
+            var firstAgain = (string)buildAutoRunTaskName.Invoke(null,
+                new object[] { @"C:\Program Files\WireSockUI\WireSockUI.exe" });
+            var second = (string)buildAutoRunTaskName.Invoke(null,
+                new object[] { @"D:\Tools\WireSockUI\WireSockUI.exe" });
+
+            AssertEqual(first, firstAgain);
+            AssertFalse(string.Equals(first, second, StringComparison.Ordinal),
+                "Expected autorun task names to differ for side-by-side executable paths.");
+            AssertTrue(first.StartsWith("WireSockUI-", StringComparison.Ordinal),
+                $"Expected autorun task name to include the application prefix, got '{first}'.");
+            AssertTrue((bool)isSameExecutablePath.Invoke(null, new object[]
+                {
+                    @"C:\Program Files\WireSockUI\WireSockUI.exe",
+                    @"""c:\program files\wiresockui\wiresockui.exe"""
+                }),
+                "Expected autorun ownership checks to tolerate quoted task action paths.");
         }
 
         private static void WireSockDisconnectForwardsNetworkLockPreservation()

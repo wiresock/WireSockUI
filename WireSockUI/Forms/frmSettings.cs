@@ -4,6 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 using Microsoft.Win32.TaskScheduler;
+using WireSockUI.Native;
 using WireSockUI.Properties;
 
 namespace WireSockUI.Forms
@@ -11,6 +12,7 @@ namespace WireSockUI.Forms
     public partial class FrmSettings : Form
     {
         private readonly bool _initialAutoRun;
+        private readonly bool _initialAutoRunUsesPathScopedTask;
 
         public FrmSettings()
         {
@@ -18,7 +20,7 @@ namespace WireSockUI.Forms
 
             Icon = Resources.ico;
 
-            _initialAutoRun = IsAutoRunEnabled();
+            _initialAutoRun = IsAutoRunEnabled(out _initialAutoRunUsesPathScopedTask);
             chkAutorun.Checked = _initialAutoRun;
             chkAutoMinimize.Checked = Settings.Default.AutoMinimize;
             chkAutoConnect.Checked = Settings.Default.AutoConnect;
@@ -54,13 +56,37 @@ namespace WireSockUI.Forms
             return Path.Combine(startupFolderPath, $"{GetAppName()}.lnk");
         }
 
+        private static string GetAutoRunTaskName()
+        {
+            return BuildAutoRunTaskName(Application.ExecutablePath);
+        }
+
+        private static string GetLegacyAutoRunTaskName()
+        {
+            return GetAppName();
+        }
+
+        private static string BuildAutoRunTaskName(string executablePath)
+        {
+            return $"{GetAppName()}-{WindowsApplicationContext.BuildPathSeed(executablePath)}";
+        }
+
         private static void DeleteLegacyStartupShortcutIfPresent()
         {
             try
             {
                 var shortcutPath = GetLegacyStartupShortcutPath();
-                if (File.Exists(shortcutPath))
-                    File.Delete(shortcutPath);
+                if (!File.Exists(shortcutPath))
+                    return;
+
+                if (!IsShortcutOwnedByCurrentExecutable(shortcutPath))
+                {
+                    Trace.TraceWarning(
+                        $"Skipping legacy Startup shortcut '{shortcutPath}' because it points to a different executable.");
+                    return;
+                }
+
+                File.Delete(shortcutPath);
             }
             catch (Exception ex)
             {
@@ -75,16 +101,23 @@ namespace WireSockUI.Forms
         ///     Returns true if the auto-run feature is enabled, otherwise false.
         /// </returns>
         /// <remarks>
-        ///     This method uses the TaskService to find a task with the same name as the current application.
-        ///     If such a task is found, it means that the auto-run feature is enabled.
+        ///     This method uses a path-seeded task name and verifies that the task points to the current executable.
         /// </remarks>
-        private static bool IsAutoRunEnabled()
+        private static bool IsAutoRunEnabled(out bool usesPathScopedTask)
         {
+            usesPathScopedTask = false;
+
             try
             {
                 using (var ts = new TaskService())
                 {
-                    return ts.FindTask(GetAppName()) != null;
+                    if (IsTaskOwnedByCurrentExecutable(ts.FindTask(GetAutoRunTaskName())))
+                    {
+                        usesPathScopedTask = true;
+                        return true;
+                    }
+
+                    return IsTaskOwnedByCurrentExecutable(ts.FindTask(GetLegacyAutoRunTaskName()));
                 }
             }
             catch (Exception ex)
@@ -98,7 +131,7 @@ namespace WireSockUI.Forms
         ///     Enables the auto-run feature for the current application with administrative privileges.
         /// </summary>
         /// <remarks>
-        ///     This method creates a new task in the Task Scheduler with the same name as the current application.
+        ///     This method creates a new path-scoped task in the Task Scheduler.
         ///     The task is configured to run with the highest privileges and to trigger on logon.
         ///     The task action is set to the path of the current executable.
         ///     The task is also configured to run even if the computer is running on batteries, to not stop if the computer
@@ -130,7 +163,8 @@ namespace WireSockUI.Forms
                     td.Settings.IdleSettings.StopOnIdleEnd =
                         false; // Do not stop the task when the computer ceases to be idle
 
-                    ts.RootFolder.RegisterTaskDefinition(GetAppName(), td);
+                    ts.RootFolder.RegisterTaskDefinition(GetAutoRunTaskName(), td);
+                    DeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
                 }
 
                 DeleteLegacyStartupShortcutIfPresent();
@@ -147,8 +181,7 @@ namespace WireSockUI.Forms
         ///     Disables the auto-run feature for the current application with administrative privileges.
         /// </summary>
         /// <remarks>
-        ///     This method uses the TaskService to delete a task with the same name as the current application.
-        ///     If such a task is found and deleted, it means that the auto-run feature is disabled.
+        ///     This method deletes only tasks that point to the current executable.
         ///     If an error occurs while disabling auto-run, an error message is displayed.
         /// </remarks>
         private static bool DisableAutoRun()
@@ -157,8 +190,8 @@ namespace WireSockUI.Forms
             {
                 using (var ts = new TaskService())
                 {
-                    if (ts.FindTask(GetAppName()) != null)
-                        ts.RootFolder.DeleteTask(GetAppName(), false);
+                    DeleteAutoRunTaskIfOwned(ts, GetAutoRunTaskName());
+                    DeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
                 }
 
                 DeleteLegacyStartupShortcutIfPresent();
@@ -171,6 +204,64 @@ namespace WireSockUI.Forms
             }
         }
 
+        private static void DeleteAutoRunTaskIfOwned(TaskService ts, string taskName)
+        {
+            var task = ts.FindTask(taskName);
+            if (task == null)
+                return;
+
+            if (!IsTaskOwnedByCurrentExecutable(task))
+            {
+                Trace.TraceWarning(
+                    $"Skipping autorun task '{taskName}' because it points to a different executable.");
+                return;
+            }
+
+            ts.RootFolder.DeleteTask(taskName, false);
+        }
+
+        private static bool IsTaskOwnedByCurrentExecutable(Microsoft.Win32.TaskScheduler.Task task)
+        {
+            if (task?.Definition?.Actions == null)
+                return false;
+
+            foreach (var action in task.Definition.Actions)
+            {
+                var execAction = action as ExecAction;
+                if (execAction != null && IsSameExecutablePath(execAction.Path, Application.ExecutablePath))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsShortcutOwnedByCurrentExecutable(string shortcutPath)
+        {
+            using (var shortcut = new ShellLink(shortcutPath))
+            {
+                return IsSameExecutablePath(shortcut.TargetPath, Application.ExecutablePath);
+            }
+        }
+
+        private static bool IsSameExecutablePath(string first, string second)
+        {
+            try
+            {
+                return string.Equals(NormalizeExecutablePath(first), NormalizeExecutablePath(second),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to compare autorun executable paths: {ex.Message}");
+                return string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        private static string NormalizeExecutablePath(string path)
+        {
+            return Path.GetFullPath((path ?? string.Empty).Trim().Trim('"'));
+        }
+
         private static void ShowSettingsError(string messageFormat, Exception ex)
         {
             MessageBox.Show(string.Format(messageFormat, ex.Message), Resources.TunnelErrorTitle, MessageBoxButtons.OK,
@@ -179,7 +270,8 @@ namespace WireSockUI.Forms
 
         private void OnSaveClick(object sender, EventArgs e)
         {
-            if (_initialAutoRun != chkAutorun.Checked)
+            if (_initialAutoRun != chkAutorun.Checked ||
+                (chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask))
             {
                 var autoRunUpdated = chkAutorun.Checked ? EnableAutoRun() : DisableAutoRun();
                 if (!autoRunUpdated)

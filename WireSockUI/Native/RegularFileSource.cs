@@ -12,6 +12,7 @@ namespace WireSockUI.Native
         private const uint FileShareRead = 0x00000001;
         private const uint OpenExisting = 3;
         private const uint FileFlagOpenReparsePoint = 0x00200000;
+        private const uint FileFlagBackupSemantics = 0x02000000;
         private const uint FileFlagSequentialScan = 0x08000000;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
@@ -53,13 +54,15 @@ namespace WireSockUI.Native
 
         public static FileStream OpenForRead(string sourcePath, string sourceDescription)
         {
+            RejectUnsupportedSourceAttributes(sourcePath, sourceDescription);
+
             var handle = CreateFile(
                 sourcePath,
                 GenericRead,
                 FileShareRead,
                 IntPtr.Zero,
                 OpenExisting,
-                FileFlagOpenReparsePoint | FileFlagSequentialScan,
+                FileFlagOpenReparsePoint | FileFlagBackupSemantics | FileFlagSequentialScan,
                 IntPtr.Zero);
 
             if (handle.IsInvalid)
@@ -93,6 +96,40 @@ namespace WireSockUI.Native
                 handle.Dispose();
                 throw;
             }
+        }
+
+        private static void RejectUnsupportedSourceAttributes(string sourcePath, string sourceDescription)
+        {
+            FileAttributes attributes;
+
+            try
+            {
+                attributes = File.GetAttributes(sourcePath);
+            }
+            catch (FileNotFoundException)
+            {
+                return;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (IOException)
+            {
+                return;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                throw new IOException(
+                    $"{ToSentenceCase(sourceDescription)} '{Path.GetFileName(sourcePath)}' is a reparse point.");
+
+            if ((attributes & FileAttributes.Directory) != 0)
+                throw new IOException(
+                    $"{ToSentenceCase(sourceDescription)} '{Path.GetFileName(sourcePath)}' is a directory.");
         }
 
         public static void CopyToTemporaryFile(

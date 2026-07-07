@@ -61,7 +61,7 @@ namespace WireSockUI.Native
             const int maxAppUserModelIdLength = 128;
             const string prefix = "WireSock.Foundation";
 
-            var seed = HashPath(executablePath);
+            var seed = BuildPathSeed(executablePath);
             var segment = SanitizeAppUserModelIdSegment(appName);
             var maxSegmentLength = maxAppUserModelIdLength - prefix.Length - seed.Length - 2;
             if (segment.Length > maxSegmentLength)
@@ -80,7 +80,7 @@ namespace WireSockUI.Native
             return string.IsNullOrWhiteSpace(segment) ? "WireSockUI" : segment;
         }
 
-        private static string HashPath(string path)
+        internal static string BuildPathSeed(string path)
         {
             using (var sha256 = SHA256.Create())
             {
