@@ -114,7 +114,23 @@ namespace WireSockUI.Native
             {
                 return;
             }
+            catch (ArgumentException)
+            {
+                return;
+            }
+            catch (NotSupportedException)
+            {
+                return;
+            }
+            catch (PathTooLongException)
+            {
+                return;
+            }
             catch (UnauthorizedAccessException)
+            {
+                return;
+            }
+            catch (System.Security.SecurityException)
             {
                 return;
             }
@@ -138,8 +154,26 @@ namespace WireSockUI.Native
                 return string.Empty;
 
             var trimmedPath = sourcePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-            var fileName = Path.GetFileName(trimmedPath);
-            return string.IsNullOrWhiteSpace(fileName) ? sourcePath : fileName;
+            try
+            {
+                var fileName = Path.GetFileName(trimmedPath);
+                if (!string.IsNullOrWhiteSpace(fileName))
+                    return fileName;
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (NotSupportedException)
+            {
+            }
+            catch (PathTooLongException)
+            {
+            }
+            catch (System.Security.SecurityException)
+            {
+            }
+
+            return string.IsNullOrWhiteSpace(trimmedPath) ? sourcePath : trimmedPath;
         }
 
         public static void CopyToTemporaryFile(

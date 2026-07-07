@@ -57,6 +57,7 @@ namespace WireSockUI.Tests
                 { "Profile import preserves pre-existing destination on copy failure", ProfileImportPreservesExistingDestinationOnCopyFailure },
                 { "Profile import rejects reparse point sources", ProfileImportRejectsReparsePointSources },
                 { "Profile import rejects directory sources", ProfileImportRejectsDirectorySources },
+                { "Profile import reports malformed source paths consistently", ProfileImportReportsMalformedSourcePathsConsistently },
                 { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
                 { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
                 { "Legacy migration rejects script hooks", LegacyMigrationRejectsScriptHooks },
@@ -614,6 +615,21 @@ namespace WireSockUI.Tests
                     // Best-effort cleanup must not hide the original test failure.
                 }
             }
+        }
+
+        private static void ProfileImportReportsMalformedSourcePathsConsistently()
+        {
+            var invalidPath = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                              Path.DirectorySeparatorChar + "<invalid>.conf";
+
+            AssertThrows<IOException>(
+                () =>
+                {
+                    using (RegularFileSource.OpenForRead(invalidPath, "profile"))
+                    {
+                    }
+                },
+                "Unable to open");
         }
 
         private static void LegacyMigrationRejectsOversizedFiles()
