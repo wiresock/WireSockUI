@@ -59,6 +59,7 @@ namespace WireSockUI.Notifications
             try
             {
                 File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+                _notificationIconReady = true;
             }
             catch (FileNotFoundException)
             {
@@ -77,7 +78,6 @@ namespace WireSockUI.Notifications
                 Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
             }
 
-            _notificationIconReady = true;
             return true;
         }
 

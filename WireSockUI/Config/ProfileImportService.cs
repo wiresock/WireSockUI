@@ -11,7 +11,7 @@ namespace WireSockUI.Config
 
         public static string CopyToTemporaryProfileFile(string sourcePath)
         {
-            Global.EnsureConfigsFolder();
+            Global.EnsureConfigsFolderExists();
             var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
 
             try
