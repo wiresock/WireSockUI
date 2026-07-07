@@ -19,14 +19,14 @@ namespace WireSockUI.Notifications
 
         private static string EnsureNotificationIcon()
         {
-            var icon = Path.Combine(Global.SecureMainFolder, "WireSock.ico");
+            var icon = Path.Combine(Global.NotificationAssetsFolder, "WireSock.ico");
 
             lock (IconSyncRoot)
             {
                 if (_notificationIconReady && IsRegularNotificationIcon(icon))
                     return icon;
 
-                Global.EnsureSecureMainFolderExists();
+                Global.EnsureNotificationAssetsFolderExists();
 
                 if (TryUseExistingNotificationIcon(icon))
                     return icon;
@@ -99,7 +99,7 @@ namespace WireSockUI.Notifications
             }
 
             throw new InvalidOperationException(
-                $"The notification icon path '{icon}' points to a directory. Remove the unexpected directory from the secured WireSockUI ProgramData folder and retry.");
+                $"The notification icon path '{icon}' points to a directory. Remove the unexpected directory from the WireSockUI notification assets folder and retry.");
         }
 
         private static bool TryGetAttributes(string path, out FileAttributes attributes)
