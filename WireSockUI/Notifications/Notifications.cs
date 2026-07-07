@@ -65,7 +65,7 @@ namespace WireSockUI.Notifications
             }
 
             throw new InvalidOperationException(
-                "The notification icon path points to a directory. Remove the unexpected WireSock.ico directory from the WireSockUI data folder and retry.");
+                $"The notification icon path '{icon}' points to a directory. Remove the unexpected directory from the secured WireSockUI ProgramData folder and retry.");
         }
 
         private static bool TryGetAttributes(string path, out FileAttributes attributes)
