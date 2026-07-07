@@ -259,6 +259,12 @@
   <data name="KillSwitchResetError" xml:space="preserve">
     <value>Kill Switch network lock is active, but WireSock UI could not reset it. Disconnect or restart WireSock UI and try again.</value>
   </data>
+  <data name="KillSwitchResetSuccess" xml:space="preserve">
+    <value>Kill Switch network lock was reset. Restart WireSock UI before reconnecting if recovery mode is active.</value>
+  </data>
+  <data name="KillSwitchResetTitle" xml:space="preserve">
+    <value>Kill Switch Reset</value>
+  </data>
   <data name="ParserDuplicateSectionError" xml:space="preserve">
     <value>Duplicate [{0}] sections are not supported by WireSock UI.</value>
   </data>
@@ -276,6 +282,9 @@
   </data>
   <data name="MenuImportTunnel" xml:space="preserve">
     <value>Import tunnel from file...</value>
+  </data>
+  <data name="MenuResetKillSwitch" xml:space="preserve">
+    <value>Reset Kill Switch</value>
   </data>
   <data name="MenuSettings" xml:space="preserve">
     <value>Settings</value>
@@ -515,7 +524,7 @@
     <value>Error</value>
   </data>
   <data name="TunnelNativeRecoveryRequired" xml:space="preserve">
-    <value>WireSock UI could not finish cleaning up a native tunnel operation. New tunnel operations are disabled to avoid unsafe network state. Restart WireSock UI as administrator; if network access remains blocked, use Reset Kill Switch from the tray menu.</value>
+    <value>WireSock UI could not finish cleaning up a native tunnel operation. New tunnel operations are disabled to avoid unsafe network state. Restart WireSock UI as administrator; if network access remains blocked, use Reset Kill Switch from the tray menu while disconnected or in recovery mode.</value>
   </data>
   <data name="TunnelOperationPending" xml:space="preserve">
     <value>A WireSock tunnel operation is already in progress. Wait for it to finish before trying again.</value>

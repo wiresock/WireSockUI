@@ -53,7 +53,7 @@ namespace WireSockUI.Config
         public Profile(string profilePath)
         {
             if (!ProfilePathExists(profilePath))
-                throw new FileNotFoundException($"Profile {Path.GetFileName(profilePath)} does not exist.");
+                throw new FileNotFoundException($"Profile {GetProfileDisplayName(profilePath)} does not exist.");
 
             EnsureRegularProfileFile(profilePath);
 
@@ -63,7 +63,7 @@ namespace WireSockUI.Config
             var configESections = sections as string[] ?? sections.ToArray();
             if (!configESections.Contains("Interface", StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)} does not contain an \"Interface\" section.");
+                    $"Profile {GetProfileDisplayName(profilePath)} does not contain an \"Interface\" section.");
 
             var section = parser.GetSection("Interface");
 
@@ -84,7 +84,7 @@ namespace WireSockUI.Config
 
             if (!configESections.Contains("Peer", StringComparer.OrdinalIgnoreCase))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)} does not contain a \"Peer\" section.");
+                    $"Profile {GetProfileDisplayName(profilePath)} does not contain a \"Peer\" section.");
 
             section = parser.GetSection("Peer");
 
@@ -493,54 +493,12 @@ namespace WireSockUI.Config
 
         private static void ValidateInterfaceExtensions(Dictionary<string, string> section)
         {
-            ValidateUInt("Interface", "Jc", section.Get("Jc"), 0, 128);
-            ValidateUInt("Interface", "Jd", section.Get("Jd"), 0, 200);
-            ValidateUInt("Interface", "Jmin", section.Get("Jmin"), 0, 1280);
-            ValidateUInt("Interface", "Jmax", section.Get("Jmax"), 0, 1280);
-            ValidateUInt("Interface", "S1", section.Get("S1"), 0, 1280);
-            ValidateUInt("Interface", "S2", section.Get("S2"), 0, 1280);
-            ValidateUInt("Interface", "S3", section.Get("S3"), 0, uint.MaxValue);
-            ValidateUInt("Interface", "S4", section.Get("S4"), 0, uint.MaxValue);
-
-            ValidateUIntOrRange("Interface", "H1", section.Get("H1"), 0, uint.MaxValue);
-            ValidateUIntOrRange("Interface", "H2", section.Get("H2"), 0, uint.MaxValue);
-            ValidateUIntOrRange("Interface", "H3", section.Get("H3"), 0, uint.MaxValue);
-            ValidateUIntOrRange("Interface", "H4", section.Get("H4"), 0, uint.MaxValue);
-
-            ValidateHostName("Interface", "Id", section.Get("Id"));
-            ValidateOneOf("Interface", "Ip", section.Get("Ip"), "quic", "dns", "sip", "stun");
-            ValidateOneOf("Interface", "Ib", section.Get("Ib"), "chrome", "firefox", "curl", "random");
-        }
-
-        private static void ValidateUInt(string section, string key, string keyValue, uint minValue, uint maxValue)
-        {
-            if (!ConfigValueValidator.IsUIntInRange(keyValue, minValue, maxValue))
-                throw new FormatException(
-                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue}.");
-        }
-
-        private static void ValidateUIntOrRange(string section, string key, string keyValue, uint minValue,
-            uint maxValue)
-        {
-            if (!ConfigValueValidator.IsUIntOrRange(keyValue, minValue, maxValue))
-                throw new FormatException(
-                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue} or an ascending range.");
-        }
-
-        private static void ValidateHostName(string section, string key, string keyValue)
-        {
-            if (string.IsNullOrWhiteSpace(keyValue))
-                return;
-
-            if (Uri.CheckHostName(keyValue.Trim()) == UriHostNameType.Unknown)
-                throw new FormatException($"\"{key}\" in \"{section}\", is not a valid host name.");
-        }
-
-        private static void ValidateOneOf(string section, string key, string keyValue, params string[] values)
-        {
-            if (!ConfigValueValidator.IsOneOf(keyValue, values))
-                throw new FormatException(
-                    $"\"{key}\" in \"{section}\", invalid value. Expected one of: {string.Join(", ", values)}.");
+            foreach (var rule in ConfigValueValidator.InterfaceExtensionRules)
+            {
+                if (!rule.IsValid(section.Get(rule.Key)))
+                    throw new FormatException(
+                        $"\"{rule.Key}\" in \"Interface\", invalid value. Expected {rule.ExpectedValueDescription}.");
+            }
         }
 
         public static IEnumerable<string> GetProfiles()
@@ -665,7 +623,7 @@ namespace WireSockUI.Config
             catch (Exception ex)
             {
                 Trace.TraceWarning(
-                    $"Unable to inspect profile path '{Path.GetFileName(profilePath)}': {ex.Message}");
+                    $"Unable to inspect profile path '{GetProfileDisplayName(profilePath)}': {ex.Message}");
                 return true;
             }
         }
@@ -686,14 +644,14 @@ namespace WireSockUI.Config
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
                     diagnostic =
-                        $"Profile path '{Path.GetFileName(profilePath)}' is a directory and will not be loaded by elevated WireSock UI.";
+                        $"Profile path '{GetProfileDisplayName(profilePath)}' is a directory and will not be loaded by elevated WireSock UI.";
                     return false;
                 }
 
                 if ((attributes & FileAttributes.ReparsePoint) != 0)
                 {
                     diagnostic =
-                        $"Profile file '{Path.GetFileName(profilePath)}' is a reparse point and will not be loaded by elevated WireSock UI.";
+                        $"Profile file '{GetProfileDisplayName(profilePath)}' is a reparse point and will not be loaded by elevated WireSock UI.";
                     return false;
                 }
 
@@ -701,18 +659,18 @@ namespace WireSockUI.Config
             }
             catch (FileNotFoundException)
             {
-                diagnostic = $"Profile file '{Path.GetFileName(profilePath)}' does not exist.";
+                diagnostic = $"Profile file '{GetProfileDisplayName(profilePath)}' does not exist.";
                 return false;
             }
             catch (DirectoryNotFoundException)
             {
-                diagnostic = $"Profile directory for '{Path.GetFileName(profilePath)}' does not exist.";
+                diagnostic = $"Profile directory for '{GetProfileDisplayName(profilePath)}' does not exist.";
                 return false;
             }
             catch (Exception ex)
             {
                 diagnostic =
-                    $"Unable to inspect profile file '{Path.GetFileName(profilePath)}': {ex.Message}";
+                    $"Unable to inspect profile file '{GetProfileDisplayName(profilePath)}': {ex.Message}";
                 return false;
             }
         }
@@ -722,14 +680,42 @@ namespace WireSockUI.Config
         {
             if (!section.ContainsKey(key))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"{sectionName}\" does not have a \"{key}\" defined.");
+                    $"Profile {GetProfileDisplayName(profilePath)}, section \"{sectionName}\" does not have a \"{key}\" defined.");
 
             var value = section.Get(key);
             if (string.IsNullOrWhiteSpace(value))
                 throw new ArgumentException(
-                    $"Profile {Path.GetFileName(profilePath)}, section \"{sectionName}\" has an empty \"{key}\" value.");
+                    $"Profile {GetProfileDisplayName(profilePath)}, section \"{sectionName}\" has an empty \"{key}\" value.");
 
             return value;
+        }
+
+        private static string GetProfileDisplayName(string profilePath)
+        {
+            if (string.IsNullOrWhiteSpace(profilePath))
+                return string.Empty;
+
+            var trimmedPath = profilePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            try
+            {
+                var fileName = Path.GetFileName(trimmedPath);
+                if (!string.IsNullOrWhiteSpace(fileName))
+                    return fileName;
+            }
+            catch (ArgumentException)
+            {
+            }
+            catch (NotSupportedException)
+            {
+            }
+            catch (PathTooLongException)
+            {
+            }
+            catch (System.Security.SecurityException)
+            {
+            }
+
+            return string.IsNullOrWhiteSpace(trimmedPath) ? profilePath : trimmedPath;
         }
 
         private static void AddScriptHook(List<KeyValuePair<string, string>> hooks, string name, string value)

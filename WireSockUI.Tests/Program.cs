@@ -42,10 +42,12 @@ namespace WireSockUI.Tests
                 { "Profile rejects directory profile paths", ProfileRejectsDirectoryProfilePaths },
                 { "Profile rejects reparse point profile files", ProfileRejectsReparsePointProfileFiles },
                 { "Profile reports missing profile paths clearly", ProfileReportsMissingProfilePathsClearly },
+                { "Profile reports malformed profile paths consistently", ProfileReportsMalformedProfilePathsConsistently },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Profile rejects invalid Amnezia passthrough options", ProfileRejectsInvalidAmneziaPassthroughOptions },
+                { "Interface extension validation rules are shared", InterfaceExtensionValidationRulesAreShared },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
@@ -229,6 +231,17 @@ namespace WireSockUI.Tests
             });
         }
 
+        private static void ProfileReportsMalformedProfilePathsConsistently()
+        {
+            var malformedPath = "invalid\0profile.conf";
+
+            AssertFalse(Profile.IsRegularProfileFile(malformedPath, out var diagnostic),
+                "Expected malformed profile paths to be rejected.");
+            AssertTrue(!string.IsNullOrWhiteSpace(diagnostic),
+                "Expected malformed profile paths to produce a diagnostic.");
+            AssertThrows<IOException>(() => Profile.EnsureRegularProfileFile(malformedPath), "profile");
+        }
+
         private static void ParserStripsWireSockDirectivePrefixes()
         {
             var path = WriteConfig(
@@ -302,6 +315,23 @@ namespace WireSockUI.Tests
             AssertProfileRejectsInterfaceOption("#@ws:Id = ***", "Id");
             AssertProfileRejectsInterfaceOption("#@ws:Ip = ftp", "Ip");
             AssertProfileRejectsInterfaceOption("#@ws:Ib = safari", "Ib");
+        }
+
+        private static void InterfaceExtensionValidationRulesAreShared()
+        {
+            AssertTrue(ConfigValueValidator.TryGetInterfaceExtensionRule("h1", out var h1),
+                "Expected H1 to be registered as a shared interface extension rule.");
+            AssertTrue(h1.IsValid("1-4"), "Expected H1 to accept ascending ranges.");
+            AssertFalse(h1.IsValid("4-1"), "Expected H1 to reject descending ranges.");
+
+            AssertTrue(ConfigValueValidator.TryGetInterfaceExtensionRule("Ib", out var ib),
+                "Expected Ib to be registered as a shared interface extension rule.");
+            AssertTrue(ib.IsValid("chrome"), "Expected Ib to accept supported browser profiles.");
+            AssertFalse(ib.IsValid("safari"), "Expected Ib to reject unsupported browser profiles.");
+
+            AssertTrue(ConfigValueValidator.TryGetInterfaceExtensionRule("Id", out var id),
+                "Expected Id to be registered as a shared interface extension rule.");
+            AssertFalse(id.IsValid("***"), "Expected Id to reject invalid host names.");
         }
 
         private static void AssertProfileRejectsInterfaceOption(string optionLine, string messagePart)

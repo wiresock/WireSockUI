@@ -38,6 +38,7 @@ namespace WireSockUI.Forms
             this.cmiAddresses = new System.Windows.Forms.ToolStripMenuItem();
             this.cmiSepTunnels = new System.Windows.Forms.ToolStripSeparator();
             this.cmiDeactivateTunnel = new System.Windows.Forms.ToolStripMenuItem();
+            this.cmiResetKillSwitch = new System.Windows.Forms.ToolStripMenuItem();
             this.cmiManageTunnels = new System.Windows.Forms.ToolStripMenuItem();
             this.cmiOpenTunnel = new System.Windows.Forms.ToolStripMenuItem();
             this.cmiSepBottom = new System.Windows.Forms.ToolStripSeparator();
@@ -103,13 +104,14 @@ namespace WireSockUI.Forms
             this.cmiAddresses,
             this.cmiSepTunnels,
             this.cmiDeactivateTunnel,
+            this.cmiResetKillSwitch,
             this.cmiManageTunnels,
             this.cmiOpenTunnel,
             this.cmiSepBottom,
             this.cmiExit});
             this.mnuContext.Name = "contextMenuStrip1";
             this.resControls.SetResourceKey(this.mnuContext, null);
-            this.mnuContext.Size = new System.Drawing.Size(211, 126);
+            this.mnuContext.Size = new System.Drawing.Size(211, 148);
             // 
             // cmiStatus
             // 
@@ -142,6 +144,14 @@ namespace WireSockUI.Forms
             this.cmiDeactivateTunnel.Size = new System.Drawing.Size(210, 22);
             this.cmiDeactivateTunnel.Text = "Deactivate tunnel";
             this.cmiDeactivateTunnel.Click += new System.EventHandler(this.OnDisconnectClick);
+            //
+            // cmiResetKillSwitch
+            //
+            this.cmiResetKillSwitch.Name = "cmiResetKillSwitch";
+            this.resMenu.SetResourceKey(this.cmiResetKillSwitch, "MenuResetKillSwitch");
+            this.cmiResetKillSwitch.Size = new System.Drawing.Size(210, 22);
+            this.cmiResetKillSwitch.Text = "Reset Kill Switch";
+            this.cmiResetKillSwitch.Click += new System.EventHandler(this.OnResetKillSwitchClick);
             // 
             // cmiManageTunnels
             // 
@@ -567,6 +577,7 @@ namespace WireSockUI.Forms
         private ContextMenuStrip mnuContext;
         private ToolStripMenuItem cmiExit;
         private ToolStripMenuItem cmiDeactivateTunnel;
+        private ToolStripMenuItem cmiResetKillSwitch;
         private ToolStripMenuItem cmiManageTunnels;
         private ToolStripSeparator cmiSepBottom;
         private ToolStripMenuItem cmiOpenTunnel;

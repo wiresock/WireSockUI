@@ -33,6 +33,8 @@ namespace WireSockUI.Forms
                 ddlLogLevel.SelectedItem = "Error";
         }
 
+        public bool RequestedEnableKillSwitch => chkEnableKillSwitch.Checked;
+
         private void OnProfilesFolderClick(object sender, EventArgs e)
         {
             try
@@ -164,7 +166,7 @@ namespace WireSockUI.Forms
                         false; // Do not stop the task when the computer ceases to be idle
 
                     ts.RootFolder.RegisterTaskDefinition(GetAutoRunTaskName(), td);
-                    DeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
+                    TryDeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
                 }
 
                 DeleteLegacyStartupShortcutIfPresent();
@@ -218,6 +220,18 @@ namespace WireSockUI.Forms
             }
 
             ts.RootFolder.DeleteTask(taskName, false);
+        }
+
+        private static void TryDeleteAutoRunTaskIfOwned(TaskService ts, string taskName)
+        {
+            try
+            {
+                DeleteAutoRunTaskIfOwned(ts, taskName);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to delete legacy autorun task '{taskName}': {ex.Message}");
+            }
         }
 
         private static bool IsTaskOwnedByCurrentExecutable(Microsoft.Win32.TaskScheduler.Task task)
@@ -288,7 +302,6 @@ namespace WireSockUI.Forms
             Settings.Default.AutoUpdate = chkAutoUpdate.Checked;
             Settings.Default.UseAdapter = chkUseAdapter.Checked;
             Settings.Default.EnableNotifications = chkNotify.Checked;
-            Settings.Default.EnableKillSwitch = chkEnableKillSwitch.Checked;
             Settings.Default.LogLevel = ddlLogLevel.SelectedItem as string;
 
             try
