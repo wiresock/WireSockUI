@@ -27,6 +27,10 @@ namespace WireSockUI.Notifications
                     return icon;
 
                 Global.EnsureSecureMainFolderExists();
+
+                if (TryUseExistingNotificationIcon(icon))
+                    return icon;
+
                 DeleteExistingNotificationIcon(icon);
 
                 using (var stream = new FileStream(icon, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
@@ -45,6 +49,36 @@ namespace WireSockUI.Notifications
         {
             return TryGetAttributes(icon, out var attributes) &&
                    (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+        }
+
+        private static bool TryUseExistingNotificationIcon(string icon)
+        {
+            if (!IsRegularNotificationIcon(icon))
+                return false;
+
+            try
+            {
+                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+            }
+            catch (IOException ex)
+            {
+                Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+            }
+
+            _notificationIconReady = true;
+            return true;
         }
 
         private static void DeleteExistingNotificationIcon(string icon)

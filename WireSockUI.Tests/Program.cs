@@ -229,17 +229,20 @@ namespace WireSockUI.Tests
                 var link = Path.Combine(Global.ConfigsFolder, "linked.conf");
                 File.WriteAllText(target, ValidConfig());
 
-                if (!TryCreateProfileReparsePoint(link, target))
+                if (!TryCreateProfileReparsePoint(link, target, out var isFileLink))
                 {
                     SkipOrFail("profile reparse point creation unavailable; reparse profile check not exercised.");
                     return;
                 }
 
                 AssertTrue(Profile.ProfilePathExists(link),
-                    "Expected profile path existence checks to detect reparse point files.");
-                var profiles = Profile.GetProfiles().ToList();
-                AssertFalse(profiles.Contains("linked", StringComparer.OrdinalIgnoreCase),
-                    "Expected reparse point profiles to be excluded from enumeration.");
+                    "Expected profile path existence checks to detect reparse point profile paths.");
+                if (isFileLink)
+                {
+                    var profiles = Profile.GetProfiles().ToList();
+                    AssertFalse(profiles.Contains("linked", StringComparer.OrdinalIgnoreCase),
+                        "Expected reparse point profiles to be excluded from enumeration.");
+                }
                 AssertThrows<IOException>(() => new Profile(link), "reparse point");
             });
         }
@@ -674,7 +677,7 @@ namespace WireSockUI.Tests
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(target, ValidConfig());
 
-                if (!TryCreateProfileReparsePoint(link, target))
+                if (!TryCreateProfileReparsePoint(link, target, out _))
                 {
                     SkipOrFail("profile reparse point creation unavailable; profile import reparse check not exercised.");
                     return;
@@ -810,7 +813,7 @@ namespace WireSockUI.Tests
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(target, ValidConfig());
 
-                if (!TryCreateProfileReparsePoint(link, target))
+                if (!TryCreateProfileReparsePoint(link, target, out _))
                 {
                     SkipOrFail("profile reparse point creation unavailable; legacy migration reparse check not exercised.");
                     return;
@@ -1082,10 +1085,15 @@ namespace WireSockUI.Tests
             return CreateSymbolicLink(linkPath, targetPath, SymbolicLinkFlagFile);
         }
 
-        private static bool TryCreateProfileReparsePoint(string linkPath, string targetPath)
+        private static bool TryCreateProfileReparsePoint(string linkPath, string targetPath, out bool isFileLink)
         {
+            isFileLink = false;
+
             if (TryCreateFileSymbolicLink(linkPath, targetPath))
+            {
+                isFileLink = true;
                 return true;
+            }
 
             var targetDirectory = targetPath + ".junction-target";
             try
