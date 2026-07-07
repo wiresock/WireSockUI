@@ -52,10 +52,20 @@ namespace WireSockUI.Notifications
             if (!TryGetAttributes(icon, out var attributes))
                 return;
 
-            if ((attributes & FileAttributes.Directory) != 0)
-                Directory.Delete(icon);
-            else
+            if ((attributes & FileAttributes.Directory) == 0)
+            {
                 File.Delete(icon);
+                return;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                Directory.Delete(icon);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                "The notification icon path points to a directory. Remove the unexpected WireSock.ico directory from the WireSockUI data folder and retry.");
         }
 
         private static bool TryGetAttributes(string path, out FileAttributes attributes)
