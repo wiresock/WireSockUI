@@ -275,16 +275,9 @@ namespace WireSockUI.Forms
 
         private void MarkNativeRecoveryRequired(string profile, string context)
         {
-            try
-            {
-                Global.WriteNativeRecoveryMarker(
-                    context,
-                    "Native WireSock cleanup did not finish safely. New tunnel operations are disabled until WireSock UI is restarted.");
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to persist native recovery marker after {context}: {ex.Message}");
-            }
+            Global.WriteNativeRecoveryMarker(
+                context,
+                "Native WireSock cleanup did not finish safely. New tunnel operations are disabled until WireSock UI is restarted.");
 
             var wasAlreadyMarked = Interlocked.Exchange(ref _nativeRecoveryRequired, 1) != 0;
             Trace.TraceWarning(
