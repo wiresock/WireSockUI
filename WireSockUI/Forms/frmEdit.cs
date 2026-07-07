@@ -431,11 +431,13 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
+            string tmpProfile = null;
             Profile profile;
 
             try
             {
+                Global.EnsureConfigsFolder();
+                tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
                 File.WriteAllText(tmpProfile, txtEditor.Text);
                 profile = new Profile(tmpProfile);
             }

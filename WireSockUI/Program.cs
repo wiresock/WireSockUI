@@ -60,14 +60,10 @@ namespace WireSockUI
                 Environment.Exit(1);
             }
 
-#if WIRESOCKUI_ENABLE_UWP
-            CheckVersion();
-#endif
-
             Application.Run(new FrmMain());
         }
 
-        private static void OpenBrowser(string url)
+        internal static void OpenBrowser(string url)
         {
             try
             {
@@ -98,10 +94,11 @@ namespace WireSockUI
         /// <summary>
         ///     Compare the local product version against the latest GitHub repository release tag
         /// </summary>
-        /// <remarks>If auto update is enabled, repository is known and there is a new version, open up a browser window.</remarks>
-        private static void CheckVersion()
+        /// <remarks>If auto update is enabled, repository is known and there is a new version, return the releases URL.</remarks>
+        internal static bool TryGetAvailableUpdate(out string releasesUrl)
         {
-            if (!Settings.Default.AutoUpdate) return;
+            releasesUrl = null;
+            if (!Settings.Default.AutoUpdate) return false;
         
             try
             {
@@ -114,13 +111,8 @@ namespace WireSockUI
         
                     if (currentVersion != null && latestVersion != null && latestVersion > currentVersion)
                     {
-                        var dialogResult = MessageBox.Show(Resources.AppUpdateMessage, Resources.AppUpdateTitle, MessageBoxButtons.OKCancel,
-                            MessageBoxIcon.Information);
-        
-                        if (dialogResult == DialogResult.OK)
-                        {
-                            OpenBrowser($"https://github.com/{repository}/releases");
-                        }
+                        releasesUrl = $"https://github.com/{repository}/releases";
+                        return true;
                     }
                 }
             }
@@ -128,6 +120,8 @@ namespace WireSockUI
             {
                 Trace.TraceWarning($"Unable to check for WireSock UI updates: {ex.Message}");
             }
+
+            return false;
         }
 #endif
 

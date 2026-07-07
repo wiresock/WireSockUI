@@ -12,22 +12,28 @@ namespace WireSockUI.Notifications
 {
     internal static class Notifications
     {
-        private static readonly string Icon;
+        private static readonly object IconSyncRoot = new object();
 
-        static Notifications()
+        private static string EnsureNotificationIcon()
         {
-            // Write the icon to local appdata folder for toast notifications
-            Icon = $@"{Global.MainFolder}\WireSock.ico";
+            var icon = Path.Combine(Global.MainFolder, "WireSock.ico");
 
-            if (File.Exists(Icon)) return;
-
-            using (var stream = new FileStream(Icon, FileMode.CreateNew))
+            lock (IconSyncRoot)
             {
-                Resources.ico.Save(stream);
+                if (File.Exists(icon))
+                    return icon;
+
+                Directory.CreateDirectory(Global.MainFolder);
+                using (var stream = new FileStream(icon, FileMode.Create, FileAccess.Write, FileShare.Read))
+                {
+                    Resources.ico.Save(stream);
+                }
             }
+
+            return icon;
         }
 
-        private static XmlDocument GetXml(string title, string body)
+        private static XmlDocument GetXml(string title, string body, string icon)
         {
             var toast =
                 new XElement("toast",
@@ -37,7 +43,7 @@ namespace WireSockUI.Notifications
                             new XElement("text", title),
                             new XElement("text", body),
                             new XElement("image",
-                                new XAttribute("src", Icon),
+                                new XAttribute("src", icon),
                                 new XAttribute("placement", "appLogoOverride"),
                                 new XAttribute("hint-crop", "circle")))));
 
@@ -49,10 +55,11 @@ namespace WireSockUI.Notifications
 
         public static void Notify(string title, string body)
         {
+            var icon = EnsureNotificationIcon();
             var context = WindowsApplicationContext.FromCurrentProcess();
             var notifier = ToastNotificationManager.CreateToastNotifier(context.AppUserModelId);
 
-            var notification = new ToastNotification(GetXml(title, body));
+            var notification = new ToastNotification(GetXml(title, body, icon));
 
             notification.Activated += Notification_Activated;
             notification.Dismissed += Notification_Dismissed;

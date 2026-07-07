@@ -7,6 +7,8 @@ namespace WireSockUI.Extensions
 {
     internal static class GitHubExtensions
     {
+        private const int ReleaseRequestTimeoutMilliseconds = 5000;
+
         /// <summary>
         ///     Retrieve latest published release version from GitHub
         /// </summary>
@@ -19,6 +21,8 @@ namespace WireSockUI.Extensions
             request.Method = "GET";
             request.Accept = "application/vnd.github+json";
             request.UserAgent = "WireSockUI";
+            request.Timeout = ReleaseRequestTimeoutMilliseconds;
+            request.ReadWriteTimeout = ReleaseRequestTimeoutMilliseconds;
 
             using (var response = request.GetResponse())
             {
