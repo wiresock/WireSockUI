@@ -72,10 +72,12 @@ namespace WireSockUI.Notifications
             catch (UnauthorizedAccessException ex)
             {
                 Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+                return false;
             }
             catch (IOException ex)
             {
                 Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+                return false;
             }
 
             return true;
