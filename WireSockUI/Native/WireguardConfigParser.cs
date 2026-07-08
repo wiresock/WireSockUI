@@ -63,8 +63,8 @@ namespace WireSockUI.Native
 
                     if (line.StartsWith("[") && line.EndsWith("]"))
                     {
-                        currentSection = line.Substring(1, line.Length - 2);
-                        if (string.IsNullOrWhiteSpace(currentSection))
+                        currentSection = line.Substring(1, line.Length - 2).Trim();
+                        if (string.IsNullOrEmpty(currentSection))
                             throw new FormatException($"Invalid WireGuard configuration line {lineNumber}: section name is empty.");
 
                         if (Sections.ContainsKey(currentSection))

@@ -50,6 +50,7 @@ namespace WireSockUI.Tests
                 { "Parser rejects malformed lines", ParserRejectsMalformedLines },
                 { "Parser rejects keys before sections", ParserRejectsKeysBeforeSections },
                 { "Parser rejects empty section names", ParserRejectsEmptySectionNames },
+                { "Parser trims section names", ParserTrimsSectionNames },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Profile rejects invalid Amnezia passthrough options", ProfileRejectsInvalidAmneziaPassthroughOptions },
                 { "Interface extension validation rules are shared", InterfaceExtensionValidationRulesAreShared },
@@ -367,6 +368,33 @@ namespace WireSockUI.Tests
             try
             {
                 AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "section name is empty");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ParserTrimsSectionNames()
+        {
+            var path = WriteConfig(
+                "[Interface ]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "\n" +
+                "[ Peer ]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+
+            try
+            {
+                var parser = new WireguardConfigParser.ConfigParser(path);
+                AssertTrue(parser.GetSectionNames().Contains("Interface", StringComparer.OrdinalIgnoreCase),
+                    "Expected parser to trim trailing whitespace in section names.");
+                AssertTrue(parser.GetSectionNames().Contains("Peer", StringComparer.OrdinalIgnoreCase),
+                    "Expected parser to trim leading and trailing whitespace in section names.");
+                new Profile(path);
             }
             finally
             {

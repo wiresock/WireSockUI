@@ -334,7 +334,18 @@ namespace WireSockUI
             if (!TryEnsureRestrictedDllSearchPath(out diagnostic))
                 return false;
 
-            var cookie = AddDllDirectory(fullDirectory);
+            IntPtr cookie;
+            try
+            {
+                cookie = AddDllDirectory(fullDirectory);
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                diagnostic =
+                    $"This Windows installation does not support AddDllDirectory. Install KB2533623 or use a supported Windows version. {ex.Message}";
+                return false;
+            }
+
             if (cookie == IntPtr.Zero)
             {
                 diagnostic = new Win32Exception(Marshal.GetLastWin32Error()).Message;
@@ -358,9 +369,18 @@ namespace WireSockUI
             if (_restrictedDllSearchPathConfigured)
                 return true;
 
-            if (!SetDefaultDllDirectories(LoadLibrarySearchSystem32 | LoadLibrarySearchUserDirs))
+            try
             {
-                diagnostic = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                if (!SetDefaultDllDirectories(LoadLibrarySearchSystem32 | LoadLibrarySearchUserDirs))
+                {
+                    diagnostic = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                    return false;
+                }
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                diagnostic =
+                    $"This Windows installation does not support SetDefaultDllDirectories. Install KB2533623 or use a supported Windows version. {ex.Message}";
                 return false;
             }
 
