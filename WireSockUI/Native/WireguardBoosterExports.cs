@@ -23,97 +23,121 @@ namespace WireSockUI.Native
             Enabled = 1
         }
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern IntPtr wgb_get_handle(LogPrinter logPrinter, WgbLogLevel level, bool enableTrafficCapture);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern void wgb_set_log_level(IntPtr wgboosterHandle, WgbLogLevel level);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_create_tunnel_from_file(IntPtr wgboosterHandle,
             [MarshalAs(UnmanagedType.LPStr)] string fileName);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode,
             SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_create_tunnel_from_file_w(IntPtr wgboosterHandle,
             [MarshalAs(UnmanagedType.LPWStr)] string fileName);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_drop_tunnel(IntPtr wgboosterHandle, bool preserveNetworkLock);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_start_tunnel(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_stop_tunnel(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern WgbStats wgb_get_tunnel_state(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_get_tunnel_active(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgb_set_network_lock_mode(IntPtr wgboosterHandle, WgbNetworkLockMode mode);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern WgbNetworkLockMode wgb_get_network_lock_mode(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern IntPtr
             wgbp_get_handle(LogPrinter logPrinter, WgbLogLevel level, bool enableTrafficCapture);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern void wgbp_set_log_level(IntPtr wgboosterHandle, WgbLogLevel level);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_create_tunnel_from_file(IntPtr wgboosterHandle,
             [MarshalAs(UnmanagedType.LPStr)] string fileName);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Unicode,
             SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_create_tunnel_from_file_w(IntPtr wgboosterHandle,
             [MarshalAs(UnmanagedType.LPWStr)] string fileName);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_drop_tunnel(IntPtr wgboosterHandle, bool preserveNetworkLock);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_start_tunnel(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_stop_tunnel(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern WgbStats wgbp_get_tunnel_state(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_get_tunnel_active(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wgbp_set_network_lock_mode(IntPtr wgboosterHandle, WgbNetworkLockMode mode);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern WgbNetworkLockMode wgbp_get_network_lock_mode(IntPtr wgboosterHandle);
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wg_reset_network_lock();
 
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool wg_is_network_lock_active();

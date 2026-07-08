@@ -68,7 +68,7 @@ namespace WireSockUI
         {
             if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
             {
-                EnsureAdministratorsOnlyDirectory(SecureMainFolder, secureExistingChildren);
+                EnsureAdministratorsOnlyDirectory(SecureMainFolder, false);
                 EnsureAdministratorsOnlyDirectory(ConfigsFolder, secureExistingChildren);
                 return;
             }

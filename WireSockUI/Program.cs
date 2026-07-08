@@ -22,8 +22,25 @@ namespace WireSockUI
         private const long MaxMigratedProfileSizeBytes = 1024 * 1024;
         private static readonly string[] ScriptHookKeys = { "PreUp", "PostUp", "PreDown", "PostDown" };
 
+        private const uint LoadLibrarySearchDllLoadDir = 0x00000100;
+        private const uint LoadLibrarySearchSystem32 = 0x00000800;
+        private const uint LoadLibrarySearchUserDirs = 0x00000400;
+
+        private static IntPtr _wireSockLibraryHandle = IntPtr.Zero;
+        private static IntPtr _wireSockLibraryDirectoryCookie = IntPtr.Zero;
+        private static bool _restrictedDllSearchPathConfigured;
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool SetDefaultDllDirectories(uint directoryFlags);
+
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-        private static extern bool SetDllDirectory(string lpPathName);
+        private static extern IntPtr AddDllDirectory(string newDirectory);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        private static extern bool RemoveDllDirectory(IntPtr cookie);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern IntPtr LoadLibraryEx(string fileName, IntPtr file, uint flags);
 
         [STAThread]
         private static void Main()
@@ -131,31 +148,27 @@ namespace WireSockUI
         /// <returns><c>true</c> if installed, otherwise <c>false</c></returns>
         private static bool IsWireSockInstalled()
         {
-            string libraryDirectory;
-            if (!TryFindWireSockLibraryDirectory(out libraryDirectory))
-                return false;
+            foreach (var candidate in EnumerateWireSockLibraryDirectoryCandidates())
+            {
+                if (!TryValidateWireSockLibraryDirectory(candidate, out var libraryDirectory))
+                    continue;
 
-            return ConfigureWireSockLibraryDirectory(libraryDirectory);
+                if (ConfigureWireSockLibraryDirectory(libraryDirectory))
+                    return true;
+            }
+
+            return false;
         }
 
-        private static bool TryFindWireSockLibraryDirectory(out string libraryDirectory)
+        private static IEnumerable<string> EnumerateWireSockLibraryDirectoryCandidates()
         {
-            libraryDirectory = null;
-
-            var localDirectory = AppDomain.CurrentDomain.BaseDirectory;
-            if (TryValidateWireSockLibraryDirectory(localDirectory, out libraryDirectory))
-                return true;
+            yield return AppDomain.CurrentDomain.BaseDirectory;
 
             foreach (var installLocation in GetInstallLocations())
             {
                 foreach (var candidate in GetLibraryDirectories(installLocation))
-                {
-                    if (TryValidateWireSockLibraryDirectory(candidate, out libraryDirectory))
-                        return true;
-                }
+                    yield return candidate;
             }
-
-            return false;
         }
 
         private static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
@@ -178,7 +191,7 @@ namespace WireSockUI
             if (IsPotentiallyUserWritableDirectory(fullDirectory))
             {
                 Trace.TraceWarning(
-                    $"Skipping WireSock library directory '{fullDirectory}' because it is writable by non-administrative users.");
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is writable by or owned by non-administrative users.");
                 return false;
             }
 
@@ -203,7 +216,7 @@ namespace WireSockUI
             if (IsPotentiallyUserWritableFile(libraryPath))
             {
                 Trace.TraceWarning(
-                    $"Skipping WireSock library '{libraryPath}' because it is writable by non-administrative users.");
+                    $"Skipping WireSock library '{libraryPath}' because it is writable by or owned by non-administrative users.");
                 return false;
             }
 
@@ -290,23 +303,106 @@ namespace WireSockUI
             if (fullDirectory == null)
                 return false;
 
-            var appDirectory = NormalizePathDirectory(AppDomain.CurrentDomain.BaseDirectory);
-            var isAppLocalDirectory = string.Equals(fullDirectory, appDirectory, StringComparison.OrdinalIgnoreCase);
+            var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
 
             try
             {
-                if (SetDllDirectory(fullDirectory))
+                if (TryConfigureRestrictedDllSearchPath(fullDirectory, libraryPath, out var diagnostic))
                     return true;
 
                 Trace.TraceWarning(
-                    $"Failed to set WireSock library directory '{fullDirectory}': {new Win32Exception(Marshal.GetLastWin32Error()).Message}");
+                    $"Failed to configure WireSock library '{libraryPath}': {diagnostic}");
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Failed to set WireSock library directory '{fullDirectory}': {ex.Message}");
+                Trace.TraceWarning($"Failed to load WireSock library '{libraryPath}': {ex.Message}");
             }
 
-            return isAppLocalDirectory;
+            return false;
+        }
+
+        private static bool TryConfigureRestrictedDllSearchPath(
+            string fullDirectory,
+            string libraryPath,
+            out string diagnostic)
+        {
+            diagnostic = null;
+
+            if (_wireSockLibraryHandle != IntPtr.Zero && _wireSockLibraryDirectoryCookie != IntPtr.Zero)
+                return true;
+
+            if (!TryEnsureRestrictedDllSearchPath(out diagnostic))
+                return false;
+
+            var cookie = AddDllDirectory(fullDirectory);
+            if (cookie == IntPtr.Zero)
+            {
+                diagnostic = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return false;
+            }
+
+            if (TryLoadWireSockLibrary(libraryPath, out diagnostic))
+            {
+                _wireSockLibraryDirectoryCookie = cookie;
+                return true;
+            }
+
+            TryRemoveDllDirectory(cookie);
+            return false;
+        }
+
+        private static bool TryEnsureRestrictedDllSearchPath(out string diagnostic)
+        {
+            diagnostic = null;
+
+            if (_restrictedDllSearchPathConfigured)
+                return true;
+
+            if (!SetDefaultDllDirectories(LoadLibrarySearchSystem32 | LoadLibrarySearchUserDirs))
+            {
+                diagnostic = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return false;
+            }
+
+            _restrictedDllSearchPathConfigured = true;
+            return true;
+        }
+
+        private static bool TryLoadWireSockLibrary(string libraryPath, out string diagnostic)
+        {
+            diagnostic = null;
+
+            if (_wireSockLibraryHandle != IntPtr.Zero)
+                return true;
+
+            var handle = LoadLibraryEx(
+                libraryPath,
+                IntPtr.Zero,
+                LoadLibrarySearchDllLoadDir | LoadLibrarySearchSystem32);
+
+            if (handle == IntPtr.Zero)
+            {
+                diagnostic = new Win32Exception(Marshal.GetLastWin32Error()).Message;
+                return false;
+            }
+
+            _wireSockLibraryHandle = handle;
+            return true;
+        }
+
+        private static void TryRemoveDllDirectory(IntPtr cookie)
+        {
+            try
+            {
+                if (cookie != IntPtr.Zero && !RemoveDllDirectory(cookie))
+                    Trace.TraceWarning(
+                        $"Failed to remove unsuccessful WireSock library directory from the process search path: {new Win32Exception(Marshal.GetLastWin32Error()).Message}");
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning(
+                    $"Failed to remove unsuccessful WireSock library directory from the process search path: {ex.Message}");
+            }
         }
 
         private static void MigrateLegacyProfiles()
@@ -541,7 +637,7 @@ namespace WireSockUI
             }
         }
 
-        private static bool IsPotentiallyUserWritableDirectory(string directory)
+        internal static bool IsPotentiallyUserWritableDirectory(string directory)
         {
             var normalizedDirectory = NormalizePathDirectory(directory);
             if (normalizedDirectory == null)
@@ -550,8 +646,7 @@ namespace WireSockUI
             try
             {
                 var security = Directory.GetAccessControl(normalizedDirectory);
-                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                return ContainsPotentiallyUserWritableRule(rules);
+                return IsPotentiallyUserWritableSecurity(security);
             }
             catch (Exception ex)
             {
@@ -560,7 +655,7 @@ namespace WireSockUI
             }
         }
 
-        private static bool IsPotentiallyUserWritableFile(string file)
+        internal static bool IsPotentiallyUserWritableFile(string file)
         {
             var normalizedFile = NormalizePathFile(file);
             if (normalizedFile == null)
@@ -569,13 +664,33 @@ namespace WireSockUI
             try
             {
                 var security = File.GetAccessControl(normalizedFile);
-                var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
-                return ContainsPotentiallyUserWritableRule(rules);
+                return IsPotentiallyUserWritableSecurity(security);
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Unable to inspect ACL for '{normalizedFile}': {ex.Message}");
                 return true;
+            }
+        }
+
+        private static bool IsPotentiallyUserWritableSecurity(FileSystemSecurity security)
+        {
+            return !HasTrustedOwner(security) ||
+                   ContainsPotentiallyUserWritableRule(
+                       security.GetAccessRules(true, true, typeof(SecurityIdentifier)));
+        }
+
+        private static bool HasTrustedOwner(FileSystemSecurity security)
+        {
+            try
+            {
+                return security.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner &&
+                       IsAdministrativeOrServiceSid(owner);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect owner for a WireSock library path: {ex.Message}");
+                return false;
             }
         }
 

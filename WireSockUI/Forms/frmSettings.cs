@@ -154,6 +154,9 @@ namespace WireSockUI.Forms
                     td.Triggers.Add(new LogonTrigger()); // Trigger on logon
 
                     var appPath = Application.ExecutablePath;
+                    if (!IsExecutablePathTrustedForAutoRun(appPath, out var trustDiagnostic))
+                        throw new InvalidOperationException(trustDiagnostic);
+
                     td.Actions.Add(new ExecAction(appPath)); // Path to the executable
 
                     // Set power and idle options
@@ -202,6 +205,44 @@ namespace WireSockUI.Forms
             catch (Exception ex)
             {
                 ShowSettingsError(Resources.SettingsAutoRunDisableAdminError, ex);
+                return false;
+            }
+        }
+
+        private static bool IsExecutablePathTrustedForAutoRun(string executablePath, out string diagnostic)
+        {
+            diagnostic = null;
+
+            try
+            {
+                var fullPath = Path.GetFullPath((executablePath ?? string.Empty).Trim().Trim('"'));
+                if (!File.Exists(fullPath))
+                {
+                    diagnostic = $"Autorun executable '{fullPath}' does not exist.";
+                    return false;
+                }
+
+                if (Program.IsPotentiallyUserWritableFile(fullPath))
+                {
+                    diagnostic =
+                        $"Autorun executable '{fullPath}' is writable by or owned by non-administrative users. Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
+                    return false;
+                }
+
+                var directory = Path.GetDirectoryName(fullPath);
+                if (string.IsNullOrWhiteSpace(directory) ||
+                    Program.IsPotentiallyUserWritableDirectory(directory))
+                {
+                    diagnostic =
+                        $"Autorun executable folder '{directory}' is writable by or owned by non-administrative users. Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"Autorun executable path could not be validated: {ex.Message}";
                 return false;
             }
         }
