@@ -20,10 +20,16 @@ namespace WireSockUI
 
         public static string ConfigsFolder = Path.Combine(SecureMainFolder, "Configs");
 
+        public static string NotificationAssetsFolder =
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                ApplicationFolderName + "-Notifications");
+
         public static string LegacyConfigsFolder = Path.Combine(MainFolder, "Configs");
 
         public static string NativeRecoveryMarkerPath =>
             Path.Combine(SecureMainFolder, "NativeRecoveryRequired.txt");
+
+        internal static bool AllowUnsecuredConfigFolderOverrideForTests { get; set; }
 
         public static EventWaitHandle AlreadyRunning;
 
@@ -35,17 +41,46 @@ namespace WireSockUI
 
         public static void EnsureConfigsFolder()
         {
+            EnsureConfigsFolder(secureExistingChildren: true);
+        }
+
+        public static void EnsureConfigsFolderExists()
+        {
+            EnsureConfigsFolder(secureExistingChildren: false);
+        }
+
+        public static void EnsureSecureMainFolder()
+        {
+            EnsureAdministratorsOnlyDirectory(SecureMainFolder, true);
+        }
+
+        public static void EnsureSecureMainFolderExists()
+        {
+            EnsureAdministratorsOnlyDirectory(SecureMainFolder, false);
+        }
+
+        public static void EnsureNotificationAssetsFolderExists()
+        {
+            EnsureUsersReadOnlyDirectory(NotificationAssetsFolder);
+        }
+
+        private static void EnsureConfigsFolder(bool secureExistingChildren)
+        {
             if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
             {
-                EnsureAdministratorsOnlyDirectory(SecureMainFolder);
-                EnsureAdministratorsOnlyDirectory(ConfigsFolder);
+                EnsureAdministratorsOnlyDirectory(SecureMainFolder, secureExistingChildren);
+                EnsureAdministratorsOnlyDirectory(ConfigsFolder, secureExistingChildren);
                 return;
             }
+
+            if (!AllowUnsecuredConfigFolderOverrideForTests)
+                throw new InvalidOperationException(
+                    $"WireSock UI configuration folder '{ConfigsFolder}' must be inside the secured folder '{SecureMainFolder}'.");
 
             Directory.CreateDirectory(ConfigsFolder);
         }
 
-        private static void EnsureAdministratorsOnlyDirectory(string path)
+        private static void EnsureAdministratorsOnlyDirectory(string path, bool secureExistingChildren)
         {
             try
             {
@@ -55,7 +90,8 @@ namespace WireSockUI
                     throw new IOException($"Refusing to secure WireSock UI directory reparse point '{path}'.");
 
                 Directory.SetAccessControl(path, security);
-                SecureExistingChildren(path);
+                if (secureExistingChildren)
+                    SecureExistingChildren(path);
             }
             catch (Exception ex)
             {
@@ -68,7 +104,7 @@ namespace WireSockUI
         {
             try
             {
-                Directory.CreateDirectory(SecureMainFolder, CreateAdministratorsOnlyDirectorySecurity());
+                EnsureSecureMainFolderExists();
                 DeleteNativeRecoveryMarkerPathIfUnsafeForWrite();
 
                 var message =
@@ -195,6 +231,56 @@ namespace WireSockUI
             security.AddAccessRule(new FileSystemAccessRule(
                 administratorsSid,
                 FileSystemRights.FullControl,
+                inheritanceFlags,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+
+            return security;
+        }
+
+        private static void EnsureUsersReadOnlyDirectory(string path)
+        {
+            try
+            {
+                var security = CreateUsersReadOnlyDirectorySecurity();
+                Directory.CreateDirectory(path, security);
+                if (IsReparsePoint(path))
+                    throw new IOException($"Refusing to secure WireSock UI read-only directory reparse point '{path}'.");
+
+                Directory.SetAccessControl(path, security);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to secure WireSock UI read-only directory '{path}': {ex.Message}");
+                throw;
+            }
+        }
+
+        private static DirectorySecurity CreateUsersReadOnlyDirectorySecurity()
+        {
+            var inheritanceFlags = InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit;
+            var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            var usersSid = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var security = new DirectorySecurity();
+
+            security.SetAccessRuleProtection(true, false);
+            security.SetOwner(administratorsSid);
+            security.AddAccessRule(new FileSystemAccessRule(
+                systemSid,
+                FileSystemRights.FullControl,
+                inheritanceFlags,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                administratorsSid,
+                FileSystemRights.FullControl,
+                inheritanceFlags,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                usersSid,
+                FileSystemRights.ReadAndExecute,
                 inheritanceFlags,
                 PropagationFlags.None,
                 AccessControlType.Allow));

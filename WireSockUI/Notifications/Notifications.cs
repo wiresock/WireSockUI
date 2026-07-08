@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Diagnostics;
 using System.IO;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Windows.Forms;
 using System.Xml.Linq;
 using Windows.Data.Xml.Dom;
@@ -13,24 +15,137 @@ namespace WireSockUI.Notifications
     internal static class Notifications
     {
         private static readonly object IconSyncRoot = new object();
+        private static bool _notificationIconReady;
 
         private static string EnsureNotificationIcon()
         {
-            var icon = Path.Combine(Global.MainFolder, "WireSock.ico");
+            var icon = Path.Combine(Global.NotificationAssetsFolder, "WireSock.ico");
 
             lock (IconSyncRoot)
             {
-                if (File.Exists(icon))
+                if (_notificationIconReady && IsRegularNotificationIcon(icon))
                     return icon;
 
-                Directory.CreateDirectory(Global.MainFolder);
-                using (var stream = new FileStream(icon, FileMode.Create, FileAccess.Write, FileShare.Read))
+                Global.EnsureNotificationAssetsFolderExists();
+
+                if (TryUseExistingNotificationIcon(icon))
+                    return icon;
+
+                DeleteExistingNotificationIcon(icon);
+
+                using (var stream = new FileStream(icon, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
                 {
                     Resources.ico.Save(stream);
                 }
+
+                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+                _notificationIconReady = true;
             }
 
             return icon;
+        }
+
+        private static bool IsRegularNotificationIcon(string icon)
+        {
+            return TryGetAttributes(icon, out var attributes) &&
+                   (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+        }
+
+        private static bool TryUseExistingNotificationIcon(string icon)
+        {
+            if (!IsRegularNotificationIcon(icon))
+                return false;
+
+            try
+            {
+                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+                _notificationIconReady = true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+                return false;
+            }
+            catch (IOException ex)
+            {
+                Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static void DeleteExistingNotificationIcon(string icon)
+        {
+            if (!TryGetAttributes(icon, out var attributes))
+                return;
+
+            if ((attributes & FileAttributes.Directory) == 0)
+            {
+                File.Delete(icon);
+                return;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                Directory.Delete(icon);
+                return;
+            }
+
+            throw new InvalidOperationException(
+                $"The notification icon path '{icon}' points to a directory. Remove the unexpected directory from the WireSockUI notification assets folder and retry.");
+        }
+
+        private static bool TryGetAttributes(string path, out FileAttributes attributes)
+        {
+            attributes = default(FileAttributes);
+
+            try
+            {
+                attributes = File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
+        }
+
+        private static FileSecurity CreateNotificationIconFileSecurity()
+        {
+            var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
+            var usersSid = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var security = new FileSecurity();
+
+            security.SetAccessRuleProtection(true, false);
+            security.SetOwner(administratorsSid);
+            security.AddAccessRule(new FileSystemAccessRule(
+                systemSid,
+                FileSystemRights.FullControl,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                administratorsSid,
+                FileSystemRights.FullControl,
+                AccessControlType.Allow));
+            security.AddAccessRule(new FileSystemAccessRule(
+                usersSid,
+                FileSystemRights.ReadAndExecute,
+                AccessControlType.Allow));
+
+            return security;
         }
 
         private static XmlDocument GetXml(string title, string body, string icon)

@@ -305,19 +305,12 @@ namespace WireSockUI
                 if (_disposed)
                     return;
 
-                if (_handle != IntPtr.Zero)
+                if (_handle != IntPtr.Zero && disposing)
                 {
-                    if (disposing)
+                    if (!Disconnect() && _handle != IntPtr.Zero)
                     {
-                        if (!Disconnect() && _handle != IntPtr.Zero)
-                        {
-                            PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
-                            DropCurrentHandle(true, true);
-                        }
-                    }
-                    else
-                    {
-                        DropCurrentHandle(false, true);
+                        PrintLog("Forcing tunnel handle cleanup during disposal after native drop_tunnel failed.");
+                        DropCurrentHandle(true, true);
                     }
                 }
 
@@ -325,12 +318,12 @@ namespace WireSockUI
 
                 if (disposing)
                 {
-                    CompleteLogQueue();
+                    CompleteAndDisposeLogQueue();
                     if (!_logWorker.IsBusy)
                         _logWorker.Dispose();
                 }
 
-                if (_logPrinterHandle.IsAllocated)
+                if (disposing && _logPrinterHandle.IsAllocated)
                     _logPrinterHandle.Free();
             }
         }
@@ -360,6 +353,10 @@ namespace WireSockUI
                     _logQueue.TryTake(out _);
                     _logQueue.TryAdd(logMessage);
                 }
+            }
+            catch (ObjectDisposedException)
+            {
+                // The queue can be disposed while native callbacks are still unwinding during shutdown.
             }
             catch (InvalidOperationException)
             {
@@ -419,7 +416,7 @@ namespace WireSockUI
             return worker;
         }
 
-        private void CompleteLogQueue()
+        private void CompleteAndDisposeLogQueue()
         {
             try
             {
@@ -427,6 +424,8 @@ namespace WireSockUI
                 {
                     if (!_logQueue.IsAddingCompleted)
                         _logQueue.CompleteAdding();
+
+                    _logQueue.Dispose();
                 }
             }
             catch (ObjectDisposedException)
@@ -437,11 +436,6 @@ namespace WireSockUI
             {
                 // CompleteAdding can race with another shutdown path after IsAddingCompleted is checked.
             }
-        }
-
-        ~WireSockManager()
-        {
-            Dispose(false);
         }
 
         /// <summary>
