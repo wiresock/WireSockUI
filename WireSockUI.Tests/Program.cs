@@ -65,6 +65,7 @@ namespace WireSockUI.Tests
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
                 { "Autorun rejects untrusted executable paths", AutoRunRejectsUntrustedExecutablePaths },
+                { "Autorun rejects reparse point executable folders", AutoRunRejectsReparsePointExecutableFolders },
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
                 { "Profile import preserves pre-existing destination on copy failure", ProfileImportPreservesExistingDestinationOnCopyFailure },
                 { "Profile import rejects reparse point sources", ProfileImportRejectsReparsePointSources },
@@ -328,6 +329,7 @@ namespace WireSockUI.Tests
                 "Endpoint = backup.example.com:51820\n" +
                 "AllowedIPs = ::/0\n");
 
+            AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "line 10");
             AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "Duplicate [Peer]");
         }
 
@@ -698,6 +700,45 @@ namespace WireSockUI.Tests
             finally
             {
                 TryDeleteFile(file);
+            }
+        }
+
+        private static void AutoRunRejectsReparsePointExecutableFolders()
+        {
+            var validate = typeof(FrmSettings).GetMethod("IsExecutablePathTrustedForAutoRun",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (validate == null)
+                throw new InvalidOperationException("IsExecutablePathTrustedForAutoRun helper was not found.");
+
+            var root = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var targetDirectory = Path.Combine(root, "target");
+            var linkDirectory = Path.Combine(root, "link");
+            var targetFile = Path.Combine(targetDirectory, "WireSockUI.exe");
+            var linkedFile = Path.Combine(linkDirectory, "WireSockUI.exe");
+
+            try
+            {
+                Directory.CreateDirectory(targetDirectory);
+                File.WriteAllText(targetFile, string.Empty);
+
+                if (!TryCreateDirectoryJunction(linkDirectory, targetDirectory))
+                {
+                    SkipOrFail("autorun directory reparse point creation unavailable; autorun reparse check not exercised.");
+                    return;
+                }
+
+                var args = new object[] { linkedFile, null };
+                var trusted = (bool)validate.Invoke(null, args);
+
+                AssertFalse(trusted, "Expected elevated autorun to reject executable paths through reparse point folders.");
+                AssertTrue(args[1] is string diagnostic &&
+                           diagnostic.IndexOf("reparse point", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable autorun reparse diagnostic, got '{args[1]}'.");
+            }
+            finally
+            {
+                TryDeleteDirectory(linkDirectory, false);
+                TryDeleteDirectory(root, true);
             }
         }
 
@@ -1303,6 +1344,19 @@ namespace WireSockUI.Tests
             {
                 if (File.Exists(path))
                     File.Delete(path);
+            }
+            catch
+            {
+                // Best-effort cleanup must not hide the original test failure.
+            }
+        }
+
+        private static void TryDeleteDirectory(string path, bool recursive)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                    Directory.Delete(path, recursive);
             }
             catch
             {

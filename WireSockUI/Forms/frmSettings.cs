@@ -222,6 +222,9 @@ namespace WireSockUI.Forms
                     return false;
                 }
 
+                if (!IsPathFreeOfReparsePoints(fullPath, out diagnostic))
+                    return false;
+
                 if (Program.IsPotentiallyUserWritableFile(fullPath))
                 {
                     diagnostic =
@@ -245,6 +248,51 @@ namespace WireSockUI.Forms
                 diagnostic = $"Autorun executable path could not be validated: {ex.Message}";
                 return false;
             }
+        }
+
+        private static bool IsPathFreeOfReparsePoints(string fullPath, out string diagnostic)
+        {
+            if (IsReparsePointOrUnreadable(fullPath, "Autorun executable", out diagnostic))
+                return false;
+
+            var directory = Path.GetDirectoryName(fullPath);
+            while (!string.IsNullOrWhiteSpace(directory))
+            {
+                if (IsReparsePointOrUnreadable(directory, "Autorun executable folder", out diagnostic))
+                    return false;
+
+                var trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var parent = Path.GetDirectoryName(trimmed);
+                if (string.IsNullOrWhiteSpace(parent) ||
+                    string.Equals(parent, directory, StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                directory = parent;
+            }
+
+            diagnostic = null;
+            return true;
+        }
+
+        private static bool IsReparsePointOrUnreadable(string path, string label, out string diagnostic)
+        {
+            try
+            {
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                {
+                    diagnostic =
+                        $"{label} '{path}' is a reparse point. Install WireSock UI into a real administrator-owned folder before enabling elevated autorun.";
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"{label} '{path}' could not be inspected for reparse points: {ex.Message}";
+                return true;
+            }
+
+            diagnostic = null;
+            return false;
         }
 
         private static void DeleteAutoRunTaskIfOwned(TaskService ts, string taskName)

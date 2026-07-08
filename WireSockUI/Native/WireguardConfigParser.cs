@@ -69,7 +69,7 @@ namespace WireSockUI.Native
 
                         if (Sections.ContainsKey(currentSection))
                             throw new FormatException(
-                                string.Format(Resources.ParserDuplicateSectionError, currentSection));
+                                $"Invalid WireGuard configuration line {lineNumber}: {string.Format(Resources.ParserDuplicateSectionError, currentSection)}");
 
                         Sections[currentSection] = new Section();
                     }
