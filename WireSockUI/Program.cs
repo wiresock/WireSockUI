@@ -705,7 +705,7 @@ namespace WireSockUI
             try
             {
                 return security.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner &&
-                       IsAdministrativeOrServiceSid(owner);
+                       IsTrustedOwnerSid(owner);
             }
             catch (Exception ex)
             {
@@ -761,6 +761,23 @@ namespace WireSockUI
                    sid.IsWellKnown(WellKnownSidType.NetworkServiceSid) ||
                    sid.Value.StartsWith("S-1-5-80-", StringComparison.OrdinalIgnoreCase) ||
                    sid.Value.StartsWith("S-1-5-83-", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsTrustedOwnerSid(SecurityIdentifier sid)
+        {
+            if (IsAdministrativeOrServiceSid(sid))
+                return true;
+
+            var accountDomainSid = sid.AccountDomainSid;
+            if (accountDomainSid == null)
+                return false;
+
+            return sid.Equals(new SecurityIdentifier(
+                       WellKnownSidType.AccountAdministratorSid,
+                       accountDomainSid)) ||
+                   sid.Equals(new SecurityIdentifier(
+                       WellKnownSidType.AccountDomainAdminsSid,
+                       accountDomainSid));
         }
 
         private static string NormalizePathDirectory(string directory)

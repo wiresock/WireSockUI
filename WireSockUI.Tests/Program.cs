@@ -64,6 +64,7 @@ namespace WireSockUI.Tests
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
+                { "Program recognizes administrative owner SIDs", ProgramRecognizesAdministrativeOwnerSids },
                 { "Autorun rejects untrusted executable paths", AutoRunRejectsUntrustedExecutablePaths },
                 { "Autorun rejects reparse point executable folders", AutoRunRejectsReparsePointExecutableFolders },
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
@@ -673,6 +674,36 @@ namespace WireSockUI.Tests
                     // Best-effort cleanup must not hide the original test failure.
                 }
             }
+        }
+
+        private static void ProgramRecognizesAdministrativeOwnerSids()
+        {
+            var hasTrustedOwner = typeof(WireSockUI.Program).GetMethod("HasTrustedOwner",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (hasTrustedOwner == null)
+                throw new InvalidOperationException("HasTrustedOwner helper was not found.");
+
+            var accountDomainSid = new SecurityIdentifier("S-1-5-21-1000000001-1000000002-1000000003");
+            var administratorSid = new SecurityIdentifier(
+                WellKnownSidType.AccountAdministratorSid,
+                accountDomainSid);
+            var domainAdminsSid = new SecurityIdentifier(
+                WellKnownSidType.AccountDomainAdminsSid,
+                accountDomainSid);
+            var ordinaryUserSid = new SecurityIdentifier($"{accountDomainSid.Value}-1100");
+
+            var security = new DirectorySecurity();
+            security.SetOwner(administratorSid);
+            AssertTrue((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
+                "Expected the built-in account-domain Administrator owner to be trusted.");
+
+            security.SetOwner(domainAdminsSid);
+            AssertTrue((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
+                "Expected the account-domain Domain Admins owner to be trusted.");
+
+            security.SetOwner(ordinaryUserSid);
+            AssertFalse((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
+                "Expected an ordinary account-domain owner to remain untrusted.");
         }
 
         private static void AutoRunRejectsUntrustedExecutablePaths()
