@@ -154,6 +154,9 @@ namespace WireSockUI.Forms
                     td.Triggers.Add(new LogonTrigger()); // Trigger on logon
 
                     var appPath = Application.ExecutablePath;
+                    if (!IsExecutablePathTrustedForAutoRun(appPath, out var trustDiagnostic))
+                        throw new InvalidOperationException(trustDiagnostic);
+
                     td.Actions.Add(new ExecAction(appPath)); // Path to the executable
 
                     // Set power and idle options
@@ -204,6 +207,92 @@ namespace WireSockUI.Forms
                 ShowSettingsError(Resources.SettingsAutoRunDisableAdminError, ex);
                 return false;
             }
+        }
+
+        private static bool IsExecutablePathTrustedForAutoRun(string executablePath, out string diagnostic)
+        {
+            diagnostic = null;
+
+            try
+            {
+                var fullPath = Path.GetFullPath((executablePath ?? string.Empty).Trim().Trim('"'));
+                if (!File.Exists(fullPath))
+                {
+                    diagnostic = $"Autorun executable '{fullPath}' does not exist.";
+                    return false;
+                }
+
+                if (!IsPathFreeOfReparsePoints(fullPath, out diagnostic))
+                    return false;
+
+                if (Program.IsPotentiallyUserWritableFile(fullPath))
+                {
+                    diagnostic =
+                        $"Autorun executable '{fullPath}' is writable by or owned by non-administrative users. Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
+                    return false;
+                }
+
+                var directory = Path.GetDirectoryName(fullPath);
+                if (string.IsNullOrWhiteSpace(directory) ||
+                    Program.IsPotentiallyUserWritableDirectory(directory))
+                {
+                    diagnostic =
+                        $"Autorun executable folder '{directory}' is writable by or owned by non-administrative users. Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
+                    return false;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"Autorun executable path could not be validated: {ex.Message}";
+                return false;
+            }
+        }
+
+        private static bool IsPathFreeOfReparsePoints(string fullPath, out string diagnostic)
+        {
+            if (IsReparsePointOrUnreadable(fullPath, "Autorun executable", out diagnostic))
+                return false;
+
+            var directory = Path.GetDirectoryName(fullPath);
+            while (!string.IsNullOrWhiteSpace(directory))
+            {
+                if (IsReparsePointOrUnreadable(directory, "Autorun executable folder", out diagnostic))
+                    return false;
+
+                var trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var parent = Path.GetDirectoryName(trimmed);
+                if (string.IsNullOrWhiteSpace(parent) ||
+                    string.Equals(parent, directory, StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                directory = parent;
+            }
+
+            diagnostic = null;
+            return true;
+        }
+
+        private static bool IsReparsePointOrUnreadable(string path, string label, out string diagnostic)
+        {
+            try
+            {
+                if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+                {
+                    diagnostic =
+                        $"{label} '{path}' is a reparse point. Install WireSock UI into a real administrator-owned folder before enabling elevated autorun.";
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"{label} '{path}' could not be inspected for reparse points: {ex.Message}";
+                return true;
+            }
+
+            diagnostic = null;
+            return false;
         }
 
         private static void DeleteAutoRunTaskIfOwned(TaskService ts, string taskName)

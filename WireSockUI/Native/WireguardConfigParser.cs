@@ -48,31 +48,48 @@ namespace WireSockUI.Native
             {
                 string line;
                 string currentSection = null;
+                var lineNumber = 0;
 
                 while ((line = reader.ReadLine()) != null)
                 {
+                    lineNumber++;
                     line = line.Trim();
                     if (string.IsNullOrWhiteSpace(line) || IsComment(line))
                         continue;
 
                     line = StripWireSockPrefix(line);
+                    if (string.IsNullOrWhiteSpace(line))
+                        continue;
 
                     if (line.StartsWith("[") && line.EndsWith("]"))
                     {
-                        currentSection = line.Substring(1, line.Length - 2);
+                        currentSection = line.Substring(1, line.Length - 2).Trim();
+                        if (string.IsNullOrEmpty(currentSection))
+                            throw new FormatException($"Invalid WireGuard configuration line {lineNumber}: section name is empty.");
+
                         if (Sections.ContainsKey(currentSection))
                             throw new FormatException(
-                                string.Format(Resources.ParserDuplicateSectionError, currentSection));
+                                $"Invalid WireGuard configuration line {lineNumber}: {string.Format(Resources.ParserDuplicateSectionError, currentSection)}");
 
                         Sections[currentSection] = new Section();
                     }
                     else
                     {
                         var parts = line.Split(new[] { '=' }, 2);
-                        if (parts.Length != 2) continue;
+                        if (parts.Length != 2)
+                            throw new FormatException(
+                                $"Invalid WireGuard configuration line {lineNumber}: expected \"key = value\".");
+
                         var key = parts[0].Trim();
                         var value = parts[1].Trim();
-                        if (string.IsNullOrEmpty(currentSection)) continue;
+                        if (string.IsNullOrWhiteSpace(key))
+                            throw new FormatException(
+                                $"Invalid WireGuard configuration line {lineNumber}: key name is empty.");
+
+                        if (string.IsNullOrEmpty(currentSection))
+                            throw new FormatException(
+                                $"Invalid WireGuard configuration line {lineNumber}: key \"{key}\" appears before any section.");
+
                         if (!Sections.ContainsKey(currentSection))
                             Sections[currentSection] = new Section();
                         if (!Sections[currentSection].KeyValues.ContainsKey(key))

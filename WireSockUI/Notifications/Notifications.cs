@@ -28,14 +28,19 @@ namespace WireSockUI.Notifications
 
                 Global.EnsureNotificationAssetsFolderExists();
 
-                if (TryUseExistingNotificationIcon(icon))
-                    return icon;
-
-                DeleteExistingNotificationIcon(icon);
-
-                using (var stream = new FileStream(icon, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                var iconBytes = CreateNotificationIconBytes();
+                if (!TryCreateFreshNotificationIcon(icon, iconBytes, out var replaceDiagnostic))
                 {
-                    Resources.ico.Save(stream);
+                    if (TryReuseExistingNotificationIcon(icon, iconBytes, out var reuseDiagnostic))
+                    {
+                        Trace.TraceWarning(
+                            $"Reusing verified notification icon '{icon}' because it could not be replaced: {replaceDiagnostic}");
+                        _notificationIconReady = true;
+                        return icon;
+                    }
+
+                    throw new IOException(
+                        $"Could not prepare notification icon '{icon}'. Replace failed: {replaceDiagnostic}; reuse failed: {reuseDiagnostic}");
                 }
 
                 File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
@@ -45,42 +50,96 @@ namespace WireSockUI.Notifications
             return icon;
         }
 
-        private static bool IsRegularNotificationIcon(string icon)
+        private static byte[] CreateNotificationIconBytes()
         {
-            return TryGetAttributes(icon, out var attributes) &&
-                   (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
+            using (var stream = new MemoryStream())
+            {
+                Resources.ico.Save(stream);
+                return stream.ToArray();
+            }
         }
 
-        private static bool TryUseExistingNotificationIcon(string icon)
+        private static bool TryCreateFreshNotificationIcon(string icon, byte[] iconBytes, out string diagnostic)
         {
-            if (!IsRegularNotificationIcon(icon))
-                return false;
-
             try
             {
-                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
-                _notificationIconReady = true;
+                DeleteExistingNotificationIcon(icon);
+
+                using (var stream = new FileStream(icon, FileMode.CreateNew, FileAccess.Write, FileShare.Read))
+                {
+                    stream.Write(iconBytes, 0, iconBytes.Length);
+                }
+
+                diagnostic = null;
+                return true;
             }
-            catch (FileNotFoundException)
+            catch (IOException ex)
             {
-                return false;
-            }
-            catch (DirectoryNotFoundException)
-            {
+                diagnostic = ex.Message;
                 return false;
             }
             catch (UnauthorizedAccessException ex)
             {
-                Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+                diagnostic = ex.Message;
                 return false;
             }
-            catch (IOException ex)
+        }
+
+        private static bool TryReuseExistingNotificationIcon(string icon, byte[] expectedIconBytes, out string diagnostic)
+        {
+            if (!IsRegularNotificationIcon(icon))
             {
-                Debug.WriteLine($"Unable to refresh notification icon ACL: {ex.Message}");
+                diagnostic = "existing icon is missing, a directory, or a reparse point";
                 return false;
             }
 
-            return true;
+            if (Program.IsPotentiallyUserWritableFile(icon))
+            {
+                diagnostic = "existing icon is writable by or owned by non-administrative users";
+                return false;
+            }
+
+            try
+            {
+                if (!FileContentsEqual(icon, expectedIconBytes))
+                {
+                    diagnostic = "existing icon contents do not match the bundled icon";
+                    return false;
+                }
+
+                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+                diagnostic = null;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostic = ex.Message;
+                return false;
+            }
+        }
+
+        private static bool FileContentsEqual(string path, byte[] expectedBytes)
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete))
+            {
+                if (stream.Length != expectedBytes.Length)
+                    return false;
+
+                for (var i = 0; i < expectedBytes.Length; i++)
+                {
+                    if (stream.ReadByte() != expectedBytes[i])
+                        return false;
+                }
+
+                return true;
+            }
+        }
+
+        private static bool IsRegularNotificationIcon(string icon)
+        {
+            return TryGetAttributes(icon, out var attributes) &&
+                   (attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0;
         }
 
         private static void DeleteExistingNotificationIcon(string icon)

@@ -68,7 +68,7 @@ namespace WireSockUI
         {
             if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
             {
-                EnsureAdministratorsOnlyDirectory(SecureMainFolder, secureExistingChildren);
+                EnsureAdministratorsOnlyDirectory(SecureMainFolder, secureExistingChildren, ConfigsFolder);
                 EnsureAdministratorsOnlyDirectory(ConfigsFolder, secureExistingChildren);
                 return;
             }
@@ -82,6 +82,14 @@ namespace WireSockUI
 
         private static void EnsureAdministratorsOnlyDirectory(string path, bool secureExistingChildren)
         {
+            EnsureAdministratorsOnlyDirectory(path, secureExistingChildren, null);
+        }
+
+        private static void EnsureAdministratorsOnlyDirectory(
+            string path,
+            bool secureExistingChildren,
+            string excludedChildDirectory)
+        {
             try
             {
                 var security = CreateAdministratorsOnlyDirectorySecurity();
@@ -91,7 +99,7 @@ namespace WireSockUI
 
                 Directory.SetAccessControl(path, security);
                 if (secureExistingChildren)
-                    SecureExistingChildren(path);
+                    SecureExistingChildren(path, excludedChildDirectory);
             }
             catch (Exception ex)
             {
@@ -308,7 +316,7 @@ namespace WireSockUI
             return security;
         }
 
-        private static void SecureExistingChildren(string path)
+        private static void SecureExistingChildren(string path, string excludedDirectory = null)
         {
             var directories = new Stack<string>();
             directories.Push(path);
@@ -360,6 +368,10 @@ namespace WireSockUI
 
                 foreach (var childDirectory in childDirectories)
                 {
+                    if (!string.IsNullOrWhiteSpace(excludedDirectory) &&
+                        IsSameOrChildPath(childDirectory, excludedDirectory))
+                        continue;
+
                     if (IsReparsePoint(childDirectory))
                     {
                         Trace.TraceWarning($"Skipping WireSock UI configuration directory reparse point '{childDirectory}'.");

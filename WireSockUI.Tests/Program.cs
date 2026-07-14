@@ -47,6 +47,10 @@ namespace WireSockUI.Tests
                 { "Profile reports malformed profile paths consistently", ProfileReportsMalformedProfilePathsConsistently },
                 { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
+                { "Parser rejects malformed lines", ParserRejectsMalformedLines },
+                { "Parser rejects keys before sections", ParserRejectsKeysBeforeSections },
+                { "Parser rejects empty section names", ParserRejectsEmptySectionNames },
+                { "Parser trims section names", ParserTrimsSectionNames },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Profile rejects invalid Amnezia passthrough options", ProfileRejectsInvalidAmneziaPassthroughOptions },
                 { "Interface extension validation rules are shared", InterfaceExtensionValidationRulesAreShared },
@@ -60,6 +64,9 @@ namespace WireSockUI.Tests
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
+                { "Program recognizes administrative owner SIDs", ProgramRecognizesAdministrativeOwnerSids },
+                { "Autorun rejects untrusted executable paths", AutoRunRejectsUntrustedExecutablePaths },
+                { "Autorun rejects reparse point executable folders", AutoRunRejectsReparsePointExecutableFolders },
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
                 { "Profile import preserves pre-existing destination on copy failure", ProfileImportPreservesExistingDestinationOnCopyFailure },
                 { "Profile import rejects reparse point sources", ProfileImportRejectsReparsePointSources },
@@ -75,6 +82,7 @@ namespace WireSockUI.Tests
                 { "Autorun task name is path seeded", AutoRunTaskNameIsPathSeeded },
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
+                { "WireSock exports use restricted DLL search", WireSockExportsUseRestrictedDllSearch },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
 
@@ -322,7 +330,79 @@ namespace WireSockUI.Tests
                 "Endpoint = backup.example.com:51820\n" +
                 "AllowedIPs = ::/0\n");
 
+            AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "line 10");
             AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "Duplicate [Peer]");
+        }
+
+        private static void ParserRejectsMalformedLines()
+        {
+            var path = WriteConfig(
+                "[Interface]\n" +
+                "PrivateKey\n");
+
+            try
+            {
+                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "line 2");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ParserRejectsKeysBeforeSections()
+        {
+            var path = WriteConfig("PrivateKey = value\n");
+
+            try
+            {
+                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "before any section");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ParserRejectsEmptySectionNames()
+        {
+            var path = WriteConfig("[]\n");
+
+            try
+            {
+                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "section name is empty");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ParserTrimsSectionNames()
+        {
+            var path = WriteConfig(
+                "[Interface ]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "\n" +
+                "[ Peer ]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+
+            try
+            {
+                var parser = new WireguardConfigParser.ConfigParser(path);
+                AssertTrue(parser.GetSectionNames().Contains("Interface", StringComparer.OrdinalIgnoreCase),
+                    "Expected parser to trim trailing whitespace in section names.");
+                AssertTrue(parser.GetSectionNames().Contains("Peer", StringComparer.OrdinalIgnoreCase),
+                    "Expected parser to trim leading and trailing whitespace in section names.");
+                new Profile(path);
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
         }
 
         private static void ProfileAcceptsAmneziaPassthroughOptions()
@@ -593,6 +673,103 @@ namespace WireSockUI.Tests
                 {
                     // Best-effort cleanup must not hide the original test failure.
                 }
+            }
+        }
+
+        private static void ProgramRecognizesAdministrativeOwnerSids()
+        {
+            var hasTrustedOwner = typeof(WireSockUI.Program).GetMethod("HasTrustedOwner",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (hasTrustedOwner == null)
+                throw new InvalidOperationException("HasTrustedOwner helper was not found.");
+
+            var accountDomainSid = new SecurityIdentifier("S-1-5-21-1000000001-1000000002-1000000003");
+            var administratorSid = new SecurityIdentifier(
+                WellKnownSidType.AccountAdministratorSid,
+                accountDomainSid);
+            var domainAdminsSid = new SecurityIdentifier(
+                WellKnownSidType.AccountDomainAdminsSid,
+                accountDomainSid);
+            var ordinaryUserSid = new SecurityIdentifier($"{accountDomainSid.Value}-1100");
+
+            var security = new DirectorySecurity();
+            security.SetOwner(administratorSid);
+            AssertTrue((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
+                "Expected the built-in account-domain Administrator owner to be trusted.");
+
+            security.SetOwner(domainAdminsSid);
+            AssertTrue((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
+                "Expected the account-domain Domain Admins owner to be trusted.");
+
+            security.SetOwner(ordinaryUserSid);
+            AssertFalse((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
+                "Expected an ordinary account-domain owner to remain untrusted.");
+        }
+
+        private static void AutoRunRejectsUntrustedExecutablePaths()
+        {
+            var validate = typeof(FrmSettings).GetMethod("IsExecutablePathTrustedForAutoRun",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (validate == null)
+                throw new InvalidOperationException("IsExecutablePathTrustedForAutoRun helper was not found.");
+
+            var file = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", $"{Guid.NewGuid():N}.exe");
+            Directory.CreateDirectory(Path.GetDirectoryName(file));
+
+            try
+            {
+                File.WriteAllText(file, string.Empty);
+
+                var args = new object[] { file, null };
+                var trusted = (bool)validate.Invoke(null, args);
+
+                AssertFalse(trusted, "Expected elevated autorun to reject a user-writable executable path.");
+                AssertTrue(args[1] is string diagnostic &&
+                           diagnostic.IndexOf("non-administrative", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable autorun trust diagnostic, got '{args[1]}'.");
+            }
+            finally
+            {
+                TryDeleteFile(file);
+            }
+        }
+
+        private static void AutoRunRejectsReparsePointExecutableFolders()
+        {
+            var validate = typeof(FrmSettings).GetMethod("IsExecutablePathTrustedForAutoRun",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (validate == null)
+                throw new InvalidOperationException("IsExecutablePathTrustedForAutoRun helper was not found.");
+
+            var root = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var targetDirectory = Path.Combine(root, "target");
+            var linkDirectory = Path.Combine(root, "link");
+            var targetFile = Path.Combine(targetDirectory, "WireSockUI.exe");
+            var linkedFile = Path.Combine(linkDirectory, "WireSockUI.exe");
+
+            try
+            {
+                Directory.CreateDirectory(targetDirectory);
+                File.WriteAllText(targetFile, string.Empty);
+
+                if (!TryCreateDirectoryJunction(linkDirectory, targetDirectory))
+                {
+                    SkipOrFail("autorun directory reparse point creation unavailable; autorun reparse check not exercised.");
+                    return;
+                }
+
+                var args = new object[] { linkedFile, null };
+                var trusted = (bool)validate.Invoke(null, args);
+
+                AssertFalse(trusted, "Expected elevated autorun to reject executable paths through reparse point folders.");
+                AssertTrue(args[1] is string diagnostic &&
+                           diagnostic.IndexOf("reparse point", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable autorun reparse diagnostic, got '{args[1]}'.");
+            }
+            finally
+            {
+                TryDeleteDirectory(linkDirectory, false);
+                TryDeleteDirectory(root, true);
             }
         }
 
@@ -1044,6 +1221,41 @@ namespace WireSockUI.Tests
             AssertEqual(1, (int)WireguardBoosterExports.WgbNetworkLockMode.Enabled);
         }
 
+        private static void WireSockExportsUseRestrictedDllSearch()
+        {
+            var methods = typeof(WireguardBoosterExports)
+                .GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .Where(method =>
+                {
+                    var dllImport = method.GetCustomAttributes(typeof(DllImportAttribute), false)
+                        .OfType<DllImportAttribute>()
+                        .SingleOrDefault();
+                    return string.Equals(dllImport?.Value, "wgbooster.dll", StringComparison.OrdinalIgnoreCase);
+                })
+                .ToList();
+
+            AssertTrue(methods.Count > 0, "Expected wgbooster export methods to be discovered.");
+
+            foreach (var method in methods)
+            {
+                var attribute = method.GetCustomAttributes(typeof(DefaultDllImportSearchPathsAttribute), false)
+                    .OfType<DefaultDllImportSearchPathsAttribute>()
+                    .SingleOrDefault();
+
+                if (attribute == null)
+                    throw new InvalidOperationException(
+                        $"Expected wgbooster export '{method.Name}' to declare restricted DLL search paths.");
+
+                var paths = attribute.Paths;
+                AssertTrue((paths & DllImportSearchPath.UserDirectories) != 0,
+                    $"Expected '{method.Name}' to search only explicitly added user directories.");
+                AssertTrue((paths & DllImportSearchPath.System32) != 0,
+                    $"Expected '{method.Name}' to allow System32 dependency resolution.");
+                AssertFalse((paths & DllImportSearchPath.AssemblyDirectory) != 0,
+                    $"Expected '{method.Name}' not to fall back to the executable directory.");
+            }
+        }
+
         private static void StatsStructMatchesWgboosterAbi()
         {
             AssertEqual(32, Marshal.SizeOf<WireguardBoosterExports.WgbStats>());
@@ -1163,6 +1375,19 @@ namespace WireSockUI.Tests
             {
                 if (File.Exists(path))
                     File.Delete(path);
+            }
+            catch
+            {
+                // Best-effort cleanup must not hide the original test failure.
+            }
+        }
+
+        private static void TryDeleteDirectory(string path, bool recursive)
+        {
+            try
+            {
+                if (Directory.Exists(path))
+                    Directory.Delete(path, recursive);
             }
             catch
             {

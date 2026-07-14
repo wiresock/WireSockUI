@@ -13,12 +13,12 @@ WireSockUI does not talk to the newer WireSock Secure Connect service API. Keep 
 
 At startup WireSockUI looks for `wgbooster.dll` in this order:
 
-1. The application directory, unless that directory is writable by non-administrative users.
+1. The application directory, unless that directory is writable by or owned by non-administrative users.
 2. WireSock Secure Connect SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect`.
 3. WireSock Secure Connect Pro SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect Pro`.
 4. The legacy WireSock VPN Client registry location under `HKLM\SOFTWARE\NTKernelResources\WinpkFilterForVPNClient`.
 
-For each registered install location it checks `sdk`, `bin`, and the install root. The discovered directory is registered with the process through `SetDllDirectory` so the native library can be loaded without changing the machine-wide environment.
+For each registered install location it checks `sdk`, `bin`, and the install root. WireSockUI validates the directory and `wgbooster.dll` ownership/ACLs, then loads the exact validated DLL with a restricted DLL search path instead of changing the machine-wide environment or relying on `PATH`.
 
 ## Configuration Notes
 
@@ -37,6 +37,8 @@ Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK 
 Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration and manual import use bounded temporary copies and reject reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening when possible. Legacy profiles containing script hooks are not auto-migrated; import them manually so the hook warning can be reviewed.
 
 Runtime state that can be written by the elevated process, including the native recovery marker, is kept under the secured `%ProgramData%\WireSockUI` folder rather than per-user AppData. The UWP notification icon is stored under a dedicated `%ProgramData%\WireSockUI-Notifications` folder with a read-only Users ACL so the toast platform can load it without allowing unelevated writes.
+
+Elevated autorun is available only when `WireSockUI.exe` and its containing folder are not writable by or owned by non-administrative users. Install WireSockUI into an administrator-owned location before enabling autorun.
 
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
 
