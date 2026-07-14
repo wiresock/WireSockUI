@@ -106,7 +106,7 @@ namespace WireSockUI.Tests
                 { "WireSock manager retains handles when cleanup fails", WireSockManagerRetainsHandlesWhenCleanupFails },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "WireSock exports use restricted DLL search", WireSockExportsUseRestrictedDllSearch },
-                { "WireSock log callback uses UTF-8", WireSockLogCallbackUsesUtf8 },
+                { "WireSock log callback decodes UTF-8 explicitly", WireSockLogCallbackDecodesUtf8Explicitly },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
 
@@ -1824,16 +1824,44 @@ namespace WireSockUI.Tests
             }
         }
 
-        private static void WireSockLogCallbackUsesUtf8()
+        private static void WireSockLogCallbackDecodesUtf8Explicitly()
         {
             var parameter = typeof(WireguardBoosterExports.LogPrinter).GetMethod("Invoke")?.GetParameters().Single();
-            var marshalAs = parameter?.GetCustomAttributes(typeof(MarshalAsAttribute), false)
-                .OfType<MarshalAsAttribute>()
-                .SingleOrDefault();
 
-            AssertTrue(marshalAs != null, "Expected the native log callback parameter to declare marshaling.");
-            AssertTrue(marshalAs.Value == UnmanagedType.LPUTF8Str,
-                $"Expected UTF-8 log marshaling, got {marshalAs.Value}.");
+            AssertTrue(parameter?.ParameterType == typeof(IntPtr),
+                "Expected the native log callback to receive the char* as an IntPtr on .NET Framework.");
+            AssertFalse(parameter.GetCustomAttributes(typeof(MarshalAsAttribute), false).Any(),
+                "Expected UTF-8 callback decoding to avoid runtime string marshaling.");
+
+            const string expected = "wgbooster: \u041F\u0440\u0438\u0432\u0435\u0442 \u4E16\u754C";
+            var bytes = Encoding.UTF8.GetBytes(expected);
+            var message = Marshal.AllocHGlobal(bytes.Length + 1);
+            try
+            {
+                Marshal.Copy(bytes, 0, message, bytes.Length);
+                Marshal.WriteByte(message, bytes.Length, 0);
+                AssertEqual(expected, WireguardBoosterExports.DecodeLogMessage(message));
+                AssertEqual(string.Empty, WireguardBoosterExports.DecodeLogMessage(IntPtr.Zero));
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(message);
+            }
+
+            var unterminatedBytes = Enumerable.Repeat((byte)'x',
+                WireguardBoosterExports.MaxLogMessageBytes + 1).ToArray();
+            var unterminatedMessage = Marshal.AllocHGlobal(unterminatedBytes.Length);
+            try
+            {
+                Marshal.Copy(unterminatedBytes, 0, unterminatedMessage, unterminatedBytes.Length);
+                AssertThrows<ArgumentException>(
+                    () => WireguardBoosterExports.DecodeLogMessage(unterminatedMessage),
+                    "not null-terminated");
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(unterminatedMessage);
+            }
         }
 
         private static void StatsStructMatchesWgboosterAbi()

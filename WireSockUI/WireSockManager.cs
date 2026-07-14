@@ -79,7 +79,7 @@ namespace WireSockUI
             TunnelMode = Mode.Transparent;
 
             // Create a new instance of the LogPrinter delegate
-            _logPrinter = PrintLog;
+            _logPrinter = PrintNativeLog;
 
             // Create a GCHandle to keep the delegate alive
             _logPrinterHandle = GCHandle.Alloc(_logPrinter);
@@ -328,6 +328,28 @@ namespace WireSockUI
 
                 if (disposing && _handle == IntPtr.Zero && _logPrinterHandle.IsAllocated)
                     _logPrinterHandle.Free();
+            }
+        }
+
+        /// <summary>
+        ///     Decodes a native UTF-8 log message without relying on callback parameter marshaling.
+        /// </summary>
+        private void PrintNativeLog(IntPtr message)
+        {
+            try
+            {
+                PrintLog(WireguardBoosterExports.DecodeLogMessage(message));
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    PrintLog($"Failed to decode a native wgbooster log message: {ex.Message}");
+                }
+                catch (Exception)
+                {
+                    // No managed exception may cross the native callback boundary.
+                }
             }
         }
 
