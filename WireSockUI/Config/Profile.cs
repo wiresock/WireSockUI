@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
 using WireSockUI.Extensions;
@@ -15,6 +14,21 @@ namespace WireSockUI.Config
     /// </summary>
     internal class Profile
     {
+        private static readonly string[] InterfaceKeys =
+        {
+            "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "Table", "ScriptExecTimeout", "PreUp",
+            "PostUp", "PreDown", "PostDown", "BypassLanTraffic", "VirtualAdapterMode", "EnableDefaultGateway",
+            "Jc", "Jmin", "Jmax", "Jd", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "Id", "Ip",
+            "Ib"
+        };
+
+        private static readonly string[] PeerKeys =
+        {
+            "PublicKey", "PresharedKey", "AllowedIPs", "Endpoint", "PersistentKeepalive", "AllowedApps",
+            "DisallowedApps", "DisallowedIPs", "Socks5Proxy", "Socks5ProxyUsername", "Socks5ProxyPassword",
+            "Socks5ProxyAllTraffic", "Socks5Username"
+        };
+
         private string _address;
 
         // WireSock Extensions
@@ -26,7 +40,6 @@ namespace WireSockUI.Config
         private string _persistentKeepAlive;
         private string _scriptExecTimeout;
         private string _disallowedIPs;
-        private string _bypassLanTraffic;
         private string _virtualAdapterMode;
 
         private string _presharedKey;
@@ -61,32 +74,37 @@ namespace WireSockUI.Config
             var sections = parser.GetSectionNames();
 
             var configESections = sections as string[] ?? sections.ToArray();
-            if (!configESections.Contains("Interface", StringComparer.OrdinalIgnoreCase))
+            if (!configESections.Contains("Interface", StringComparer.Ordinal))
                 throw new ArgumentException(
                     $"Profile {GetProfileDisplayName(profilePath)} does not contain an \"Interface\" section.");
 
             var section = parser.GetSection("Interface");
+            ValidateKnownKeyCasing(section, InterfaceKeys);
+            ValidateUnsupportedInterfaceDirectives(section);
 
             PrivateKey = GetRequiredValue(profilePath, "Interface", section, "PrivateKey");
             Address = GetRequiredValue(profilePath, "Interface", section, "Address");
             Dns = section.Get("DNS");
             Mtu = section.Get("MTU");
             ListenPort = section.Get("ListenPort");
-            Table = section.Get("Table");
             ScriptExecTimeout = section.Get("ScriptExecTimeout");
             PreUpScript = section.Get("PreUp");
             PostUpScript = section.Get("PostUp");
             PreDownScript = section.Get("PreDown");
             PostDownScript = section.Get("PostDown");
-            BypassLanTraffic = section.Get("BypassLanTraffic");
             VirtualAdapterMode = section.Get("VirtualAdapterMode");
             ValidateInterfaceExtensions(section);
 
-            if (!configESections.Contains("Peer", StringComparer.OrdinalIgnoreCase))
+            if (!configESections.Contains("Peer", StringComparer.Ordinal))
                 throw new ArgumentException(
                     $"Profile {GetProfileDisplayName(profilePath)} does not contain a \"Peer\" section.");
 
             section = parser.GetSection("Peer");
+            ValidateKnownKeyCasing(section, PeerKeys);
+
+            if (section.ContainsKey("Socks5Username"))
+                throw new FormatException(
+                    "\"Socks5Username\" in \"Peer\" is not supported by the current SDK. Use \"Socks5ProxyUsername\".");
 
             PeerKey = GetRequiredValue(profilePath, "Peer", section, "PublicKey");
             PresharedKey = section.Get("PresharedKey");
@@ -99,8 +117,6 @@ namespace WireSockUI.Config
             DisallowedIPs = section.Get("DisallowedIPs");
             Socks5Proxy = section.Get("Socks5Proxy");
             Socks5ProxyUsername = section.Get("Socks5ProxyUsername");
-            if (string.IsNullOrEmpty(Socks5ProxyUsername))
-                Socks5ProxyUsername = section.Get("Socks5Username");
             Socks5ProxyPassword = section.Get("Socks5ProxyPassword");
             Socks5ProxyAllTraffic = section.Get("Socks5ProxyAllTraffic");
         }
@@ -170,20 +186,8 @@ namespace WireSockUI.Config
             get => _mtu;
             set
             {
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    if (!int.TryParse(value, out var mtu))
-                        throw new FormatException("\"MTU\" in \"Interface\", is not a numerical value.");
-
-                    if (mtu < 576 || mtu > 65535)
-                        throw new FormatException("\"MTU\" in \"Interface\", invalid value. Expected 576...65535.");
-
-                    _mtu = value;
-                }
-                else
-                {
-                    _mtu = null;
-                }
+                ValidateUInt("Interface", "MTU", value, 576, ushort.MaxValue);
+                _mtu = string.IsNullOrWhiteSpace(value) ? null : value;
             }
         }
 
@@ -195,28 +199,10 @@ namespace WireSockUI.Config
             get => _listenport;
             set
             {
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    if (!int.TryParse(value, out var listenPort))
-                        throw new FormatException("\"ListenPort\" in \"Interface\", is not a numerical value.");
-
-                    if (listenPort < 1 || listenPort > 65535)
-                        throw new FormatException(
-                            "\"ListenPort\" in \"Interface\", invalid value. Expected 1...65535.");
-
-                    _listenport = value;
-                }
-                else
-                {
-                    _listenport = null;
-                }
+                ValidateUInt("Interface", "ListenPort", value, 0, ushort.MaxValue);
+                _listenport = string.IsNullOrWhiteSpace(value) ? null : value;
             }
         }
-
-        /// <summary>
-        ///     Interface routing table setting.
-        /// </summary>
-        public string Table { get; set; }
 
         /// <summary>
         ///     Timeout for Pre/Post up/down scripts.
@@ -226,7 +212,7 @@ namespace WireSockUI.Config
             get => _scriptExecTimeout;
             set
             {
-                ValidateInt("Interface", "ScriptExecTimeout", value, 0, 65535);
+                ValidateUInt("Interface", "ScriptExecTimeout", value, 0, uint.MaxValue);
                 _scriptExecTimeout = string.IsNullOrWhiteSpace(value) ? null : value;
             }
         }
@@ -249,19 +235,6 @@ namespace WireSockUI.Config
             AddScriptHook(hooks, "PostDown", PostDownScript);
 
             return hooks;
-        }
-
-        /// <summary>
-        ///     Exclude local LAN traffic from the tunnel when supported by the SDK.
-        /// </summary>
-        public string BypassLanTraffic
-        {
-            get => _bypassLanTraffic;
-            set
-            {
-                ValidateBool("Interface", "BypassLanTraffic", value);
-                _bypassLanTraffic = string.IsNullOrWhiteSpace(value) ? null : value;
-            }
         }
 
         /// <summary>
@@ -340,21 +313,8 @@ namespace WireSockUI.Config
             get => _persistentKeepAlive;
             set
             {
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    if (!int.TryParse(value, out var mtu))
-                        throw new FormatException("\"PersistentKeepalive\" in \"Peer\", is not a numerical value.");
-
-                    if (mtu < 0 || mtu > 65535)
-                        throw new FormatException(
-                            "\"PersistentKeepalive\" in \"Peer\", invalid value. Expected 0...65535.");
-
-                    _persistentKeepAlive = value;
-                }
-                else
-                {
-                    _persistentKeepAlive = null;
-                }
+                ValidateUInt("Peer", "PersistentKeepalive", value, 0, uint.MaxValue);
+                _persistentKeepAlive = string.IsNullOrWhiteSpace(value) ? null : value;
             }
         }
 
@@ -468,19 +428,6 @@ namespace WireSockUI.Config
             }
         }
 
-        internal static void ValidateInt(string section, string key, string keyValue, int minValue, int maxValue)
-        {
-            if (string.IsNullOrWhiteSpace(keyValue)) return;
-
-            var trimmedValue = keyValue.Trim();
-            if (!int.TryParse(trimmedValue, NumberStyles.Integer, CultureInfo.InvariantCulture, out var intValue))
-                throw new FormatException($"\"{key}\" in \"{section}\", is not a numerical value.");
-
-            if (intValue < minValue || intValue > maxValue)
-                throw new FormatException(
-                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue}.");
-        }
-
         internal static void ValidateBool(string section, string key, string keyValue)
         {
             if (string.IsNullOrWhiteSpace(keyValue)) return;
@@ -495,12 +442,169 @@ namespace WireSockUI.Config
         {
             foreach (var rule in ConfigValueValidator.InterfaceExtensionRules)
             {
-                if (!rule.IsValid(section.Get(rule.Key)))
+                var value = section.Get(rule.Key);
+                if (section.ContainsKey(rule.Key) && string.IsNullOrWhiteSpace(value) &&
+                    !IsBlankAmneziaHeaderAllowed(rule.Key))
+                    throw new FormatException($"\"{rule.Key}\" in \"Interface\" cannot be empty.");
+
+                if (!rule.IsValid(value))
                     throw new FormatException(
                         $"\"{rule.Key}\" in \"Interface\", invalid value. Expected {rule.ExpectedValueDescription}.");
             }
 
+            ValidateRequiredPair(section, "Jmin", "Jmax");
             ValidateUIntOrdering(section, "Jmin", "Jmax");
+            ValidatePreHandshakeActivation(section);
+            ValidateAmneziaGroup(section);
+            ValidateAmneziaHeaderRanges(section);
+            ValidateProtocolImitation(section);
+
+            if (section.ContainsKey("EnableDefaultGateway") &&
+                !string.Equals(section.Get("EnableDefaultGateway"), "true", StringComparison.Ordinal) &&
+                !string.Equals(section.Get("EnableDefaultGateway"), "false", StringComparison.Ordinal))
+                throw new FormatException(
+                    "\"EnableDefaultGateway\" in \"Interface\" must be exactly \"true\" or \"false\".");
+        }
+
+        private static bool IsBlankAmneziaHeaderAllowed(string key)
+        {
+            return string.Equals(key, "H1", StringComparison.Ordinal) ||
+                   string.Equals(key, "H2", StringComparison.Ordinal) ||
+                   string.Equals(key, "H3", StringComparison.Ordinal) ||
+                   string.Equals(key, "H4", StringComparison.Ordinal);
+        }
+
+        internal static void ValidateUInt(string section, string key, string keyValue, uint minValue, uint maxValue)
+        {
+            if (string.IsNullOrWhiteSpace(keyValue)) return;
+
+            if (!ConfigValueValidator.IsUIntDecimalInRange(keyValue, minValue, maxValue))
+                throw new FormatException(
+                    $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue}.");
+        }
+
+        private static void ValidateKnownKeyCasing(Dictionary<string, string> section, IEnumerable<string> knownKeys)
+        {
+            var canonicalKeys = knownKeys.ToDictionary(key => key, key => key, StringComparer.OrdinalIgnoreCase);
+            foreach (var key in section.Keys)
+            {
+                if (canonicalKeys.TryGetValue(key, out var canonicalKey) &&
+                    !string.Equals(key, canonicalKey, StringComparison.Ordinal))
+                    throw new FormatException(
+                        $"Configuration key \"{key}\" has invalid casing. The current SDK expects \"{canonicalKey}\".");
+            }
+        }
+
+        private static void ValidateUnsupportedInterfaceDirectives(Dictionary<string, string> section)
+        {
+            if (section.ContainsKey("BypassLanTraffic"))
+                throw new FormatException(
+                    "\"BypassLanTraffic\" is not supported by direct wgbooster.dll integration. Specify LAN prefixes with \"DisallowedIPs\" in \"Peer\".");
+
+            if (section.ContainsKey("Table"))
+                throw new FormatException(
+                    "\"Table\" is not supported by the current wgbooster.dll configuration parser.");
+
+            for (var index = 1; index <= 5; index++)
+            {
+                var key = $"I{index}";
+                if (section.Keys.Any(existingKey =>
+                        string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase)))
+                    throw new FormatException(
+                        $"\"{key}\" is not supported by the current wgbooster.dll configuration parser.");
+            }
+        }
+
+        private static void ValidateRequiredPair(Dictionary<string, string> section, string firstKey, string secondKey)
+        {
+            if (section.ContainsKey(firstKey) == section.ContainsKey(secondKey))
+                return;
+
+            throw new FormatException(
+                $"\"{firstKey}\" and \"{secondKey}\" in \"Interface\" must be specified together.");
+        }
+
+        private static void ValidateAmneziaGroup(Dictionary<string, string> section)
+        {
+            var allKeys = new[] { "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4" };
+            if (!allKeys.Any(section.ContainsKey))
+                return;
+
+            var requiredKeys = new[] { "S1", "S2", "H1", "H2", "H3", "H4" };
+            var missingKeys = requiredKeys.Where(key => !section.ContainsKey(key)).ToArray();
+            if (missingKeys.Length > 0)
+                throw new FormatException(
+                    $"Amnezia configuration in \"Interface\" is incomplete. Missing: {string.Join(", ", missingKeys)}.");
+        }
+
+        private static void ValidatePreHandshakeActivation(Dictionary<string, string> section)
+        {
+            if (!(section.ContainsKey("Jmin") || section.ContainsKey("Jmax") || section.ContainsKey("Jd")))
+                return;
+
+            if (!section.ContainsKey("Jc") && !section.ContainsKey("Id"))
+                throw new FormatException(
+                    "\"Jmin\", \"Jmax\", and \"Jd\" in \"Interface\" require \"Jc\" or \"Id\" to enable pre-handshake configuration.");
+        }
+
+        private static void ValidateProtocolImitation(Dictionary<string, string> section)
+        {
+            if ((section.ContainsKey("Ip") || section.ContainsKey("Ib")) && !section.ContainsKey("Id"))
+                throw new FormatException("\"Ip\" and \"Ib\" in \"Interface\" require \"Id\".");
+
+            var protocol = section.Get("Ip")?.Trim();
+            if ((string.Equals(protocol, "sip", StringComparison.OrdinalIgnoreCase) ||
+                 string.Equals(protocol, "sip_request", StringComparison.OrdinalIgnoreCase)) &&
+                !ConfigValueValidator.IsSipImitationHost(section.Get("Id")))
+                throw new FormatException(
+                    "\"Id\" in \"Interface\" is not a valid SIP imitation host. Use ASCII labels of at most 63 characters.");
+        }
+
+        private static void ValidateAmneziaHeaderRanges(Dictionary<string, string> section)
+        {
+            var keys = new[] { "H1", "H2", "H3", "H4" };
+            if (!keys.All(section.ContainsKey))
+                return;
+
+            var ranges = keys.Select((key, index) => ParseResolvedHeaderRange(section.Get(key), (uint)index + 1))
+                .ToArray();
+            for (var first = 0; first < ranges.Length; first++)
+            {
+                for (var second = first + 1; second < ranges.Length; second++)
+                {
+                    if (ranges[first].Start <= ranges[second].End && ranges[second].Start <= ranges[first].End)
+                        throw new FormatException(
+                            $"\"{keys[first]}\" and \"{keys[second]}\" in \"Interface\" resolve to overlapping header ranges.");
+                }
+            }
+        }
+
+        private static HeaderRange ParseResolvedHeaderRange(string value, uint defaultValue)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return new HeaderRange(defaultValue, defaultValue);
+
+            var parts = value.Split('-');
+            ConfigValueValidator.TryParseUIntDecimal(parts[0], out var start);
+            var end = start;
+            if (parts.Length == 2)
+                ConfigValueValidator.TryParseUIntDecimal(parts[1], out end);
+
+            return start == 0 && end == 0
+                ? new HeaderRange(defaultValue, defaultValue)
+                : new HeaderRange(start, end);
+        }
+
+        private struct HeaderRange
+        {
+            public HeaderRange(uint start, uint end)
+            {
+                Start = start;
+                End = end;
+            }
+
+            public uint Start { get; }
+            public uint End { get; }
         }
 
         private static void ValidateUIntOrdering(Dictionary<string, string> section, string minKey, string maxKey)
@@ -510,13 +614,13 @@ namespace WireSockUI.Config
             if (string.IsNullOrWhiteSpace(minValue) || string.IsNullOrWhiteSpace(maxValue))
                 return;
 
-            if (!ConfigValueValidator.TryParseUInt(minValue, out var min) ||
-                !ConfigValueValidator.TryParseUInt(maxValue, out var max))
+            if (!ConfigValueValidator.TryParseUIntDecimal(minValue, out var min) ||
+                !ConfigValueValidator.TryParseUIntDecimal(maxValue, out var max))
                 return;
 
-            if (min > max)
+            if (min >= max)
                 throw new FormatException(
-                    $"\"{minKey}\" in \"Interface\" must be less than or equal to \"{maxKey}\".");
+                    $"\"{minKey}\" in \"Interface\" must be less than \"{maxKey}\".");
         }
 
         public static IEnumerable<string> GetProfiles()
@@ -673,6 +777,10 @@ namespace WireSockUI.Config
                     return false;
                 }
 
+                if (!Global.AllowUnsecuredConfigFolderOverrideForTests && IsPathInConfigFolder(profilePath) &&
+                    !Program.TryValidateTrustedFilePath(profilePath, "Profile file", out diagnostic))
+                    return false;
+
                 return true;
             }
             catch (FileNotFoundException)
@@ -691,6 +799,14 @@ namespace WireSockUI.Config
                     $"Unable to inspect profile file '{GetProfileDisplayName(profilePath)}': {ex.Message}";
                 return false;
             }
+        }
+
+        private static bool IsPathInConfigFolder(string profilePath)
+        {
+            var configRoot = Path.GetFullPath(Global.ConfigsFolder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var fullProfilePath = Path.GetFullPath(profilePath);
+            return fullProfilePath.StartsWith(configRoot, StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetRequiredValue(string profilePath, string sectionName, Dictionary<string, string> section,

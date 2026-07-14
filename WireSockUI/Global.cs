@@ -332,8 +332,8 @@ namespace WireSockUI
                 }
                 catch (Exception ex)
                 {
-                    Trace.TraceWarning($"Unable to enumerate WireSock UI configuration files in '{directory}': {ex.Message}");
-                    files = Array.Empty<string>();
+                    throw new IOException(
+                        $"Unable to enumerate WireSock UI configuration files in '{directory}'.", ex);
                 }
 
                 foreach (var file in files)
@@ -350,7 +350,8 @@ namespace WireSockUI
                     }
                     catch (Exception ex)
                     {
-                        Trace.TraceWarning($"Failed to secure WireSock UI configuration file '{file}': {ex.Message}");
+                        throw new UnauthorizedAccessException(
+                            $"Failed to secure WireSock UI configuration file '{file}'.", ex);
                     }
                 }
 
@@ -361,9 +362,8 @@ namespace WireSockUI
                 }
                 catch (Exception ex)
                 {
-                    Trace.TraceWarning(
-                        $"Unable to enumerate WireSock UI configuration directories in '{directory}': {ex.Message}");
-                    continue;
+                    throw new IOException(
+                        $"Unable to enumerate WireSock UI configuration directories in '{directory}'.", ex);
                 }
 
                 foreach (var childDirectory in childDirectories)
@@ -373,10 +373,8 @@ namespace WireSockUI
                         continue;
 
                     if (IsReparsePoint(childDirectory))
-                    {
-                        Trace.TraceWarning($"Skipping WireSock UI configuration directory reparse point '{childDirectory}'.");
-                        continue;
-                    }
+                        throw new IOException(
+                            $"Refusing to secure WireSock UI configuration directory reparse point '{childDirectory}'.");
 
                     try
                     {
@@ -385,8 +383,8 @@ namespace WireSockUI
                     }
                     catch (Exception ex)
                     {
-                        Trace.TraceWarning(
-                            $"Failed to secure WireSock UI configuration directory '{childDirectory}': {ex.Message}");
+                        throw new UnauthorizedAccessException(
+                            $"Failed to secure WireSock UI configuration directory '{childDirectory}'.", ex);
                     }
                 }
             }
@@ -454,17 +452,13 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning(
-                    $"Skipping WireSock UI configuration file reparse point '{file}' because its attributes could not be inspected: {ex.Message}");
-                return;
+                throw new IOException(
+                    $"Unable to inspect WireSock UI configuration file reparse point '{file}'.", ex);
             }
 
             if ((attributes & FileAttributes.ReparsePoint) == 0)
-            {
-                Trace.TraceWarning(
-                    $"Skipping WireSock UI configuration file '{file}' because it is no longer a reparse point.");
-                return;
-            }
+                throw new IOException(
+                    $"WireSock UI configuration file '{file}' changed while its reparse-point status was being validated.");
 
             try
             {
@@ -473,8 +467,8 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning(
-                    $"Skipping WireSock UI configuration file reparse point '{file}' because it could not be deleted: {ex.Message}");
+                throw new IOException(
+                    $"WireSock UI configuration file reparse point '{file}' could not be deleted.", ex);
             }
         }
     }

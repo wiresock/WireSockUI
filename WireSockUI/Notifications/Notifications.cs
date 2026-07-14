@@ -15,6 +15,8 @@ namespace WireSockUI.Notifications
     internal static class Notifications
     {
         private static readonly object IconSyncRoot = new object();
+        private static readonly Lazy<WindowsApplicationContext> ApplicationContext =
+            new Lazy<WindowsApplicationContext>(() => WindowsApplicationContext.FromCurrentProcess());
         private static bool _notificationIconReady;
 
         private static string EnsureNotificationIcon()
@@ -230,7 +232,7 @@ namespace WireSockUI.Notifications
         public static void Notify(string title, string body)
         {
             var icon = EnsureNotificationIcon();
-            var context = WindowsApplicationContext.FromCurrentProcess();
+            var context = ApplicationContext.Value;
             var notifier = ToastNotificationManager.CreateToastNotifier(context.AppUserModelId);
 
             var notification = new ToastNotification(GetXml(title, body, icon));

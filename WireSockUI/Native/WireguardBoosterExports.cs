@@ -1,12 +1,37 @@
 ﻿using System;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace WireSockUI.Native
 {
     internal static class WireguardBoosterExports
     {
+        internal const int MaxLogMessageBytes = 64 * 1024;
+
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        public delegate void LogPrinter(string message);
+        public delegate void LogPrinter(IntPtr message);
+
+        internal static string DecodeLogMessage(IntPtr message)
+        {
+            if (message == IntPtr.Zero)
+                return string.Empty;
+
+            var length = 0;
+            while (length <= MaxLogMessageBytes && Marshal.ReadByte(message, length) != 0)
+                length++;
+
+            if (length > MaxLogMessageBytes)
+                throw new ArgumentException(
+                    $"The native log message exceeds {MaxLogMessageBytes} bytes or is not null-terminated.",
+                    nameof(message));
+
+            if (length == 0)
+                return string.Empty;
+
+            var bytes = new byte[length];
+            Marshal.Copy(message, bytes, 0, length);
+            return Encoding.UTF8.GetString(bytes);
+        }
 
         public enum WgbLogLevel
         {

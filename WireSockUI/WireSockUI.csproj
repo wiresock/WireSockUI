@@ -47,8 +47,8 @@
 
   <!-- Dependencies when targeting .NET Framework -->
   <ItemGroup Condition=" $(TargetFramework.StartsWith('net472')) ">
-    <PackageReference Include="System.Resources.Extensions" Version="8.0.0" />
-    <PackageReference Include="TaskScheduler" Version="2.10.1" />
+    <PackageReference Include="System.Resources.Extensions" Version="10.0.9" />
+    <PackageReference Include="TaskScheduler" Version="2.12.2" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System" />
     <Reference Include="System.Design" />
