@@ -7,6 +7,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using WireSockUI;
 using WireSockUI.Config;
 using WireSockUI.Extensions;
@@ -21,7 +22,6 @@ namespace WireSockUI.Tests
         private static readonly string PublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)2, 32).ToArray());
         private const int SymbolicLinkFlagFile = 0;
         private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
-        private static bool? LastDropTunnelPreserveNetworkLock;
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.I1)]
@@ -29,6 +29,9 @@ namespace WireSockUI.Tests
             string lpSymlinkFileName,
             string lpTargetFileName,
             int dwFlags);
+
+        [DllImport("kernel32.dll", EntryPoint = "SetLastError", SetLastError = true)]
+        private static extern void SetLastErrorForTest(uint errorCode);
 
         private static int Main()
         {
@@ -45,14 +48,23 @@ namespace WireSockUI.Tests
                 { "Profile rejects reparse point profile files", ProfileRejectsReparsePointProfileFiles },
                 { "Profile reports missing profile paths clearly", ProfileReportsMissingProfilePathsClearly },
                 { "Profile reports malformed profile paths consistently", ProfileReportsMalformedProfilePathsConsistently },
-                { "Parser strips WireSock directive prefixes", ParserStripsWireSockDirectivePrefixes },
+                { "Parser accepts only exact WireSock directive prefixes", ParserAcceptsOnlyExactWireSockDirectivePrefixes },
+                { "Parser matches SDK casing", ParserMatchesSdkCasing },
                 { "Parser rejects duplicate sections", ParserRejectsDuplicateSections },
                 { "Parser rejects malformed lines", ParserRejectsMalformedLines },
+                { "Parser matches SDK duplicate-key projection", ParserMatchesSdkDuplicateKeyProjection },
+                { "Parser rejects SDK-incompatible byte-order marks", ParserRejectsSdkIncompatibleByteOrderMarks },
+                { "Parser rejects malformed UTF-8", ParserRejectsMalformedUtf8 },
                 { "Parser rejects keys before sections", ParserRejectsKeysBeforeSections },
                 { "Parser rejects empty section names", ParserRejectsEmptySectionNames },
                 { "Parser trims section names", ParserTrimsSectionNames },
                 { "Profile accepts Amnezia passthrough options", ProfileAcceptsAmneziaPassthroughOptions },
                 { "Profile rejects invalid Amnezia passthrough options", ProfileRejectsInvalidAmneziaPassthroughOptions },
+                { "Profile validates Amnezia option groups", ProfileValidatesAmneziaOptionGroups },
+                { "Profile validates protocol imitation combinations", ProfileValidatesProtocolImitationCombinations },
+                { "Profile validates current SDK numeric ranges", ProfileValidatesCurrentSdkNumericRanges },
+                { "Profile rejects SDK casing mismatches", ProfileRejectsSdkCasingMismatches },
+                { "Profile rejects unsupported direct-DLL directives", ProfileRejectsUnsupportedDirectDllDirectives },
                 { "Interface extension validation rules are shared", InterfaceExtensionValidationRulesAreShared },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
@@ -60,11 +72,16 @@ namespace WireSockUI.Tests
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
                 { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
+                { "Global fails closed on configuration directory reparse points", GlobalFailsClosedOnConfigurationDirectoryReparsePoints },
+                { "Profile rejects user-writable secured files", ProfileRejectsUserWritableSecuredFiles },
                 { "Release version parser handles SemVer tags", ReleaseVersionParserHandlesSemVerTags },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
+                { "Program rejects an untrusted WireSock crash handler", ProgramRejectsUntrustedWireSockCrashHandler },
+                { "Program distinguishes read-only and writable ACLs", ProgramDistinguishesReadOnlyAndWritableAcls },
                 { "Program recognizes administrative owner SIDs", ProgramRecognizesAdministrativeOwnerSids },
+                { "Program rejects replaceable trusted path ancestors", ProgramRejectsReplaceableTrustedPathAncestors },
                 { "Autorun rejects untrusted executable paths", AutoRunRejectsUntrustedExecutablePaths },
                 { "Autorun rejects reparse point executable folders", AutoRunRejectsReparsePointExecutableFolders },
                 { "Profile import rejects oversized files", ProfileImportRejectsOversizedFiles },
@@ -77,12 +94,19 @@ namespace WireSockUI.Tests
                 { "Legacy migration rejects script hooks", LegacyMigrationRejectsScriptHooks },
                 { "Legacy migration script-hook check is narrow", LegacyMigrationScriptHookCheckIsNarrow },
                 { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
+                { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
+                { "Settings upgrade runs exactly once", SettingsUpgradeRunsExactlyOnce },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
+                { "Notification shortcut name is path seeded", NotificationShortcutNameIsPathSeeded },
                 { "Autorun task name is path seeded", AutoRunTaskNameIsPathSeeded },
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
+                { "WireSock manager surfaces native query failures", WireSockManagerSurfacesNativeQueryFailures },
+                { "WireSock manager cleans up failed starts", WireSockManagerCleansUpFailedStarts },
+                { "WireSock manager retains handles when cleanup fails", WireSockManagerRetainsHandlesWhenCleanupFails },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "WireSock exports use restricted DLL search", WireSockExportsUseRestrictedDllSearch },
+                { "WireSock log callback uses UTF-8", WireSockLogCallbackUsesUtf8 },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
 
@@ -298,19 +322,35 @@ namespace WireSockUI.Tests
             AssertThrows<IOException>(() => Profile.EnsureRegularProfileFile(malformedPath), "profile");
         }
 
-        private static void ParserStripsWireSockDirectivePrefixes()
+        private static void ParserAcceptsOnlyExactWireSockDirectivePrefixes()
         {
             var path = WriteConfig(
                 "[Interface]\n" +
                 "#@ws:BypassLanTraffic = true\n" +
-                "#@ws VirtualAdapterMode = false\n");
+                "#@ws VirtualAdapterMode = false\n" +
+                "#@WS:VirtualAdapterMode = true\n");
 
             var section = new WireguardConfigParser.ConfigParser(path).GetSection("Interface");
 
             AssertTrue(section.ContainsKey("BypassLanTraffic"), "Expected #@ws: directive to become a normal key.");
-            AssertTrue(section.ContainsKey("VirtualAdapterMode"), "Expected #@ws directive to become a normal key.");
+            AssertFalse(section.ContainsKey("VirtualAdapterMode"),
+                "Expected non-SDK WireSock directive prefixes to remain comments.");
             AssertEqual("true", section["BypassLanTraffic"]);
-            AssertEqual("false", section["VirtualAdapterMode"]);
+        }
+
+        private static void ParserMatchesSdkCasing()
+        {
+            var path = WriteConfig("[interface]\nprivatekey = value\n");
+            var parser = new WireguardConfigParser.ConfigParser(path);
+
+            AssertTrue(parser.GetSectionNames().Contains("interface", StringComparer.Ordinal),
+                "Expected the parser to preserve section casing.");
+            AssertFalse(parser.GetSectionNames().Contains("Interface", StringComparer.Ordinal),
+                "Expected section lookup to match the case-sensitive SDK parser.");
+            AssertTrue(parser.GetSection("interface").ContainsKey("privatekey"),
+                "Expected the parser to preserve key casing.");
+            AssertFalse(parser.GetSection("interface").ContainsKey("PrivateKey"),
+                "Expected key lookup to match the case-sensitive SDK parser.");
         }
 
         private static void ParserRejectsDuplicateSections()
@@ -411,14 +451,16 @@ namespace WireSockUI.Tests
                 "[Interface]\n" +
                 $"PrivateKey = {PrivateKey}\n" +
                 "Address = 10.0.0.2/32\n" +
-                "#@ws:H1 = 1-4\n" +
-                "#@ws:H2 = 0x10-0x20\n" +
+                "#@ws:H1 = 10-14\n" +
+                "#@ws:H2 = 16-32\n" +
+                "#@ws:H3 = 40\n" +
+                "#@ws:H4 =\n" +
                 "#@ws:Jmin = 4\n" +
                 "#@ws:Jmax = 10\n" +
-                "#@ws:S1 = 1280\n" +
+                "#@ws:S1 = 1279\n" +
                 "#@ws:S2 = 0\n" +
-                "#@ws:S3 = 4294967295\n" +
-                "#@ws:S4 = 0x20\n" +
+                "#@ws:S3 = 1279\n" +
+                "#@ws:S4 = 32\n" +
                 "#@ws:Id = example.com\n" +
                 "#@ws:Ib = chrome\n" +
                 "#@ws:Ip = quic\n" +
@@ -431,9 +473,10 @@ namespace WireSockUI.Tests
             var parser = new WireguardConfigParser.ConfigParser(path);
             var interfaceSection = parser.GetSection("Interface");
 
-            AssertEqual("1-4", interfaceSection["H1"]);
-            AssertEqual("0x10-0x20", interfaceSection["H2"]);
-            AssertEqual("1280", interfaceSection["S1"]);
+            AssertEqual("10-14", interfaceSection["H1"]);
+            AssertEqual("16-32", interfaceSection["H2"]);
+            AssertEqual(string.Empty, interfaceSection["H4"]);
+            AssertEqual("1279", interfaceSection["S1"]);
             AssertEqual("chrome", interfaceSection["Ib"]);
             new Profile(path);
         }
@@ -441,11 +484,205 @@ namespace WireSockUI.Tests
         private static void ProfileRejectsInvalidAmneziaPassthroughOptions()
         {
             AssertProfileRejectsInterfaceOption("#@ws:H1 = 4-1", "H1");
-            AssertProfileRejectsInterfaceOption("#@ws:S1 = 1281", "S1");
-            AssertProfileRejectsInterfaceOption("#@ws:Id = ***", "Id");
+            AssertProfileRejectsInterfaceOption("#@ws:H1 = 0x10", "H1");
+            AssertProfileRejectsInterfaceOption("#@ws:S1 = 1280", "S1");
+            AssertProfileRejectsInterfaceOption("#@ws:S1 = 0x20", "S1");
+            AssertProfileRejectsInterfaceOption("#@ws:Jc = +1", "Jc");
+            AssertProfileRejectsInterfaceOption("#@ws:S3 = 1280", "S3");
             AssertProfileRejectsInterfaceOption("#@ws:Ip = ftp", "Ip");
             AssertProfileRejectsInterfaceOption("#@ws:Ib = safari", "Ib");
             AssertProfileRejectsInterfaceOption("#@ws:Jmin = 10\n#@ws:Jmax = 4", "Jmin");
+            AssertProfileRejectsInterfaceOption("#@ws:Jmin = 10\n#@ws:Jmax = 10", "less than");
+        }
+
+        private static void ParserRejectsSdkIncompatibleByteOrderMarks()
+        {
+            var path = WriteConfig(string.Empty);
+            try
+            {
+                File.WriteAllText(path, ValidConfig(), new UTF8Encoding(true));
+                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "BOM");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ParserMatchesSdkDuplicateKeyProjection()
+        {
+            var path = WriteConfig(
+                "[Interface]\n" +
+                "PrivateKey = invalid-first-value\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "Address = fd00::2/128\n" +
+                "MTU = invalid-first-value\n" +
+                "MTU = 1400\n" +
+                "PreUp = first.cmd\n" +
+                "PreUp = second.cmd\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = invalid-first-value\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "AllowedIPs = ::/0\n");
+
+            try
+            {
+                var parser = new WireguardConfigParser.ConfigParser(path);
+                var interfaceSection = parser.GetSection("Interface");
+                var peerSection = parser.GetSection("Peer");
+
+                AssertEqual(PrivateKey, interfaceSection["PrivateKey"]);
+                AssertEqual("1400", interfaceSection["MTU"]);
+                AssertEqual("10.0.0.2/32, fd00::2/128", interfaceSection["Address"]);
+                AssertEqual("first.cmd, second.cmd", interfaceSection["PreUp"]);
+                AssertEqual("example.com:51820", peerSection["Endpoint"]);
+                AssertEqual("0.0.0.0/0, ::/0", peerSection["AllowedIPs"]);
+                new Profile(path);
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ParserRejectsMalformedUtf8()
+        {
+            var path = WriteConfig(string.Empty);
+            try
+            {
+                var validPrefix = Encoding.UTF8.GetBytes("[Interface]\nPrivateKey = ");
+                var bytes = validPrefix.Concat(new byte[] { 0xc3, 0x28 }).ToArray();
+                File.WriteAllBytes(path, bytes);
+                AssertThrows<DecoderFallbackException>(
+                    () => new WireguardConfigParser.ConfigParser(path), null);
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+        }
+
+        private static void ProfileValidatesAmneziaOptionGroups()
+        {
+            AssertProfileRejectsInterfaceOption("#@ws:S1 = 1", "incomplete");
+            AssertProfileRejectsInterfaceOption("#@ws:S3 = 1", "incomplete");
+            AssertProfileRejectsInterfaceOption("#@ws:Jmin = 10", "specified together");
+            AssertProfileRejectsInterfaceOption("#@ws:Jd = 10", "require");
+        }
+
+        private static void ProfileValidatesProtocolImitationCombinations()
+        {
+            var chromiumPath = WriteProfileWithInterfaceOptions(
+                "#@ws:Id = ***\n#@ws:Ip = quic\n#@ws:Ib = chromium");
+            var firefoxPath = WriteProfileWithInterfaceOptions(
+                "#@ws:Id = example.com\n#@ws:Ip = quic\n#@ws:Ib = ff");
+            var aliasPath = WriteProfileWithInterfaceOptions(
+                "#@ws:Id = example.com\n#@ws:Ip = stun_request");
+
+            try
+            {
+                new Profile(chromiumPath);
+                new Profile(firefoxPath);
+                new Profile(aliasPath);
+            }
+            finally
+            {
+                TryDeleteFile(chromiumPath);
+                TryDeleteFile(firefoxPath);
+                TryDeleteFile(aliasPath);
+            }
+
+            AssertProfileRejectsInterfaceOption("#@ws:Ip = quic", "require");
+            AssertProfileRejectsInterfaceOption("#@ws:Id = a..b\n#@ws:Ip = sip", "SIP imitation host");
+            AssertProfileRejectsInterfaceOption("#@ws:Id = a..b\n#@ws:Ip = sip_request", "SIP imitation host");
+            AssertProfileRejectsInterfaceOption(
+                $"#@ws:Id = {new string('a', 64)}.com\n#@ws:Ip = sip", "SIP imitation host");
+
+            AssertProfileRejectsInterfaceOption(
+                "#@ws:S1 = 0\n#@ws:S2 = 0\n#@ws:H1 = 10-20\n#@ws:H2 = 20-30\n#@ws:H3 = 40\n#@ws:H4 = 50",
+                "overlapping");
+            AssertProfileRejectsInterfaceOption(
+                "#@ws:S1 = 0\n#@ws:S2 = 0\n#@ws:H1 =\n#@ws:H2 = 1\n#@ws:H3 = 3\n#@ws:H4 = 4",
+                "overlapping");
+        }
+
+        private static void ProfileRejectsUnsupportedDirectDllDirectives()
+        {
+            AssertProfileRejectsInterfaceOption("#@ws:BypassLanTraffic = true", "DisallowedIPs");
+            AssertProfileRejectsInterfaceOption("Table = auto", "not supported");
+            AssertProfileRejectsInterfaceOption("#@ws:I1 = value", "not supported");
+
+            var legacyUsernamePath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "#@ws:Socks5Username = user\n");
+            try
+            {
+                AssertThrows<FormatException>(() => new Profile(legacyUsernamePath), "Socks5ProxyUsername");
+            }
+            finally
+            {
+                TryDeleteFile(legacyUsernamePath);
+            }
+        }
+
+        private static void ProfileValidatesCurrentSdkNumericRanges()
+        {
+            var path = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "ListenPort = 0\n" +
+                "ScriptExecTimeout = 4294967295\n" +
+                "EnableDefaultGateway = true\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "PersistentKeepalive = 4294967295\n");
+
+            try
+            {
+                new Profile(path);
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
+
+            AssertProfileRejectsInterfaceOption("ScriptExecTimeout = 4294967296", "4294967295");
+            AssertProfileRejectsInterfaceOption("ListenPort = 65536", "65535");
+            AssertProfileRejectsInterfaceOption("EnableDefaultGateway = TRUE", "exactly");
+        }
+
+        private static void ProfileRejectsSdkCasingMismatches()
+        {
+            AssertProfileRejectsInterfaceOption("#@ws:jc = 1", "expects \"Jc\"");
+
+            var path = WriteConfig(
+                "[interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+            try
+            {
+                AssertThrows<ArgumentException>(() => new Profile(path), "Interface");
+            }
+            finally
+            {
+                TryDeleteFile(path);
+            }
         }
 
         private static void InterfaceExtensionValidationRulesAreShared()
@@ -458,25 +695,18 @@ namespace WireSockUI.Tests
             AssertTrue(ConfigValueValidator.TryGetInterfaceExtensionRule("Ib", out var ib),
                 "Expected Ib to be registered as a shared interface extension rule.");
             AssertTrue(ib.IsValid("chrome"), "Expected Ib to accept supported browser profiles.");
+            AssertTrue(ib.IsValid("chromium"), "Expected Ib to accept the SDK Chromium alias.");
+            AssertTrue(ib.IsValid("ff"), "Expected Ib to accept the SDK Firefox alias.");
             AssertFalse(ib.IsValid("safari"), "Expected Ib to reject unsupported browser profiles.");
 
             AssertTrue(ConfigValueValidator.TryGetInterfaceExtensionRule("Id", out var id),
                 "Expected Id to be registered as a shared interface extension rule.");
-            AssertFalse(id.IsValid("***"), "Expected Id to reject invalid host names.");
+            AssertTrue(id.IsValid("***"), "Expected non-SIP Id values to follow the SDK byte-length contract.");
         }
 
         private static void AssertProfileRejectsInterfaceOption(string optionLine, string messagePart)
         {
-            var path = WriteConfig(
-                "[Interface]\n" +
-                $"PrivateKey = {PrivateKey}\n" +
-                "Address = 10.0.0.2/32\n" +
-                optionLine + "\n" +
-                "\n" +
-                "[Peer]\n" +
-                $"PublicKey = {PublicKey}\n" +
-                "Endpoint = example.com:51820\n" +
-                "AllowedIPs = 0.0.0.0/0\n");
+            var path = WriteProfileWithInterfaceOptions(optionLine);
 
             try
             {
@@ -486,6 +716,20 @@ namespace WireSockUI.Tests
             {
                 TryDeleteFile(path);
             }
+        }
+
+        private static string WriteProfileWithInterfaceOptions(string optionLines)
+        {
+            return WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                optionLines + "\n" +
+                "\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
         }
 
         private static void StatsFormattingHandlesExtremeValues()
@@ -704,6 +948,146 @@ namespace WireSockUI.Tests
             security.SetOwner(ordinaryUserSid);
             AssertFalse((bool)hasTrustedOwner.Invoke(null, new object[] { security }),
                 "Expected an ordinary account-domain owner to remain untrusted.");
+        }
+
+        private static void GlobalFailsClosedOnConfigurationDirectoryReparsePoints()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var target = root + ".target";
+            var link = Path.Combine(root, "unsafe-child");
+            Directory.CreateDirectory(root);
+            Directory.CreateDirectory(target);
+
+            try
+            {
+                if (!TryCreateDirectoryJunction(link, target))
+                {
+                    SkipOrFail("configuration directory reparse point creation unavailable; fail-closed check not exercised.");
+                    return;
+                }
+
+                var secureChildren = typeof(Global).GetMethod("SecureExistingChildren",
+                    BindingFlags.NonPublic | BindingFlags.Static);
+                if (secureChildren == null)
+                    throw new InvalidOperationException("SecureExistingChildren helper was not found.");
+
+                AssertInvocationThrows<IOException>(
+                    () => secureChildren.Invoke(null, new object[] { root, null }), "reparse point");
+            }
+            finally
+            {
+                TryDeleteDirectory(link, false);
+                TryDeleteDirectory(root, true);
+                TryDeleteDirectory(target, true);
+            }
+        }
+
+        private static void ProgramRejectsUntrustedWireSockCrashHandler()
+        {
+            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateTrustedWireSockCompanionFiles",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (validate == null)
+                throw new InvalidOperationException("TryValidateTrustedWireSockCompanionFiles helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                File.WriteAllText(Path.Combine(directory, "crashpad_handler.exe"), string.Empty);
+                var args = new object[] { directory, Path.Combine(directory, "wgbooster.dll"), null };
+
+                AssertFalse((bool)validate.Invoke(null, args),
+                    "Expected an explicitly user-writable crash handler to be rejected.");
+                AssertTrue(args[2] is string diagnostic &&
+                           diagnostic.IndexOf("non-administrative", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable crash-handler trust diagnostic, got '{args[2]}'.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void ProgramDistinguishesReadOnlyAndWritableAcls()
+        {
+            var inspect = typeof(WireSockUI.Program).GetMethod("IsPotentiallyUserWritableSecurity",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (inspect == null)
+                throw new InvalidOperationException("IsPotentiallyUserWritableSecurity helper was not found.");
+
+            var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+            var readOnlySecurity = new DirectorySecurity();
+            readOnlySecurity.SetOwner(administrators);
+            readOnlySecurity.AddAccessRule(new FileSystemAccessRule(
+                users,
+                FileSystemRights.ReadAndExecute,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None,
+                AccessControlType.Allow));
+            readOnlySecurity.AddAccessRule(new FileSystemAccessRule(
+                users,
+                FileSystemRights.FullControl,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.InheritOnly,
+                AccessControlType.Allow));
+
+            AssertFalse((bool)inspect.Invoke(null, new object[] { readOnlySecurity }),
+                "Expected read-only and inherited-only non-administrative ACEs to remain trusted.");
+
+            readOnlySecurity.AddAccessRule(new FileSystemAccessRule(
+                users, FileSystemRights.Modify, AccessControlType.Allow));
+            AssertTrue((bool)inspect.Invoke(null, new object[] { readOnlySecurity }),
+                "Expected a non-administrative modify ACE to be rejected.");
+        }
+
+        private static void ProfileRejectsUserWritableSecuredFiles()
+        {
+            var originalConfigsFolder = Global.ConfigsFolder;
+            var originalOverride = Global.AllowUnsecuredConfigFolderOverrideForTests;
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                Global.ConfigsFolder = directory;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = false;
+                var profilePath = Profile.GetProfilePath("unsafe");
+                File.WriteAllText(profilePath, ValidConfig());
+
+                AssertFalse(Profile.IsRegularProfileFile(profilePath, out var diagnostic),
+                    "Expected elevated activation to reject a user-writable profile.");
+                AssertTrue(diagnostic?.IndexOf("non-administrative", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an ACL diagnostic, got '{diagnostic}'.");
+            }
+            finally
+            {
+                Global.ConfigsFolder = originalConfigsFolder;
+                Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void ProgramRejectsReplaceableTrustedPathAncestors()
+        {
+            var inspectAncestor = typeof(WireSockUI.Program).GetMethod("IsPotentiallyUserReplaceableAncestor",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (inspectAncestor == null)
+                throw new InvalidOperationException("IsPotentiallyUserReplaceableAncestor helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                AssertTrue((bool)inspectAncestor.Invoke(null, new object[] { directory }),
+                    "Expected a user-owned temporary ancestor to be replaceable and therefore untrusted.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
         }
 
         private static void AutoRunRejectsUntrustedExecutablePaths()
@@ -1032,22 +1416,82 @@ namespace WireSockUI.Tests
             });
         }
 
+        private static void NativeQueryDistinguishesErrorSentinels()
+        {
+            var cleared = false;
+            var succeeded = NativeCall.TryQuery(
+                () => false,
+                result => !result,
+                () => cleared = true,
+                () => 5,
+                out var queryValue,
+                out var diagnostic);
+
+            AssertTrue(cleared, "Expected stale native error state to be cleared before the query.");
+            AssertFalse(succeeded, "Expected a false sentinel accompanied by a native error to fail.");
+            AssertFalse(queryValue, "Expected the original query value to be preserved.");
+            AssertTrue(diagnostic?.Contains("5") == true, "Expected the native error code in the diagnostic.");
+
+            succeeded = NativeCall.TryQuery(
+                () => false,
+                result => !result,
+                () => { },
+                () => 0,
+                out queryValue,
+                out diagnostic);
+            AssertTrue(succeeded, "Expected an error sentinel with ERROR_SUCCESS to remain a valid inactive state.");
+            AssertTrue(diagnostic == null, "Expected no diagnostic for a valid inactive state.");
+
+            succeeded = NativeCall.TryQuery(
+                () => true,
+                result => !result,
+                () => { },
+                () => 5,
+                out queryValue,
+                out diagnostic);
+            AssertTrue(succeeded, "Expected a non-sentinel value to ignore stale native error state.");
+        }
+
+        private static void SettingsUpgradeRunsExactlyOnce()
+        {
+            var calls = new List<string>();
+            WireSockUI.Program.RunSettingsUpgrade(
+                true,
+                () => calls.Add("upgrade"),
+                () => calls.Add("complete"),
+                () => calls.Add("save"));
+
+            AssertEqual("upgrade,complete,save", string.Join(",", calls));
+
+            WireSockUI.Program.RunSettingsUpgrade(
+                false,
+                () => throw new InvalidOperationException("Upgrade should not run."),
+                () => throw new InvalidOperationException("Completion should not run."),
+                () => throw new InvalidOperationException("Save should not run."));
+        }
+
         private static void EditorValidatesAmneziaOptions()
         {
             AssertTrue(ConfigValueValidator.IsUIntOrRange("1-4", 0, uint.MaxValue),
                 "Expected decimal H ranges to be accepted.");
-            AssertTrue(ConfigValueValidator.IsUIntOrRange("0x10-0x20", 0, uint.MaxValue),
-                "Expected hexadecimal H ranges to be accepted.");
+            AssertFalse(ConfigValueValidator.IsUIntOrRange("0x10-0x20", 0, uint.MaxValue),
+                "Expected hexadecimal H ranges to be rejected like the SDK parser.");
             AssertFalse(ConfigValueValidator.IsUIntOrRange("4-1", 0, uint.MaxValue),
                 "Expected descending H ranges to be rejected.");
-            AssertTrue(ConfigValueValidator.IsUIntInRange("1280", 0, 1280),
-                "Expected maximum S1/S2 padding to be accepted.");
-            AssertFalse(ConfigValueValidator.IsUIntInRange("1281", 0, 1280),
+            AssertTrue(ConfigValueValidator.IsUIntDecimalInRange("1279", 0, ConfigValueValidator.MaximumAmneziaPadding),
+                "Expected maximum Amnezia padding to be accepted.");
+            AssertFalse(ConfigValueValidator.IsUIntDecimalInRange("1280", 0, ConfigValueValidator.MaximumAmneziaPadding),
                 "Expected oversized S1/S2 padding to be rejected.");
+            AssertFalse(ConfigValueValidator.IsUIntDecimalInRange("+1", 0, uint.MaxValue),
+                "Expected signed unsigned values to be rejected like std::from_chars.");
             AssertTrue(ConfigValueValidator.IsOneOf("quic", "quic", "dns", "sip", "stun"),
                 "Expected known Ip values to be accepted.");
             AssertFalse(ConfigValueValidator.IsOneOf("invalid", "chrome", "firefox", "curl", "random"),
                 "Expected unknown Ib values to be rejected.");
+            AssertTrue(ConfigValueValidator.IsSipImitationHost("xn--e1afmkfd.xn--p1ai"),
+                "Expected an ACE/Punycode SIP host to be accepted.");
+            AssertFalse(ConfigValueValidator.IsSipImitationHost("a..b"),
+                "Expected empty SIP hostname labels to be rejected.");
         }
 
         private static void LegacyMigrationRejectsScriptHooks()
@@ -1118,6 +1562,25 @@ namespace WireSockUI.Tests
             AssertTrue(first.Length <= 128, "Expected AppUserModelID to fit the Windows shell length limit.");
         }
 
+        private static void NotificationShortcutNameIsPathSeeded()
+        {
+            var first = WindowsApplicationContext.BuildShortcutFileName(
+                "WireSockUI", @"C:\Program Files\WireSockUI\WireSockUI.exe");
+            var second = WindowsApplicationContext.BuildShortcutFileName(
+                "WireSockUI", @"D:\Tools\WireSockUI\WireSockUI.exe");
+
+            AssertFalse(string.Equals(first, second, StringComparison.Ordinal),
+                "Expected side-by-side installs to use different notification shortcuts.");
+            AssertTrue(first.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase),
+                "Expected a shell shortcut filename.");
+
+            var untrustedName = WindowsApplicationContext.BuildShortcutFileName(
+                @"..\WireSockUI/Bad:Name", @"C:\Program Files\WireSockUI\WireSockUI.exe");
+            AssertFalse(untrustedName.Contains("..") || untrustedName.Contains("\\") || untrustedName.Contains("/") ||
+                        untrustedName.Contains(":"),
+                "Expected shortcut filenames to remove path and device-name metacharacters.");
+        }
+
         private static void AutoRunTaskNameIsPathSeeded()
         {
             var buildAutoRunTaskName = typeof(FrmSettings).GetMethod(
@@ -1158,61 +1621,166 @@ namespace WireSockUI.Tests
 
         private static void WireSockDisconnectForwardsNetworkLockPreservation()
         {
-            var manager = new WireSockManager();
-            try
+            WithTemporaryConfigFolder(() =>
             {
-                ConfigureFakeNativeTunnelHandle(manager);
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
-                LastDropTunnelPreserveNetworkLock = null;
-                AssertTrue(manager.Disconnect(true), "Expected fake disconnect with preserved network lock to succeed.");
-                AssertTrue(LastDropTunnelPreserveNetworkLock == true,
-                    "Expected preserved reconnect cleanup to pass preserveNetworkLock=true to wgbooster.");
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+                        AssertTrue(manager.Disconnect(true),
+                            "Expected fake disconnect with preserved network lock to succeed.");
+                        AssertTrue(nativeApi.LastPreserveNetworkLock == true,
+                            "Expected preserved reconnect cleanup to pass preserveNetworkLock=true to wgbooster.");
 
-                ConfigureFakeNativeTunnelHandle(manager);
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to reconnect.");
+                        AssertTrue(manager.Disconnect(), "Expected fake default disconnect to succeed.");
+                        AssertTrue(nativeApi.LastPreserveNetworkLock == false,
+                            "Expected explicit disconnect cleanup to pass preserveNetworkLock=false to wgbooster.");
+                    }
+                    finally
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
 
-                LastDropTunnelPreserveNetworkLock = null;
-                AssertTrue(manager.Disconnect(), "Expected fake default disconnect to succeed.");
-                AssertTrue(LastDropTunnelPreserveNetworkLock == false,
-                    "Expected explicit disconnect cleanup to pass preserveNetworkLock=false to wgbooster.");
-            }
-            finally
+        private static void WireSockManagerSurfacesNativeQueryFailures()
+        {
+            WithTemporaryConfigFolder(() =>
             {
-                manager.Dispose();
-            }
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+
+                        nativeApi.TunnelActive = false;
+                        nativeApi.TunnelActiveError = 5;
+                        AssertFalse(manager.TryGetConnected(out _, out var activeDiagnostic),
+                            "Expected the manager to reject a false tunnel sentinel with a native error.");
+                        AssertTrue(activeDiagnostic?.Contains("5") == true,
+                            "Expected the tunnel query diagnostic to retain the native error.");
+
+                        nativeApi.NetworkLockMode = WireguardBoosterExports.WgbNetworkLockMode.Disabled;
+                        nativeApi.NetworkLockModeError = 6;
+                        AssertFalse(manager.TryGetKillSwitchEnabled(out _, out var lockDiagnostic),
+                            "Expected the manager to reject a disabled lock sentinel with a native error.");
+                        AssertTrue(lockDiagnostic?.Contains("6") == true,
+                            "Expected the lock query diagnostic to retain the native error.");
+
+                        nativeApi.NetworkLockMode = (WireguardBoosterExports.WgbNetworkLockMode)99;
+                        nativeApi.NetworkLockModeError = 0;
+                        AssertFalse(manager.TryGetKillSwitchEnabled(out _, out var invalidModeDiagnostic),
+                            "Expected the manager to reject unknown SDK network-lock enum values.");
+                        AssertTrue(invalidModeDiagnostic?.Contains("99") == true,
+                            "Expected the invalid SDK enum value in the diagnostic.");
+
+                        nativeApi.TunnelState = new WireguardBoosterExports.WgbStats();
+                        nativeApi.TunnelStateError = 21;
+                        AssertFalse(manager.TryGetState(out _, out var statsDiagnostic),
+                            "Expected the manager to reject empty statistics with a native error.");
+                        AssertTrue(statsDiagnostic?.Contains("21") == true,
+                            "Expected the statistics diagnostic to retain the native error.");
+                    }
+                    finally
+                    {
+                        nativeApi.TunnelActiveError = 0;
+                        nativeApi.NetworkLockModeError = 0;
+                        nativeApi.TunnelStateError = 0;
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
         }
 
-        private static void ConfigureFakeNativeTunnelHandle(WireSockManager manager)
+        private static void WireSockManagerCleansUpFailedStarts()
         {
-            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Instance;
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    StartResult = false,
+                    StartError = 31
+                };
 
-            var handleField = typeof(WireSockManager).GetField("_handle", flags);
-            var stopTunnelField = typeof(WireSockManager).GetField("_stopTunnel", flags);
-            var dropTunnelField = typeof(WireSockManager).GetField("_dropTunnel", flags);
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
-            if (handleField == null || stopTunnelField == null || dropTunnelField == null)
-                throw new InvalidOperationException("WireSockManager native delegate fields were not found.");
-
-            var successfulTunnelAction = typeof(Program).GetMethod(nameof(SuccessfulTunnelAction),
-                BindingFlags.NonPublic | BindingFlags.Static);
-            var recordingDropTunnel = typeof(Program).GetMethod(nameof(RecordingDropTunnel),
-                BindingFlags.NonPublic | BindingFlags.Static);
-
-            stopTunnelField.SetValue(manager,
-                Delegate.CreateDelegate(stopTunnelField.FieldType, successfulTunnelAction));
-            dropTunnelField.SetValue(manager,
-                Delegate.CreateDelegate(dropTunnelField.FieldType, recordingDropTunnel));
-            handleField.SetValue(manager, new IntPtr(1234));
+                        AssertFalse(manager.Connect("office"), "Expected the failed native start to fail connect.");
+                        AssertFalse(manager.HasTunnelHandle, "Expected failed connect cleanup to clear the handle.");
+                        AssertTrue(nativeApi.DropCount == 1, "Expected failed connect cleanup to drop the tunnel once.");
+                        AssertTrue(manager.LastError?.Contains("31") == true,
+                            "Expected the native start error in the connection diagnostic.");
+                    }
+                    finally
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
         }
 
-        private static bool SuccessfulTunnelAction(IntPtr handle)
+        private static void WireSockManagerRetainsHandlesWhenCleanupFails()
         {
-            return true;
-        }
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    StartResult = false,
+                    StartError = 31,
+                    DropResult = false,
+                    DropError = 32
+                };
+                var manager = new WireSockManager(nativeApi);
 
-        private static bool RecordingDropTunnel(IntPtr handle, bool preserveNetworkLock)
-        {
-            LastDropTunnelPreserveNetworkLock = preserveNetworkLock;
-            return true;
+                try
+                {
+                    WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                    File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+
+                    AssertFalse(manager.Connect("office"), "Expected the failed native start to fail connect.");
+                    AssertTrue(manager.HasTunnelHandle,
+                        "Expected failed cleanup to retain the native handle and prevent duplicate ownership.");
+                    AssertTrue(manager.LastError?.Contains("blocked") == true,
+                        "Expected the connection diagnostic to explain that replacement connections are blocked.");
+                    AssertTrue(manager.LastError?.Contains("32") == true,
+                        "Expected the native drop error in the retained-handle diagnostic.");
+
+                    AssertFalse(manager.Connect("office"),
+                        "Expected a second connect to stop when the retained handle still cannot be dropped.");
+                    AssertTrue(nativeApi.GetHandleCount == 1,
+                        "Expected the manager not to allocate a replacement native handle after failed cleanup.");
+
+                    nativeApi.DropResult = true;
+                    nativeApi.DropError = 0;
+                    AssertTrue(manager.Disconnect(), "Expected retained-handle cleanup to be retryable.");
+                    AssertFalse(manager.HasTunnelHandle, "Expected successful retry cleanup to clear the handle.");
+                }
+                finally
+                {
+                    nativeApi.DropResult = true;
+                    nativeApi.DropError = 0;
+                    manager.Dispose();
+                    WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                }
+            });
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()
@@ -1256,6 +1824,18 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void WireSockLogCallbackUsesUtf8()
+        {
+            var parameter = typeof(WireguardBoosterExports.LogPrinter).GetMethod("Invoke")?.GetParameters().Single();
+            var marshalAs = parameter?.GetCustomAttributes(typeof(MarshalAsAttribute), false)
+                .OfType<MarshalAsAttribute>()
+                .SingleOrDefault();
+
+            AssertTrue(marshalAs != null, "Expected the native log callback parameter to declare marshaling.");
+            AssertTrue(marshalAs.Value == UnmanagedType.LPUTF8Str,
+                $"Expected UTF-8 log marshaling, got {marshalAs.Value}.");
+        }
+
         private static void StatsStructMatchesWgboosterAbi()
         {
             AssertEqual(32, Marshal.SizeOf<WireguardBoosterExports.WgbStats>());
@@ -1264,6 +1844,91 @@ namespace WireSockUI.Tests
             AssertEqual(16, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("rx_bytes").ToInt32());
             AssertEqual(24, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("estimated_loss").ToInt32());
             AssertEqual(28, Marshal.OffsetOf<WireguardBoosterExports.WgbStats>("estimated_rtt").ToInt32());
+        }
+
+        private sealed class FakeWireSockNativeApi : IWireSockNativeApi
+        {
+            public bool StartResult { get; set; } = true;
+            public int StartError { get; set; }
+            public bool TunnelActive { get; set; } = true;
+            public int TunnelActiveError { get; set; }
+            public WireguardBoosterExports.WgbStats TunnelState { get; set; } =
+                new WireguardBoosterExports.WgbStats { time_since_last_handshake = -1, estimated_rtt = -1 };
+            public int TunnelStateError { get; set; }
+            public WireguardBoosterExports.WgbNetworkLockMode NetworkLockMode { get; set; }
+            public int NetworkLockModeError { get; set; }
+            public bool DropResult { get; set; } = true;
+            public int DropError { get; set; }
+            public bool? LastPreserveNetworkLock { get; private set; }
+            public int DropCount { get; private set; }
+            public int GetHandleCount { get; private set; }
+
+            public IntPtr GetHandle(WireSockManager.Mode mode, WireguardBoosterExports.LogPrinter logPrinter,
+                WireguardBoosterExports.WgbLogLevel logLevel, bool enableTrafficCapture)
+            {
+                SetLastErrorForTest(0);
+                GetHandleCount++;
+                return new IntPtr(1234);
+            }
+
+            public void SetLogLevel(WireSockManager.Mode mode, IntPtr handle,
+                WireguardBoosterExports.WgbLogLevel logLevel)
+            {
+                SetLastErrorForTest(0);
+            }
+
+            public bool CreateTunnelFromFile(WireSockManager.Mode mode, IntPtr handle, string fileName)
+            {
+                SetLastErrorForTest(0);
+                return true;
+            }
+
+            public bool StartTunnel(WireSockManager.Mode mode, IntPtr handle)
+            {
+                SetLastErrorForTest((uint)StartError);
+                return StartResult;
+            }
+
+            public bool StopTunnel(WireSockManager.Mode mode, IntPtr handle)
+            {
+                SetLastErrorForTest(0);
+                return true;
+            }
+
+            public bool DropTunnel(WireSockManager.Mode mode, IntPtr handle, bool preserveNetworkLock)
+            {
+                SetLastErrorForTest((uint)DropError);
+                LastPreserveNetworkLock = preserveNetworkLock;
+                DropCount++;
+                return DropResult;
+            }
+
+            public bool GetTunnelActive(WireSockManager.Mode mode, IntPtr handle)
+            {
+                SetLastErrorForTest((uint)TunnelActiveError);
+                return TunnelActive;
+            }
+
+            public WireguardBoosterExports.WgbStats GetTunnelState(WireSockManager.Mode mode, IntPtr handle)
+            {
+                SetLastErrorForTest((uint)TunnelStateError);
+                return TunnelState;
+            }
+
+            public bool SetNetworkLockMode(WireSockManager.Mode mode, IntPtr handle,
+                WireguardBoosterExports.WgbNetworkLockMode networkLockMode)
+            {
+                SetLastErrorForTest(0);
+                NetworkLockMode = networkLockMode;
+                return true;
+            }
+
+            public WireguardBoosterExports.WgbNetworkLockMode GetNetworkLockMode(WireSockManager.Mode mode,
+                IntPtr handle)
+            {
+                SetLastErrorForTest((uint)NetworkLockModeError);
+                return NetworkLockMode;
+            }
         }
 
         private static string WriteConfig(string contents)

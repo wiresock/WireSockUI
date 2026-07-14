@@ -14,7 +14,7 @@ namespace WireSockUI.Forms
     {
         private static readonly Regex ProfileMatch =
             new Regex(
-                @"^\s*((?<comment>[;#](?!@ws\b).*)|(?<section>\[[^\]\r\n]+\])|(?:(?<prefix>#@ws:?)\s*)?(?<key>[a-zA-Z0-9]+)[ \t]*=[ \t]*(?<value>.*?))\s*$",
+                @"^\s*((?<comment>[;#](?!(?-i:@ws:)).*)|(?<section>\[[^\]\r\n]+\])|(?:(?<prefix>(?-i:#@ws:))\s*)?(?<key>[a-zA-Z0-9]+)[ \t]*=[ \t]*(?<value>.*?))\s*$",
                 RegexOptions.Multiline | RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex MultiValueMatch =
@@ -130,10 +130,10 @@ namespace WireSockUI.Forms
                         txtEditor.SelectionColor = Color.DarkBlue;
                         txtEditor.SelectionFont = _editorBoldFont;
 
-                        switch (m.Groups["section"].Value.ToLowerInvariant())
+                        switch (m.Groups["section"].Value)
                         {
-                            case "[interface]":
-                            case "[peer]":
+                            case "[Interface]":
+                            case "[Peer]":
                                 break;
                             // Unrecognized sections
                             default:
@@ -270,14 +270,14 @@ namespace WireSockUI.Forms
                                 break;
                             // Numerical values
                             case "mtu":
-                                if (!ConfigValueValidator.IsIntInRange(value, 576, 65535))
+                                if (!ConfigValueValidator.IsUIntDecimalInRange(value, 576, ushort.MaxValue))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
                                 }
                                 break;
                             case "listenport":
-                                if (!ConfigValueValidator.IsIntInRange(value, 1, 65535))
+                                if (!ConfigValueValidator.IsUIntDecimalInRange(value, 0, ushort.MaxValue))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -285,7 +285,7 @@ namespace WireSockUI.Forms
                                 break;
                             case "persistentkeepalive":
                             case "scriptexectimeout":
-                                if (!ConfigValueValidator.IsIntInRange(value, 0, 65535))
+                                if (!ConfigValueValidator.IsUIntDecimalInRange(value, 0, uint.MaxValue))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -313,6 +313,14 @@ namespace WireSockUI.Forms
                             case "virtualadaptermode":
                             case "socks5proxyalltraffic":
                                 if (!ConfigValueValidator.IsBool(value))
+                                {
+                                    txtEditor.UnderlineSelection();
+                                    hasErrors = true;
+                                }
+                                break;
+                            case "enabledefaultgateway":
+                                if (!string.Equals(value.Trim(), "true", StringComparison.Ordinal) &&
+                                    !string.Equals(value.Trim(), "false", StringComparison.Ordinal))
                                 {
                                     txtEditor.UnderlineSelection();
                                     hasErrors = true;
@@ -368,7 +376,7 @@ namespace WireSockUI.Forms
             // Insertion must be robust: it needs to handle incomplete or malformed configurations since
             // our user is in the middle of editing the file. Parsing isn't really an option.
             var possibleKeyValueMatch = new Regex(
-                $@"^\s*(?:(?<comment>[;#](?!@ws\b).*)|(?:(?<prefix>#@ws:?)\s*)?{Regex.Escape(key)}((?<afterkey>[ \t]*$)|[ \t]*(?<equals>=)?(?<afterkey>.*?)$))",
+                $@"^\s*(?:(?<comment>[;#](?!(?-i:@ws:)).*)|(?:(?<prefix>(?-i:#@ws:))\s*)?{Regex.Escape(key)}((?<afterkey>[ \t]*$)|[ \t]*(?<equals>=)?(?<afterkey>.*?)$))",
                 RegexOptions.Multiline | RegexOptions.IgnoreCase);
 
             int textReplacementIndex = txtEditor.Text.Length;

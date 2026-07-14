@@ -168,6 +168,9 @@ namespace WireSockUI.Forms
                     td.Settings.IdleSettings.StopOnIdleEnd =
                         false; // Do not stop the task when the computer ceases to be idle
 
+                    if (!IsExecutablePathTrustedForAutoRun(appPath, out trustDiagnostic))
+                        throw new InvalidOperationException(trustDiagnostic);
+
                     ts.RootFolder.RegisterTaskDefinition(GetAutoRunTaskName(), td);
                     TryDeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
                 }
@@ -225,19 +228,9 @@ namespace WireSockUI.Forms
                 if (!IsPathFreeOfReparsePoints(fullPath, out diagnostic))
                     return false;
 
-                if (Program.IsPotentiallyUserWritableFile(fullPath))
+                if (!Program.TryValidateTrustedFilePath(fullPath, "Autorun executable", out diagnostic))
                 {
-                    diagnostic =
-                        $"Autorun executable '{fullPath}' is writable by or owned by non-administrative users. Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
-                    return false;
-                }
-
-                var directory = Path.GetDirectoryName(fullPath);
-                if (string.IsNullOrWhiteSpace(directory) ||
-                    Program.IsPotentiallyUserWritableDirectory(directory))
-                {
-                    diagnostic =
-                        $"Autorun executable folder '{directory}' is writable by or owned by non-administrative users. Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
+                    diagnostic += " Install WireSock UI into an administrator-owned folder before enabling elevated autorun.";
                     return false;
                 }
 

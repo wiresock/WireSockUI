@@ -50,6 +50,18 @@ namespace WireSockUI
 
             try
             {
+                UpgradeUserSettings();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Unable to migrate WireSock UI settings from the previous release.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+            }
+
+            try
+            {
                 Global.EnsureApplicationFolders();
                 MigrateLegacyProfiles();
             }
@@ -78,6 +90,29 @@ namespace WireSockUI
             }
 
             Application.Run(new FrmMain());
+        }
+
+        private static void UpgradeUserSettings()
+        {
+            RunSettingsUpgrade(
+                Settings.Default.UpgradeRequired,
+                Settings.Default.Upgrade,
+                () => Settings.Default.UpgradeRequired = false,
+                Settings.Default.Save);
+        }
+
+        internal static void RunSettingsUpgrade(bool upgradeRequired, Action upgrade, Action markComplete, Action save)
+        {
+            if (!upgradeRequired)
+                return;
+
+            if (upgrade == null) throw new ArgumentNullException(nameof(upgrade));
+            if (markComplete == null) throw new ArgumentNullException(nameof(markComplete));
+            if (save == null) throw new ArgumentNullException(nameof(save));
+
+            upgrade();
+            markComplete();
+            save();
         }
 
         internal static void OpenBrowser(string url)
@@ -188,13 +223,6 @@ namespace WireSockUI
                 return false;
             }
 
-            if (IsPotentiallyUserWritableDirectory(fullDirectory))
-            {
-                Trace.TraceWarning(
-                    $"Skipping WireSock library directory '{fullDirectory}' because it is writable by or owned by non-administrative users.");
-                return false;
-            }
-
             var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
             if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes))
                 return false;
@@ -213,14 +241,53 @@ namespace WireSockUI
                 return false;
             }
 
-            if (IsPotentiallyUserWritableFile(libraryPath))
+            if (!TryValidateTrustedFilePath(libraryPath, "WireSock library", out var trustDiagnostic))
             {
-                Trace.TraceWarning(
-                    $"Skipping WireSock library '{libraryPath}' because it is writable by or owned by non-administrative users.");
+                Trace.TraceWarning(trustDiagnostic);
+                return false;
+            }
+
+            if (!TryValidateTrustedWireSockCompanionFiles(fullDirectory, libraryPath, out trustDiagnostic))
+            {
+                Trace.TraceWarning(trustDiagnostic);
                 return false;
             }
 
             libraryDirectory = fullDirectory;
+            return true;
+        }
+
+        private static bool TryValidateTrustedWireSockCompanionFiles(string directory, string libraryPath,
+            out string diagnostic)
+        {
+            diagnostic = null;
+            string[] files;
+
+            try
+            {
+                files = Directory.GetFiles(directory);
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"Unable to enumerate WireSock SDK companion files in '{directory}': {ex.Message}";
+                return false;
+            }
+
+            foreach (var file in files)
+            {
+                var extension = Path.GetExtension(file);
+                if (!string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (string.Equals(file, libraryPath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!TryValidateTrustedFilePath(file,
+                        $"WireSock SDK companion '{Path.GetFileName(file)}'", out diagnostic))
+                    return false;
+            }
+
             return true;
         }
 
@@ -277,15 +344,23 @@ namespace WireSockUI
                 {
                     foreach (var registryPath in registryPaths)
                     {
-                        using (var key = baseKey.OpenSubKey(registryPath))
+                        try
                         {
-                            var value = key?.GetValue("InstallLocation") as string;
-                            if (string.IsNullOrWhiteSpace(value))
-                                continue;
+                            using (var key = baseKey.OpenSubKey(registryPath))
+                            {
+                                var value = key?.GetValue("InstallLocation") as string;
+                                if (string.IsNullOrWhiteSpace(value))
+                                    continue;
 
-                            if (!locations.Exists(path =>
-                                    string.Equals(path, value, StringComparison.OrdinalIgnoreCase)))
-                                locations.Add(value);
+                                if (!locations.Exists(path =>
+                                        string.Equals(path, value, StringComparison.OrdinalIgnoreCase)))
+                                    locations.Add(value);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.TraceWarning(
+                                $"Unable to inspect WireSock install registry key '{registryPath}' in the {view} view: {ex.Message}");
                         }
                     }
                 }
@@ -693,6 +768,98 @@ namespace WireSockUI
             }
         }
 
+        internal static bool TryValidateTrustedFilePath(string file, string label, out string diagnostic)
+        {
+            diagnostic = null;
+            var normalizedFile = NormalizePathFile(file);
+            if (normalizedFile == null)
+            {
+                diagnostic = $"{label} path is invalid.";
+                return false;
+            }
+
+            if (!TryGetExistingAttributes(normalizedFile, out var fileAttributes) ||
+                (fileAttributes & FileAttributes.Directory) != 0)
+            {
+                diagnostic = $"{label} '{normalizedFile}' is not a regular file.";
+                return false;
+            }
+
+            if ((fileAttributes & FileAttributes.ReparsePoint) != 0)
+            {
+                diagnostic = $"{label} '{normalizedFile}' is a reparse point.";
+                return false;
+            }
+
+            if (IsPotentiallyUserWritableFile(normalizedFile))
+            {
+                diagnostic =
+                    $"{label} '{normalizedFile}' is writable by or owned by non-administrative users.";
+                return false;
+            }
+
+            var directory = Path.GetDirectoryName(normalizedFile);
+            var isContainingDirectory = true;
+            while (!string.IsNullOrWhiteSpace(directory))
+            {
+                if (!TryGetExistingAttributes(directory, out var directoryAttributes) ||
+                    (directoryAttributes & FileAttributes.Directory) == 0)
+                {
+                    diagnostic = $"{label} ancestor '{directory}' is not an accessible directory.";
+                    return false;
+                }
+
+                if ((directoryAttributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    diagnostic = $"{label} ancestor '{directory}' is a reparse point.";
+                    return false;
+                }
+
+                var unsafeDirectory = isContainingDirectory
+                    ? IsPotentiallyUserWritableDirectory(directory)
+                    : IsPotentiallyUserReplaceableAncestor(directory);
+                if (unsafeDirectory)
+                {
+                    diagnostic =
+                        $"{label} ancestor '{directory}' can be replaced by or is owned by non-administrative users.";
+                    return false;
+                }
+
+                var trimmed = directory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+                var parent = Path.GetDirectoryName(trimmed);
+                if (string.IsNullOrWhiteSpace(parent) ||
+                    string.Equals(parent, directory, StringComparison.OrdinalIgnoreCase))
+                    break;
+
+                directory = parent;
+                isContainingDirectory = false;
+            }
+
+            return true;
+        }
+
+        private static bool IsPotentiallyUserReplaceableAncestor(string directory)
+        {
+            try
+            {
+                var security = Directory.GetAccessControl(directory);
+                const FileSystemRights replacementRights =
+                    FileSystemRights.Delete |
+                    FileSystemRights.DeleteSubdirectoriesAndFiles |
+                    FileSystemRights.ChangePermissions |
+                    FileSystemRights.TakeOwnership;
+
+                return !HasTrustedOwner(security) ||
+                       ContainsPotentiallyUserWritableRule(
+                           security.GetAccessRules(true, true, typeof(SecurityIdentifier)), replacementRights);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to inspect ancestor ACL for '{directory}': {ex.Message}");
+                return true;
+            }
+        }
+
         private static bool IsPotentiallyUserWritableSecurity(FileSystemSecurity security)
         {
             return !HasTrustedOwner(security) ||
@@ -717,9 +884,6 @@ namespace WireSockUI
         private static bool ContainsPotentiallyUserWritableRule(AuthorizationRuleCollection rules)
         {
             const FileSystemRights writeRights =
-                FileSystemRights.FullControl |
-                FileSystemRights.Modify |
-                FileSystemRights.Write |
                 FileSystemRights.WriteData |
                 FileSystemRights.CreateFiles |
                 FileSystemRights.AppendData |
@@ -731,6 +895,12 @@ namespace WireSockUI
                 FileSystemRights.Delete |
                 FileSystemRights.DeleteSubdirectoriesAndFiles;
 
+            return ContainsPotentiallyUserWritableRule(rules, writeRights);
+        }
+
+        private static bool ContainsPotentiallyUserWritableRule(AuthorizationRuleCollection rules,
+            FileSystemRights writeRights)
+        {
             foreach (FileSystemAccessRule rule in rules)
             {
                 if (rule.AccessControlType != AccessControlType.Allow ||
@@ -738,13 +908,11 @@ namespace WireSockUI
                     (rule.FileSystemRights & writeRights) == 0)
                     continue;
 
-                if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
-                {
-                    if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
-                        continue;
+                if ((rule.PropagationFlags & PropagationFlags.InheritOnly) != 0)
+                    continue;
 
+                if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
                     return true;
-                }
 
                 if (!IsAdministrativeOrServiceSid(sid))
                     return true;

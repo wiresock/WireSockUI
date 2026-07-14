@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
 using WireSockUI.Properties;
 
 namespace WireSockUI.Native
@@ -11,7 +12,7 @@ namespace WireSockUI.Native
         public class Section
         {
             public Dictionary<string, List<string>> KeyValues { get; } =
-                new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
             public bool Contains(string key)
             {
@@ -27,8 +28,15 @@ namespace WireSockUI.Native
 
         public class ConfigParser
         {
+            private static readonly HashSet<string> MultiValueKeys = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "Interface\0Address", "Interface\0DNS", "Interface\0PreUp", "Interface\0PostUp",
+                "Interface\0PreDown", "Interface\0PostDown", "Peer\0AllowedIPs", "Peer\0AllowedApps",
+                "Peer\0DisallowedApps", "Peer\0DisallowedIPs"
+            };
+
             public Dictionary<string, Section> Sections { get; } =
-                new Dictionary<string, Section>(StringComparer.OrdinalIgnoreCase);
+                new Dictionary<string, Section>(StringComparer.Ordinal);
 
             public ConfigParser(string filePath)
             {
@@ -38,10 +46,31 @@ namespace WireSockUI.Native
             public void ParseConfig(string filePath)
             {
                 using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
-                using (var reader = new StreamReader(fileStream))
                 {
-                    Parse(reader);
+                    RejectUnsupportedByteOrderMark(fileStream);
+                    using (var reader = new StreamReader(fileStream, new UTF8Encoding(false, true), false))
+                    {
+                        Parse(reader);
+                    }
                 }
+            }
+
+            private static void RejectUnsupportedByteOrderMark(FileStream stream)
+            {
+                var prefix = new byte[4];
+                var bytesRead = stream.Read(prefix, 0, prefix.Length);
+                stream.Position = 0;
+
+                var hasUtf8Bom = bytesRead >= 3 && prefix[0] == 0xef && prefix[1] == 0xbb && prefix[2] == 0xbf;
+                var hasUtf16Bom = bytesRead >= 2 &&
+                                  (prefix[0] == 0xff && prefix[1] == 0xfe ||
+                                   prefix[0] == 0xfe && prefix[1] == 0xff);
+                var hasUtf32BigEndianBom = bytesRead >= 4 && prefix[0] == 0 && prefix[1] == 0 &&
+                                           prefix[2] == 0xfe && prefix[3] == 0xff;
+
+                if (hasUtf8Bom || hasUtf16Bom || hasUtf32BigEndianBom)
+                    throw new FormatException(
+                        "The current wgbooster.dll parser requires a UTF-8 configuration without a byte-order mark (BOM).");
             }
 
             private void Parse(TextReader reader)
@@ -107,9 +136,12 @@ namespace WireSockUI.Native
             public Dictionary<string, string> GetSection(string sectionName)
             {
                 return Sections.TryGetValue(sectionName, out var section)
-                    ? section.KeyValues.ToDictionary(kv => kv.Key, kv => string.Join(", ", kv.Value),
-                        StringComparer.OrdinalIgnoreCase)
-                    : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                    ? section.KeyValues.ToDictionary(kv => kv.Key,
+                        kv => MultiValueKeys.Contains(sectionName + "\0" + kv.Key)
+                            ? string.Join(", ", kv.Value)
+                            : kv.Value.Last(),
+                        StringComparer.Ordinal)
+                    : new Dictionary<string, string>(StringComparer.Ordinal);
             }
 
             private static bool IsComment(string line)
@@ -123,19 +155,12 @@ namespace WireSockUI.Native
                 if (!IsWireSockDirective(line))
                     return line;
 
-                var value = line.Substring(4).Trim();
-                if (value.StartsWith(":"))
-                    value = value.Substring(1).Trim();
-
-                return value;
+                return line.Substring(5).Trim();
             }
 
             private static bool IsWireSockDirective(string line)
             {
-                if (!line.StartsWith("#@ws", StringComparison.OrdinalIgnoreCase))
-                    return false;
-
-                return line.Length == 4 || line[4] == ':' || char.IsWhiteSpace(line[4]);
+                return line.StartsWith("#@ws:", StringComparison.Ordinal);
             }
         }
     }

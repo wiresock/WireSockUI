@@ -18,27 +18,36 @@ At startup WireSockUI looks for `wgbooster.dll` in this order:
 3. WireSock Secure Connect Pro SDK registry install locations under `HKLM\Software\WireSock Foundation\WireSock Secure Connect Pro`.
 4. The legacy WireSock VPN Client registry location under `HKLM\SOFTWARE\NTKernelResources\WinpkFilterForVPNClient`.
 
-For each registered install location it checks `sdk`, `bin`, and the install root. WireSockUI validates the directory and `wgbooster.dll` ownership/ACLs, then loads the exact validated DLL with a restricted DLL search path instead of changing the machine-wide environment or relying on `PATH`.
+For each registered install location it checks `sdk`, `bin`, and the install root. WireSockUI validates the directory, `wgbooster.dll`, and executable/DLL companion ownership and ACLs, then loads the exact validated DLL with a restricted DLL search path instead of changing the machine-wide environment or relying on `PATH`.
 
 ## Configuration Notes
 
-WireSock-specific directives may use the current SDK comment-extension syntax:
+WireSock-specific directives use the current SDK's exact, case-sensitive `#@ws:` comment-extension syntax:
 
 ```ini
 #@ws:AllowedApps = app.exe
 #@ws:DisallowedIPs = 192.168.1.0/24
 #@ws:VirtualAdapterMode = false
-#@ws:BypassLanTraffic = false
 #@ws:Socks5ProxyAllTraffic = false
 ```
 
-Plain WireGuard keys are still parsed normally. WireSockUI validates common SDK fields such as script hooks, masking parameters, SOCKS5 settings, `BypassLanTraffic`, and profile-level `VirtualAdapterMode` while preserving the file-based profile workflow.
+Plain WireGuard keys are still parsed normally. WireSockUI validates current SDK fields such as script hooks, masking parameters, SOCKS5 settings, and profile-level `VirtualAdapterMode` while preserving the file-based profile workflow. Direct `wgbooster.dll` integration does not implement `BypassLanTraffic`; specify the LAN prefixes to bypass with `#@ws:DisallowedIPs` in `[Peer]` instead.
 
-Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration and manual import use bounded temporary copies and reject reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening when possible. Legacy profiles containing script hooks are not auto-migrated; import them manually so the hook warning can be reviewed.
+Amnezia 2.0 padding values `S1` through `S4` must be in the range `0..1279`. When any Amnezia padding/header option is present, `S1`, `S2`, and `H1` through `H4` are required; `S3` and `S4` remain optional. `H1` through `H4` accept fixed decimal values or inclusive decimal ranges and must not overlap after blank/zero values resolve to their WireGuard defaults. `Jmin` and `Jmax` must be specified together with `Jmin < Jmax`, and pre-handshake size/delay settings require either `Jc` or `Id`. Protocol imitation accepts the SDK's short and long protocol names, such as `quic`/`quic_initial` and `stun`/`stun_request`.
+
+## Migration Notes
+
+- Configuration section names, recognized key names, and `#@ws:` are validated with the same casing as the current SDK. Correct older lowercase or colon-less directives before activation.
+- Save profiles as valid UTF-8 without a byte-order mark (BOM), matching the current SDK parser.
+- `BypassLanTraffic`, `Table`, legacy `I1` through `I5`, and `Socks5Username` are rejected because the direct current `wgbooster.dll` parser does not apply them. Use `DisallowedIPs` and `Socks5ProxyUsername` where applicable.
+- User-scoped settings are upgraded once after installing a new application version, preserving autorun, profile, adapter, notification, logging, and Kill Switch preferences.
+- Profiles that remain writable by non-administrative users after startup hardening are not listed or activated. ACL hardening failures now stop initialization instead of continuing with a privileged, mutable configuration.
+
+Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration and manual import use bounded temporary copies and reject reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening, and unsafe directories or failed ACL updates stop startup. Legacy profiles containing script hooks are not auto-migrated; import them manually so the hook warning can be reviewed.
 
 Runtime state that can be written by the elevated process, including the native recovery marker, is kept under the secured `%ProgramData%\WireSockUI` folder rather than per-user AppData. The UWP notification icon is stored under a dedicated `%ProgramData%\WireSockUI-Notifications` folder with a read-only Users ACL so the toast platform can load it without allowing unelevated writes.
 
-Elevated autorun is available only when `WireSockUI.exe` and its containing folder are not writable by or owned by non-administrative users. Install WireSockUI into an administrator-owned location before enabling autorun.
+Elevated autorun and SDK DLL loading are available only when the target file, containing directory, and replacement-sensitive ancestor path are administrator-owned. Install WireSockUI and the SDK into administrator-owned locations.
 
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
 
@@ -67,7 +76,7 @@ The single-node `-m:1` solution build avoids a silent MSBuild failure that can h
 
 - A clean build does not prove that the installed driver and SDK DLL are present or compatible on the target machine.
 - Tunnel start/stop still depends on driver state and Windows networking permissions after elevation succeeds.
-- The `WireSockUI.Tests` harness covers focused parser/profile validation scenarios, including reparse-point rejection through file symlinks or junction fallback, but native driver and `wgbooster.dll` lifecycle behavior still needs runtime validation on a machine with the SDK installed.
+- The `WireSockUI.Tests` harness covers parser/profile validation, native error-sentinel handling, lifecycle cleanup through a deterministic native facade, ACL checks, and reparse-point rejection. Actual driver and `wgbooster.dll` operation still needs runtime validation on a machine with the SDK installed.
 
 ## License
 

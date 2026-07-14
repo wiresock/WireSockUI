@@ -6,7 +6,7 @@ namespace WireSockUI.Native
     internal static class WireguardBoosterExports
     {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
-        public delegate void LogPrinter(string message);
+        public delegate void LogPrinter([MarshalAs(UnmanagedType.LPUTF8Str)] string message);
 
         public enum WgbLogLevel
         {
