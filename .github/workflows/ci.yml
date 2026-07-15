@@ -11,15 +11,27 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup dotnet
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.x'
 
+      - name: Restore
+        run: dotnet restore WireSockUI.sln /p:Platform=x64
+
+      - name: Verify formatting
+        run: dotnet format WireSockUI.sln whitespace --verify-no-changes --no-restore
+
       - name: Run focused tests
-        run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows
+        run: >
+          dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj
+          --configuration Release
+          --framework net472-windows
+          --no-restore
+          /p:Platform=x64
+          /p:UseSharedCompilation=false
 
   publish:
     runs-on: windows-latest
@@ -36,10 +48,10 @@ jobs:
           - x64
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
       - name: Setup dotnet
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
         with:
           dotnet-version: '10.x'
 

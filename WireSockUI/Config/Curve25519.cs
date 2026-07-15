@@ -847,23 +847,23 @@ namespace WireSockUI.Config
             Set(z[1], 1);
 
             for (var i = 32; i-- != 0;)
-            for (var j = 8; j-- != 0;)
-            {
-                /* swap arguments depending on bit */
-                var bit1 = ((privateKey[i] & 0xFF) >> j) & 1;
-                var bit0 = (~(privateKey[i] & 0xFF) >> j) & 1;
-                var ax = x[bit0];
-                var az = z[bit0];
-                var bx = x[bit1];
-                var bz = z[bit1];
+                for (var j = 8; j-- != 0;)
+                {
+                    /* swap arguments depending on bit */
+                    var bit1 = ((privateKey[i] & 0xFF) >> j) & 1;
+                    var bit0 = (~(privateKey[i] & 0xFF) >> j) & 1;
+                    var ax = x[bit0];
+                    var az = z[bit0];
+                    var bx = x[bit1];
+                    var bz = z[bit1];
 
-                /* a' = a + b	*/
-                /* b' = 2 b	*/
-                MontyPrepare(t1, t2, ax, az);
-                MontyPrepare(t3, t4, bx, bz);
-                MontyAdd(t1, t2, t3, t4, ax, az, dx);
-                MontyDouble(t1, t2, t3, t4, bx, bz);
-            }
+                    /* a' = a + b	*/
+                    /* b' = 2 b	*/
+                    MontyPrepare(t1, t2, ax, az);
+                    MontyPrepare(t3, t4, bx, bz);
+                    MontyAdd(t1, t2, t3, t4, ax, az, dx);
+                    MontyDouble(t1, t2, t3, t4, bx, bz);
+                }
 
             Reciprocal(t1, z[0], false);
             Multiply(dx, x[0], t1);

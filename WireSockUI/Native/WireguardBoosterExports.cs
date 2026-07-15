@@ -17,12 +17,12 @@ namespace WireSockUI.Native
                 return string.Empty;
 
             var length = 0;
-            while (length <= MaxLogMessageBytes && Marshal.ReadByte(message, length) != 0)
+            while (length < MaxLogMessageBytes && Marshal.ReadByte(message, length) != 0)
                 length++;
 
-            if (length > MaxLogMessageBytes)
+            if (length == MaxLogMessageBytes)
                 throw new ArgumentException(
-                    $"The native log message exceeds {MaxLogMessageBytes} bytes or is not null-terminated.",
+                    $"The native log message is at least {MaxLogMessageBytes} bytes or is not null-terminated within that limit.",
                     nameof(message));
 
             if (length == 0)
@@ -50,7 +50,12 @@ namespace WireSockUI.Native
 
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern IntPtr wgb_get_handle(LogPrinter logPrinter, WgbLogLevel level, bool enableTrafficCapture);
+        public static extern IntPtr wgb_get_handle_ex(LogPrinter logPrinter, WgbLogLevel level,
+            IntPtr eventLogger, bool enableTrafficCapture, bool enableAnalytics);
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall)]
+        public static extern void wgb_release_handle(IntPtr wgboosterHandle);
 
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
@@ -104,8 +109,12 @@ namespace WireSockUI.Native
 
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
-        public static extern IntPtr
-            wgbp_get_handle(LogPrinter logPrinter, WgbLogLevel level, bool enableTrafficCapture);
+        public static extern IntPtr wgbp_get_handle_ex(LogPrinter logPrinter, WgbLogLevel level,
+            IntPtr eventLogger, bool enableTrafficCapture, bool enableAnalytics);
+
+        [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
+        [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall)]
+        public static extern void wgbp_release_handle(IntPtr wgboosterHandle);
 
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]

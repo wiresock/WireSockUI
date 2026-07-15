@@ -30,18 +30,20 @@ namespace WireSockUI.Native
             string customName = null,
             string appUserModelId = null)
         {
-            var mainModule = Process.GetCurrentProcess().MainModule;
+            string executablePath;
+            using (var process = Process.GetCurrentProcess())
+                executablePath = process.MainModule?.FileName;
 
-            if (mainModule?.FileName == null) throw new InvalidOperationException("No valid process module found.");
+            if (executablePath == null) throw new InvalidOperationException("No valid process module found.");
 
-            var appName = customName ?? Path.GetFileNameWithoutExtension(mainModule.FileName);
-            var aumid = appUserModelId ?? BuildDefaultAppUserModelId(appName, mainModule.FileName);
+            var appName = customName ?? Path.GetFileNameWithoutExtension(executablePath);
+            var aumid = appUserModelId ?? BuildDefaultAppUserModelId(appName, executablePath);
 
             var result = SetCurrentProcessExplicitAppUserModelID(aumid);
             if (result < 0)
                 Marshal.ThrowExceptionForHR(result);
 
-            EnsureNotificationShortcut(appName, aumid, mainModule.FileName);
+            EnsureNotificationShortcut(appName, aumid, executablePath);
 
             return new WindowsApplicationContext(appName, aumid);
         }
@@ -50,74 +52,59 @@ namespace WireSockUI.Native
         {
             var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
             var startMenuPath = Path.Combine(appData, @"Microsoft\Windows\Start Menu\Programs");
-            EnsureRegularDirectoryPath(startMenuPath);
-
-            var shortcutFile = Path.Combine(startMenuPath, BuildShortcutFileName(appName, executablePath));
-            if (TryGetAttributes(shortcutFile, out var shortcutAttributes))
+            using (SecureFileSystem.OpenDirectoryChain(startMenuPath))
             {
-                if ((shortcutAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-                    throw new IOException($"Notification shortcut '{shortcutFile}' is not a regular file.");
-
-                EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
-                return;
-            }
-
-            var stagingFile = Path.Combine(Global.SecureMainFolder,
-                $"notification-shortcut-{Guid.NewGuid():N}.lnk");
-            try
-            {
-                using (var shortcut = new ShellLink
+                var shortcutFile = Path.Combine(startMenuPath, BuildShortcutFileName(appName, executablePath));
+                if (TryGetAttributes(shortcutFile, out var shortcutAttributes))
                 {
-                    TargetPath = executablePath,
-                    Arguments = string.Empty,
-                    AppUserModelId = appUserModelId
-                })
-                {
-                    shortcut.Save(stagingFile);
+                    if ((shortcutAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                        throw new IOException($"Notification shortcut '{shortcutFile}' is not a regular file.");
+
+                    EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
+                    return;
                 }
 
+                var stagingFile = Path.Combine(Global.SecureMainFolder,
+                    $"notification-shortcut-{Guid.NewGuid():N}.lnk");
                 try
                 {
-                    File.Copy(stagingFile, shortcutFile, false);
+                    using (var shortcut = new ShellLink
+                    {
+                        TargetPath = executablePath,
+                        Arguments = string.Empty,
+                        AppUserModelId = appUserModelId
+                    })
+                    {
+                        shortcut.Save(stagingFile);
+                    }
+
+                    try
+                    {
+                        File.Copy(stagingFile, shortcutFile, false);
+                    }
+                    catch (IOException) when (File.Exists(shortcutFile))
+                    {
+                        // Another process won the create race. Reuse it only if it is exactly ours.
+                    }
+
+                    EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
                 }
-                catch (IOException) when (File.Exists(shortcutFile))
+                finally
                 {
-                    // Another process won the create race. Reuse it only if it is exactly ours.
+                    try
+                    {
+                        using (var stagedShortcut = SecureFileSystem.OpenFileForDelete(stagingFile))
+                            stagedShortcut.Delete();
+                    }
+                    catch (FileNotFoundException)
+                    {
+                    }
+                    catch (Exception ex)
+                    {
+                        Trace.TraceWarning(
+                            $"Unable to delete staged notification shortcut '{stagingFile}': {ex.Message}");
+                    }
                 }
-
-                EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
-            }
-            finally
-            {
-                try
-                {
-                    File.Delete(stagingFile);
-                }
-                catch (Exception ex)
-                {
-                    Trace.TraceWarning($"Unable to delete staged notification shortcut '{stagingFile}': {ex.Message}");
-                }
-            }
-        }
-
-        private static void EnsureRegularDirectoryPath(string directory)
-        {
-            var current = Path.GetFullPath(directory);
-            while (!string.IsNullOrWhiteSpace(current))
-            {
-                var attributes = File.GetAttributes(current);
-                if ((attributes & FileAttributes.Directory) == 0)
-                    throw new IOException($"Notification shortcut ancestor '{current}' is not a directory.");
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
-                    throw new IOException($"Notification shortcut ancestor '{current}' is a reparse point.");
-
-                var trimmed = current.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-                var parent = Path.GetDirectoryName(trimmed);
-                if (string.IsNullOrWhiteSpace(parent) ||
-                    string.Equals(parent, current, StringComparison.OrdinalIgnoreCase))
-                    break;
-
-                current = parent;
             }
         }
 

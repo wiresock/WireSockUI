@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Security.AccessControl;
@@ -15,9 +16,11 @@ namespace WireSockUI.Notifications
     internal static class Notifications
     {
         private static readonly object IconSyncRoot = new object();
+        private static readonly object ActivationSyncRoot = new object();
         private static readonly Lazy<WindowsApplicationContext> ApplicationContext =
             new Lazy<WindowsApplicationContext>(() => WindowsApplicationContext.FromCurrentProcess());
         private static bool _notificationIconReady;
+        private static WeakReference _activationForm;
 
         private static string EnsureNotificationIcon()
         {
@@ -45,7 +48,8 @@ namespace WireSockUI.Notifications
                         $"Could not prepare notification icon '{icon}'. Replace failed: {replaceDiagnostic}; reuse failed: {reuseDiagnostic}");
                 }
 
-                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+                using (var iconHandle = SecureFileSystem.OpenFile(icon, true))
+                    iconHandle.SetSecurity(CreateNotificationIconFileSecurity());
                 _notificationIconReady = true;
             }
 
@@ -75,12 +79,10 @@ namespace WireSockUI.Notifications
                 diagnostic = null;
                 return true;
             }
-            catch (IOException ex)
-            {
-                diagnostic = ex.Message;
-                return false;
-            }
-            catch (UnauthorizedAccessException ex)
+            catch (Exception ex) when (ex is IOException ||
+                                       ex is UnauthorizedAccessException ||
+                                       ex is Win32Exception ||
+                                       ex is InvalidOperationException)
             {
                 diagnostic = ex.Message;
                 return false;
@@ -109,11 +111,15 @@ namespace WireSockUI.Notifications
                     return false;
                 }
 
-                File.SetAccessControl(icon, CreateNotificationIconFileSecurity());
+                using (var iconHandle = SecureFileSystem.OpenFile(icon, true))
+                    iconHandle.SetSecurity(CreateNotificationIconFileSecurity());
                 diagnostic = null;
                 return true;
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is IOException ||
+                                       ex is UnauthorizedAccessException ||
+                                       ex is Win32Exception ||
+                                       ex is InvalidOperationException)
             {
                 diagnostic = ex.Message;
                 return false;
@@ -123,7 +129,7 @@ namespace WireSockUI.Notifications
         private static bool FileContentsEqual(string path, byte[] expectedBytes)
         {
             using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
-                       FileShare.ReadWrite | FileShare.Delete))
+                       FileShare.Read))
             {
                 if (stream.Length != expectedBytes.Length)
                     return false;
@@ -151,13 +157,17 @@ namespace WireSockUI.Notifications
 
             if ((attributes & FileAttributes.Directory) == 0)
             {
-                File.Delete(icon);
+                using (var iconHandle = (attributes & FileAttributes.ReparsePoint) != 0
+                           ? SecureFileSystem.OpenReparsePointForDelete(icon, false)
+                           : SecureFileSystem.OpenFileForDelete(icon))
+                    iconHandle.Delete();
                 return;
             }
 
             if ((attributes & FileAttributes.ReparsePoint) != 0)
             {
-                Directory.Delete(icon);
+                using (var iconHandle = SecureFileSystem.OpenReparsePointForDelete(icon, true))
+                    iconHandle.Delete();
                 return;
             }
 
@@ -229,8 +239,14 @@ namespace WireSockUI.Notifications
             return xml;
         }
 
-        public static void Notify(string title, string body)
+        public static void Notify(string title, string body, Form activationForm)
         {
+            if (activationForm == null)
+                throw new ArgumentNullException(nameof(activationForm));
+
+            lock (ActivationSyncRoot)
+                _activationForm = new WeakReference(activationForm);
+
             var icon = EnsureNotificationIcon();
             var context = ApplicationContext.Value;
             var notifier = ToastNotificationManager.CreateToastNotifier(context.AppUserModelId);
@@ -246,7 +262,7 @@ namespace WireSockUI.Notifications
 
         private static void Notification_Failed(ToastNotification sender, ToastFailedEventArgs args)
         {
-            Debug.WriteLine($"Notification failed: {args.ErrorCode}");
+            Trace.TraceWarning($"Notification failed: {args.ErrorCode}");
         }
 
         private static void Notification_Dismissed(ToastNotification sender, ToastDismissedEventArgs args)
@@ -267,13 +283,33 @@ namespace WireSockUI.Notifications
 
         private static void Notification_Activated(ToastNotification sender, object args)
         {
-            foreach (Form form in Application.OpenForms)
-                if (form.Name == "frmMain")
-                    form.BeginInvoke((Action)(() =>
-                    {
-                        form.Show();
-                        form.WindowState = FormWindowState.Normal;
-                    }));
+            Form form;
+            lock (ActivationSyncRoot)
+                form = _activationForm?.Target as Form;
+
+            if (form == null || form.IsDisposed || form.Disposing || !form.IsHandleCreated)
+                return;
+
+            try
+            {
+                form.BeginInvoke((Action)(() =>
+                {
+                    if (form.IsDisposed || form.Disposing)
+                        return;
+
+                    form.Show();
+                    form.WindowState = FormWindowState.Normal;
+                    form.Activate();
+                }));
+            }
+            catch (ObjectDisposedException)
+            {
+                // The main window completed shutdown while the WinRT callback was being dispatched.
+            }
+            catch (InvalidOperationException ex)
+            {
+                Trace.TraceWarning($"Unable to activate WireSock UI from a toast notification: {ex.Message}");
+            }
         }
     }
 }

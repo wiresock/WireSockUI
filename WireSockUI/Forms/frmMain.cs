@@ -5,6 +5,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.IO;
 using System.Linq;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -25,13 +27,13 @@ namespace WireSockUI.Forms
         {
             Connecting,
             Connected,
-            Disconnected
+            Disconnected,
+            Indeterminate
         }
 
         private readonly BackgroundWorker _tunnelConnectionWorker;
         private readonly BackgroundWorker _tunnelStateWorker;
         private const int TunnelConnectionTimeoutMilliseconds = 30000;
-        private const int TimedOutConnectCleanupRecoveryMilliseconds = 30000;
         private const int MaxVisibleLogMessages = 2000;
         private const int ShutdownDisconnectTimeoutMilliseconds = 5000;
 
@@ -39,15 +41,11 @@ namespace WireSockUI.Forms
          * @brief The manager that handles the Wireguard connections.
          */
         private readonly WireSockManager _wiresock;
+        private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
         private bool _exitRequested;
         private volatile bool _shutdownComplete;
-        private int _tunnelOperationInProgress;
-        private int _tunnelGeneration;
-        private int _tunnelConnectionTimeoutGeneration = -1;
-        private int _timedOutConnectCleanupInProgress;
-        private int _nativeRecoveryRequired;
         private Icon _ownedTrayIcon;
         private Image _inactiveStatusImage;
         private Image _connectedStatusImage;
@@ -71,6 +69,7 @@ namespace WireSockUI.Forms
             public int Generation { get; set; }
             public WgbStats Stats { get; set; }
             public string Diagnostic { get; set; }
+            public bool TunnelInactive { get; set; }
         }
 
         /**
@@ -80,7 +79,21 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
-            if (IsApplicationAlreadyRunning())
+            bool alreadyRunning;
+            try
+            {
+                alreadyRunning = IsApplicationAlreadyRunning();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"WireSock UI could not establish exclusive access to the driver interface.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+                return;
+            }
+
+            if (alreadyRunning)
             {
                 MessageBox.Show(Resources.AlreadyRunningMessage, Resources.AlreadyRunningTitle, MessageBoxButtons.OK,
                     MessageBoxIcon.Information);
@@ -109,6 +122,7 @@ namespace WireSockUI.Forms
             AddProfileIcon(ConnectionState.Disconnected.ToString(), WindowsIcons.Icons.DisconnectedTunnel, 24);
             AddProfileIcon(ConnectionState.Connected.ToString(), WindowsIcons.Icons.ConnectedTunnel, 24);
             AddProfileIcon(ConnectionState.Connecting.ToString(), WindowsIcons.Icons.ConnectingTunnel, 24);
+            AddProfileIcon(ConnectionState.Indeterminate.ToString(), WindowsIcons.Icons.ConnectingTunnel, 24);
 
             // Ensure the profile list rows fill the entire width, but no scrollbar appears
             lstProfiles.Columns[0].Width = lstProfiles.Size.Width - 4;
@@ -231,35 +245,34 @@ namespace WireSockUI.Forms
 
         private int CurrentTunnelGeneration()
         {
-            return Volatile.Read(ref _tunnelGeneration);
+            return _tunnelSession.CurrentGeneration;
         }
 
         private void AdvanceTunnelGeneration()
         {
-            Interlocked.Increment(ref _tunnelGeneration);
-            Volatile.Write(ref _tunnelConnectionTimeoutGeneration, -1);
+            _tunnelSession.AdvanceGeneration();
         }
 
         private bool IsTimedOutConnectCleanupInProgress()
         {
-            return Volatile.Read(ref _timedOutConnectCleanupInProgress) != 0;
+            return _tunnelSession.CleanupPending;
         }
 
         private bool IsNativeRecoveryRequired()
         {
-            return Volatile.Read(ref _nativeRecoveryRequired) != 0;
+            return _tunnelSession.RecoveryRequired;
         }
 
         private void BeginTimedOutConnectCleanup()
         {
-            Interlocked.Exchange(ref _timedOutConnectCleanupInProgress, 1);
+            _tunnelSession.BeginCleanup();
             SetActivateButtonEnabled(false);
             cmiResetKillSwitch.Enabled = false;
         }
 
         private void EndTimedOutConnectCleanup(string profile)
         {
-            Interlocked.Exchange(ref _timedOutConnectCleanupInProgress, 0);
+            _tunnelSession.EndCleanup();
 
             if (_shutdownComplete || IsDisposed || Disposing)
                 return;
@@ -280,11 +293,11 @@ namespace WireSockUI.Forms
         {
             Global.WriteNativeRecoveryMarker(
                 context,
-                "Native WireSock cleanup did not finish safely. New tunnel operations are disabled until WireSock UI is restarted.");
+                "Native WireSock cleanup did not finish safely. New tunnel operations are disabled until recovery succeeds or WireSock UI is restarted.");
 
-            var wasAlreadyMarked = Interlocked.Exchange(ref _nativeRecoveryRequired, 1) != 0;
+            var wasAlreadyMarked = !_tunnelSession.RequireRecovery();
             Trace.TraceWarning(
-                $"Native WireSock cleanup did not finish safely after {context}. New tunnel operations are disabled until WireSock UI is restarted.");
+                $"Native WireSock cleanup did not finish safely after {context}. New tunnel operations are disabled until recovery succeeds or WireSock UI is restarted.");
 
             TryRunOnUiThread(() =>
             {
@@ -315,18 +328,7 @@ namespace WireSockUI.Forms
             if (_shutdownComplete || IsDisposed || Disposing)
                 return;
 
-            UpdateState(ConnectionState.Disconnected, false, profile);
-
-            var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
-            if (btnActivate != null)
-                SetActivateButtonEnabled(false);
-
-            var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
-            if (txtStatus != null)
-                txtStatus.Text = Resources.InterfaceStatusRecoveryRequired;
-
-            cmiDeactivateTunnel.Enabled = false;
-            cmiResetKillSwitch.Enabled = true;
+            UpdateState(ConnectionState.Indeterminate, false, profile);
         }
 
         private void ShowTunnelOperationBlockedMessage(string message)
@@ -346,31 +348,25 @@ namespace WireSockUI.Forms
 
         private bool TryBeginTunnelOperation(bool showBlockedMessage = true)
         {
-            if (IsTimedOutConnectCleanupInProgress())
-            {
-                if (showBlockedMessage)
-                    ShowTunnelOperationBlockedMessage(Resources.TunnelConnectCleanupPending);
-                return false;
-            }
-
-            if (IsNativeRecoveryRequired())
-            {
-                if (showBlockedMessage)
-                    ShowTunnelOperationBlockedMessage(Resources.TunnelNativeRecoveryRequired);
-                return false;
-            }
-
-            if (Interlocked.CompareExchange(ref _tunnelOperationInProgress, 1, 0) == 0)
+            if (_tunnelSession.TryBeginOperation(out var blockReason))
                 return true;
 
             if (showBlockedMessage)
-                ShowTunnelOperationBlockedMessage(Resources.TunnelOperationPending);
+            {
+                var message = blockReason == TunnelOperationBlockReason.CleanupPending
+                    ? Resources.TunnelConnectCleanupPending
+                    : blockReason == TunnelOperationBlockReason.RecoveryRequired
+                        ? Resources.TunnelNativeRecoveryRequired
+                        : Resources.TunnelOperationPending;
+                ShowTunnelOperationBlockedMessage(message);
+            }
+
             return false;
         }
 
         private void EndTunnelOperation()
         {
-            Interlocked.Exchange(ref _tunnelOperationInProgress, 0);
+            _tunnelSession.EndOperation();
         }
 
         private void StartTunnelConnectionWorker()
@@ -398,7 +394,7 @@ namespace WireSockUI.Forms
             }
 
             if (_wiresock.HasTunnelHandle)
-                UpdateState(ConnectionState.Connected, false, profileName);
+                HandleNativeCleanupFailure(profileName, "tunnel disconnect cleanup", _wiresock.LastError);
             else
                 UpdateState(ConnectionState.Disconnected, notify, profileName);
 
@@ -471,37 +467,57 @@ namespace WireSockUI.Forms
                     {
                         _wiresock.Dispose();
                     }
+
+                    return !_wiresock.HasTunnelHandle;
                 });
 
                 if (!cleanupTask.Wait(ShutdownDisconnectTimeoutMilliseconds))
                 {
                     Trace.TraceWarning(
                         $"WireSock manager shutdown exceeded {ShutdownDisconnectTimeoutMilliseconds} ms; continuing application exit.");
-                    if (!TryResetNetworkLockAfterNativeCleanupFailure("shutdown timeout", true))
-                        Trace.TraceWarning(
-                            "WireSock UI could not verify native tunnel cleanup before exit. Reopen WireSock UI as administrator and use Reset Kill Switch if network access remains blocked.");
+                    Global.WriteNativeRecoveryMarker("shutdown timeout",
+                        "The native cleanup call was still running when WireSock UI exited. No concurrent global reset was attempted.");
 
                     cleanupTask.ContinueWith(task =>
                         {
                             if (task.IsFaulted)
+                            {
                                 Trace.TraceWarning(
                                     $"WireSock manager shutdown completed with an error after exit continued: {task.Exception?.GetBaseException().Message}");
+                                Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                                    task.Exception?.GetBaseException().Message);
+                                return;
+                            }
 
-                            TryResetNetworkLockAfterNativeCleanupFailure("late shutdown cleanup", true);
+                            if (task.IsCanceled || !task.Result)
+                            {
+                                Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                                    "The native tunnel handle remained allocated after shutdown cleanup returned.");
+                                return;
+                            }
+
+                            Global.TryDeleteNativeRecoveryMarker();
                         },
                         CancellationToken.None,
                         TaskContinuationOptions.None,
                         TaskScheduler.Default);
+                }
+                else if (!cleanupTask.Result)
+                {
+                    Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                        "The native tunnel handle remained allocated after shutdown cleanup returned.");
                 }
             }
             catch (AggregateException ex)
             {
                 Trace.TraceWarning(
                     $"Failed to cleanly shut down WireSock manager: {ex.GetBaseException().Message}");
+                Global.WriteNativeRecoveryMarker("shutdown cleanup failure", ex.GetBaseException().Message);
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to cleanly shut down WireSock manager: {ex.Message}");
+                Global.WriteNativeRecoveryMarker("shutdown cleanup failure", ex.Message);
             }
         }
 
@@ -553,13 +569,29 @@ namespace WireSockUI.Forms
         private void ShowPendingNativeRecoveryWarning()
         {
             var marker = Global.ReadNativeRecoveryMarker();
-            if (string.IsNullOrWhiteSpace(marker))
+
+            if (!WireSockManager.TryIsNetworkLockActive(out var networkLockActive, out var queryDiagnostic))
+            {
+                var diagnostic = queryDiagnostic ?? "Unable to query WireSock network lock state.";
+                Global.WriteNativeRecoveryMarker("startup network-lock query", diagnostic);
+                _tunnelSession.RequireRecovery();
+                SetNativeRecoveryUi(null);
+                MessageBox.Show(
+                    $"WireSock UI could not verify the driver network-lock state.{Environment.NewLine}{Environment.NewLine}{diagnostic}",
+                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
+            }
+
+            if (!networkLockActive)
+            {
+                Global.TryDeleteNativeRecoveryMarker();
+                return;
+            }
 
             var recovered = TryResetNetworkLockAfterNativeCleanupFailure("startup recovery", true);
             if (!recovered)
             {
-                Interlocked.Exchange(ref _nativeRecoveryRequired, 1);
+                _tunnelSession.RequireRecovery();
                 SetNativeRecoveryUi(null);
             }
 
@@ -567,8 +599,11 @@ namespace WireSockUI.Forms
                 ? "Startup recovery completed successfully. WireSock UI will continue normally."
                 : "Startup recovery could not verify or reset the WireSock Kill Switch. Tunnel operations are disabled until WireSock UI is restarted after network access is restored.";
 
+            var recoveryContext = string.IsNullOrWhiteSpace(marker)
+                ? "The WireSock driver reported an orphaned network lock."
+                : marker;
             var recoveryMessage =
-                $"{Resources.TunnelNativeRecoveryRequired}{Environment.NewLine}{Environment.NewLine}{recoveryStatus}{Environment.NewLine}{Environment.NewLine}{marker}";
+                $"{Resources.TunnelNativeRecoveryRequired}{Environment.NewLine}{Environment.NewLine}{recoveryStatus}{Environment.NewLine}{Environment.NewLine}{recoveryContext}";
 
             TryRunOnUiThread(() => MessageBox.Show(
                 recoveryMessage,
@@ -582,24 +617,31 @@ namespace WireSockUI.Forms
 
             try
             {
-                if (IsHandleCreated)
-                    BeginInvoke(new Action(() =>
-                    {
-                        try
-                        {
-                            action();
-                        }
-                        catch (Exception ex)
-                        {
-                            Trace.TraceWarning($"Failed to run WireSock UI callback: {ex.Message}");
-                        }
-                    }));
+                if (!IsHandleCreated)
+                    return;
+
+                if (InvokeRequired)
+                    BeginInvoke(new Action(() => RunUiActionSafely(action)));
+                else
+                    RunUiActionSafely(action);
             }
             catch (ObjectDisposedException)
             {
             }
             catch (InvalidOperationException)
             {
+            }
+        }
+
+        private static void RunUiActionSafely(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to run WireSock UI callback: {ex.Message}");
             }
         }
 
@@ -640,7 +682,7 @@ namespace WireSockUI.Forms
         {
             try
             {
-                Notifications.Notifications.Notify(title, body);
+                Notifications.Notifications.Notify(title, body, this);
             }
             catch (Exception ex)
             {
@@ -667,7 +709,12 @@ namespace WireSockUI.Forms
             try
             {
                 Global.AlreadyRunning =
-                    new EventWaitHandle(false, EventResetMode.AutoReset, eventName, out var createdNew);
+                    new EventWaitHandle(
+                        false,
+                        EventResetMode.AutoReset,
+                        eventName,
+                        out var createdNew,
+                        CreateSingleInstanceEventSecurity());
 
                 if (createdNew) return false;
 
@@ -677,12 +724,29 @@ namespace WireSockUI.Forms
             }
             catch (UnauthorizedAccessException)
             {
-                return true;
+                throw new InvalidOperationException(
+                    "The global WireSock ownership event exists but its security descriptor denies elevated access. Close the process that pre-created it and retry.");
             }
             catch (IOException)
             {
-                return true;
+                throw new InvalidOperationException(
+                    "The global WireSock ownership event could not be opened safely. Close other WireSock clients and retry.");
             }
+        }
+
+        private static EventWaitHandleSecurity CreateSingleInstanceEventSecurity()
+        {
+            var security = new EventWaitHandleSecurity();
+            security.SetAccessRuleProtection(true, false);
+            security.AddAccessRule(new EventWaitHandleAccessRule(
+                new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                EventWaitHandleRights.FullControl,
+                AccessControlType.Allow));
+            security.AddAccessRule(new EventWaitHandleAccessRule(
+                new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null),
+                EventWaitHandleRights.FullControl,
+                AccessControlType.Allow));
+            return security;
         }
 
         /// <summary>
@@ -810,12 +874,8 @@ namespace WireSockUI.Forms
                     return;
 
                 Trace.TraceWarning($"Native tunnel state query failed: {diagnostic}");
-                var profile = _wiresock.ProfileName;
                 if (!await DisconnectCurrentTunnelAsync(false))
-                {
-                    HandleNativeCleanupFailure(profile, "native tunnel query failure cleanup", _wiresock.LastError);
                     return;
-                }
 
                 if (!_shutdownComplete)
                     MessageBox.Show(
@@ -831,7 +891,9 @@ namespace WireSockUI.Forms
         private bool ShouldStopTunnelFailureHandling(int generation)
         {
             return _shutdownComplete || IsDisposed || Disposing || IsNativeRecoveryRequired() ||
-                   generation != CurrentTunnelGeneration() || _currentState == ConnectionState.Disconnected;
+                   generation != CurrentTunnelGeneration() ||
+                   _currentState == ConnectionState.Disconnected ||
+                   _currentState == ConnectionState.Indeterminate;
         }
 
         private async Task HandleTunnelConnectionTimeoutAsync(int generation)
@@ -863,13 +925,12 @@ namespace WireSockUI.Forms
                 IsTunnelConnectionTimedOut(generation))
                 return false;
 
-            Volatile.Write(ref _tunnelConnectionTimeoutGeneration, generation);
-            return true;
+            return _tunnelSession.TryMarkConnectionTimedOut(generation);
         }
 
         private bool IsTunnelConnectionTimedOut(int generation)
         {
-            return Volatile.Read(ref _tunnelConnectionTimeoutGeneration) == generation;
+            return _tunnelSession.IsConnectionTimedOut(generation);
         }
 
         private async Task DisconnectTimedOutTunnelAsync(int generation)
@@ -878,12 +939,8 @@ namespace WireSockUI.Forms
                 _currentState != ConnectionState.Connecting || !IsTunnelConnectionTimedOut(generation))
                 return;
 
-            var profile = _wiresock.ProfileName;
             if (!await DisconnectCurrentTunnelAsync(false))
-            {
-                HandleNativeCleanupFailure(profile, "tunnel connection timeout cleanup", _wiresock.LastError);
                 return;
-            }
 
             if (!_shutdownComplete)
                 MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
@@ -914,17 +971,22 @@ namespace WireSockUI.Forms
             }
 
             BeginTimedOutConnectCleanup();
-            ScheduleTimedOutConnectCleanup(connectTask, generation, profile);
+            Global.WriteNativeRecoveryMarker("tunnel connect timeout",
+                $"The native connect call for profile '{profile}' did not return within {TunnelConnectionTimeoutMilliseconds} ms.");
+            var cleanupUiGeneration = generation;
 
             if (!_shutdownComplete && generation == CurrentTunnelGeneration() &&
                 _currentState == ConnectionState.Connecting)
             {
-                Volatile.Write(ref _tunnelConnectionTimeoutGeneration, generation);
-                UpdateState(ConnectionState.Disconnected, false, profile);
+                _tunnelSession.TryMarkConnectionTimedOut(generation);
+                UpdateState(ConnectionState.Indeterminate, false, profile);
+                cleanupUiGeneration = CurrentTunnelGeneration();
                 SetActivateButtonEnabled(false);
                 MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
             }
+
+            ScheduleTimedOutConnectCleanup(connectTask, cleanupUiGeneration, profile);
 
             return null;
         }
@@ -932,8 +994,6 @@ namespace WireSockUI.Forms
         private void ScheduleTimedOutConnectCleanup(Task<ConnectAttemptResult> connectTask, int generation,
             string profile)
         {
-            ScheduleTimedOutConnectRecoveryWatchdog(profile);
-
             connectTask.ContinueWith(task =>
             {
                 var cleanupTask = CompleteTimedOutConnectCleanupAsync(task, generation, profile);
@@ -943,19 +1003,6 @@ namespace WireSockUI.Forms
                     CancellationToken.None,
                     TaskContinuationOptions.OnlyOnFaulted,
                     TaskScheduler.Default);
-            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
-        }
-
-        private void ScheduleTimedOutConnectRecoveryWatchdog(string profile)
-        {
-            Task.Delay(TimedOutConnectCleanupRecoveryMilliseconds).ContinueWith(_ =>
-            {
-                if (_shutdownComplete || !IsTimedOutConnectCleanupInProgress())
-                    return;
-
-                TryResetNetworkLockAfterNativeCleanupFailure("stalled timed-out connect cleanup");
-                MarkNativeRecoveryRequired(profile, "stalled timed-out connect cleanup");
-                EndTimedOutConnectCleanup(profile);
             }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
 
@@ -1015,14 +1062,20 @@ namespace WireSockUI.Forms
                     TryResetNetworkLockAfterNativeCleanupFailure("timed-out connect cleanup");
                     MarkNativeRecoveryRequired(profile, "timed-out connect cleanup failure");
                 }
+                else
+                {
+                    Global.TryDeleteNativeRecoveryMarker();
+                }
 
                 EndTimedOutConnectCleanup(profile);
             }
 
             TryRunOnUiThread(() =>
             {
-                if (!_shutdownComplete && generation == CurrentTunnelGeneration() &&
-                    _currentState == ConnectionState.Connecting)
+                if (!cleanupFailed && !IsNativeRecoveryRequired() && !_shutdownComplete &&
+                    generation == CurrentTunnelGeneration() &&
+                    (_currentState == ConnectionState.Connecting ||
+                     _currentState == ConnectionState.Indeterminate))
                     UpdateState(ConnectionState.Disconnected, false, profile);
             });
         }
@@ -1070,7 +1123,16 @@ namespace WireSockUI.Forms
                         return;
                     }
 
-                    if (!connected) continue;
+                    if (!connected)
+                    {
+                        worker.ReportProgress(0, new TunnelStateProgress
+                        {
+                            Generation = generation,
+                            TunnelInactive = true
+                        });
+                        e.Cancel = true;
+                        return;
+                    }
 
                     if (!_wiresock.TryGetState(out var stats, out var statsDiagnostic))
                     {
@@ -1097,6 +1159,12 @@ namespace WireSockUI.Forms
                     progress.Generation != CurrentTunnelGeneration() || _currentState != ConnectionState.Connected)
                     return;
 
+                if (progress.TunnelInactive)
+                {
+                    _ = HandleTunnelInactiveAsync(progress.Generation);
+                    return;
+                }
+
                 if (!string.IsNullOrWhiteSpace(progress.Diagnostic))
                 {
                     _ = HandleTunnelQueryFailureAsync(progress.Generation, progress.Diagnostic);
@@ -1106,7 +1174,7 @@ namespace WireSockUI.Forms
                 var stats = progress.Stats;
 
                 if (layoutState.Controls["txtHandshake"] is TextBox txtHandshake)
-                    txtHandshake.Text = stats.time_since_last_handshake.AsTimeAgo();
+                    txtHandshake.Text = stats.time_since_last_handshake.AsHandshakeAge();
 
                 if (layoutState.Controls["txtTransfer"] is TextBox txtTransfer)
                     txtTransfer.Text = string.Format(Resources.StateTransferValue,
@@ -1140,6 +1208,37 @@ namespace WireSockUI.Forms
             };
 
             return worker;
+        }
+
+        private async Task HandleTunnelInactiveAsync(int generation)
+        {
+            while (!TryBeginTunnelOperation(false))
+            {
+                if (ShouldStopTunnelFailureHandling(generation))
+                    return;
+
+                await Task.Delay(100);
+            }
+
+            try
+            {
+                if (ShouldStopTunnelFailureHandling(generation))
+                    return;
+
+                Trace.TraceWarning("The native tunnel became inactive unexpectedly; releasing its SDK handle.");
+                if (!await DisconnectCurrentTunnelAsync())
+                    return;
+
+                if (!_shutdownComplete)
+                    MessageBox.Show(
+                        Resources.ResourceManager.GetString("TunnelStoppedUnexpectedly") ??
+                        "The tunnel stopped unexpectedly. WireSock UI released its native resources.",
+                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+            finally
+            {
+                EndTunnelOperation();
+            }
         }
 
         /// <summary>
@@ -1338,6 +1437,33 @@ namespace WireSockUI.Forms
                             string.Format(Resources.ToastInactiveMessage, activeProfileName));
 #endif
                     break;
+                case ConnectionState.Indeterminate:
+                    CancelTunnelMonitoring();
+
+                    if (btnActivate != null)
+                    {
+                        btnActivate.Text = Resources.ButtonInactive;
+                        SetActivateButtonEnabled(false);
+                    }
+
+                    if (imgStatus != null)
+                    {
+                        SetStatusImage(imgStatus, _inactiveStatusImage);
+                        if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusRecoveryRequired;
+                    }
+
+                    trayIcon.Text = Resources.InterfaceStatusRecoveryRequired;
+                    cmiStatus.Text = Resources.InterfaceStatusRecoveryRequired;
+                    cmiAddresses.Text = string.Empty;
+                    cmiAddresses.Visible = false;
+                    cmiDeactivateTunnel.Enabled = false;
+                    cmiResetKillSwitch.Enabled = !IsTimedOutConnectCleanupInProgress();
+
+                    if (TryGetProfileItem(activeProfileName, out var indeterminateProfile))
+                        indeterminateProfile.ImageKey = ConnectionState.Indeterminate.ToString();
+
+                    gbxState.Visible = false;
+                    break;
             }
 
         }
@@ -1352,6 +1478,7 @@ namespace WireSockUI.Forms
 
             ShowPendingNativeRecoveryWarning();
             var recoveryBlocksTunnelOperations = IsNativeRecoveryRequired();
+            var approvedLegacyProfileThisLaunch = ReviewPendingLegacyProfiles();
 
             if (Settings.Default.AutoMinimize)
             {
@@ -1364,13 +1491,76 @@ namespace WireSockUI.Forms
                 lstProfiles.Items[Settings.Default.LastProfile].Selected = true;
 
             // Connect to the last used configuration, if required.
-            if (!Settings.Default.AutoConnect || recoveryBlocksTunnelOperations) return;
+            if (!Settings.Default.AutoConnect || recoveryBlocksTunnelOperations || approvedLegacyProfileThisLaunch)
+                return;
 
             if (lstProfiles.Items.ContainsKey(Settings.Default.LastProfile))
                 OnProfileClick(lstProfiles, EventArgs.Empty);
             else
                 MessageBox.Show(Resources.LastProfileNotFound, Resources.DialogAutoConnect, MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+        }
+
+        private bool ReviewPendingLegacyProfiles()
+        {
+            var approvedAny = false;
+            IReadOnlyList<string> pendingProfiles;
+            try
+            {
+                pendingProfiles = LegacyProfileMigrationService.GetPendingProfileNames();
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to enumerate staged legacy profiles: {ex.Message}");
+                MessageBox.Show(
+                    $"WireSock UI could not inspect staged legacy profiles.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return false;
+            }
+
+            foreach (var profileName in pendingProfiles)
+            {
+                var profileSaved = false;
+                var review = MessageBox.Show(
+                    $"Legacy profile '{profileName}' is quarantined and cannot be activated yet.{Environment.NewLine}{Environment.NewLine}" +
+                    "Review its endpoint, DNS, routes, application filters, and scripts before approving it. Review now?",
+                    Resources.EditProfileTitle, MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                if (review != DialogResult.Yes)
+                    continue;
+
+                try
+                {
+                    using (var form = new FrmEdit(
+                               profileName,
+                               LegacyProfileMigrationService.GetPendingProfilePath(profileName)))
+                    {
+                        form.Owner = this;
+                        if (form.ShowDialog() != DialogResult.OK || string.IsNullOrWhiteSpace(form.ReturnValue))
+                            continue;
+                    }
+
+                    approvedAny = true;
+                    profileSaved = true;
+                    LegacyProfileMigrationService.CompleteApprovedMigration(profileName);
+                }
+                catch (Exception ex)
+                {
+                    var action = profileSaved
+                        ? "remove the reviewed legacy source files after saving"
+                        : "approve";
+                    Trace.TraceWarning($"Unable to {action} legacy profile '{profileName}': {ex.Message}");
+                    MessageBox.Show(
+                        profileSaved
+                            ? $"The profile was saved, but WireSock UI could not remove its quarantined legacy files.{Environment.NewLine}{Environment.NewLine}{ex.Message}"
+                            : ex.Message,
+                        Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+
+            if (approvedAny)
+                LoadProfiles();
+
+            return approvedAny;
         }
 
         private async void OnDisconnectClick(object sender, EventArgs e)
@@ -1380,7 +1570,8 @@ namespace WireSockUI.Forms
 
             try
             {
-                await DisconnectCurrentTunnelAsync();
+                if (!await DisconnectCurrentTunnelAsync())
+                    return;
             }
             finally
             {
@@ -1640,29 +1831,38 @@ namespace WireSockUI.Forms
             var shouldApplyNativeState =
                 requestedEnableKillSwitch != previousEnableKillSwitch ||
                 _wiresock.HasTunnelHandle;
+            var result = PersistedSettingTransaction.Apply(
+                requestedEnableKillSwitch,
+                previousEnableKillSwitch,
+                value => Settings.Default.EnableKillSwitch = value,
+                Settings.Default.Save,
+                () => !shouldApplyNativeState || ApplyKillSwitchSetting(requestedEnableKillSwitch));
 
-            if (shouldApplyNativeState && !ApplyKillSwitchSetting(requestedEnableKillSwitch))
+            switch (result.Status)
             {
-                Settings.Default.EnableKillSwitch = previousEnableKillSwitch;
-                return false;
-            }
+                case PersistedSettingUpdateStatus.Succeeded:
+                    return true;
+                case PersistedSettingUpdateStatus.InitialSaveFailed:
+                    MessageBox.Show(string.Format(Resources.SettingsSaveError, result.Exception?.Message),
+                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return false;
+                case PersistedSettingUpdateStatus.RollbackSaveFailed:
+                    Trace.TraceError(
+                        $"Unable to roll back the Kill Switch preference after the native update failed: {result.Exception?.Message}");
+                    MessageBox.Show(string.Format(Resources.SettingsSaveError, result.Exception?.Message),
+                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return false;
+                case PersistedSettingUpdateStatus.RuntimeApplyFailed:
+                    if (result.Exception != null)
+                    {
+                        Trace.TraceWarning($"Unable to apply the Kill Switch runtime state: {result.Exception.Message}");
+                        MessageBox.Show(result.Exception.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
+                            MessageBoxIcon.Error);
+                    }
 
-            Settings.Default.EnableKillSwitch = requestedEnableKillSwitch;
-            try
-            {
-                Settings.Default.Save();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(string.Format(Resources.SettingsSaveError, ex.Message), Resources.TunnelErrorTitle,
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-                Settings.Default.EnableKillSwitch = previousEnableKillSwitch;
-                if (requestedEnableKillSwitch != previousEnableKillSwitch)
-                    ApplyKillSwitchSetting(previousEnableKillSwitch);
-
-                return false;
+                    return false;
+                default:
+                    throw new InvalidOperationException("Unknown Kill Switch settings update result.");
             }
         }
 
@@ -1720,23 +1920,71 @@ namespace WireSockUI.Forms
             }
         }
 
-        private void OnResetKillSwitchClick(object sender, EventArgs e)
+        private async void OnResetKillSwitchClick(object sender, EventArgs e)
         {
-            if (_currentState != ConnectionState.Disconnected || IsTimedOutConnectCleanupInProgress())
+            if ((_currentState != ConnectionState.Disconnected &&
+                 _currentState != ConnectionState.Indeterminate) || IsTimedOutConnectCleanupInProgress())
                 return;
 
-            if (!WireSockManager.TryResetNetworkLock(out var diagnostic))
+            if (!_tunnelSession.TryBeginRecoveryOperation(out var blockReason))
             {
-                MessageBox.Show(
-                    $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{diagnostic}",
-                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                var message = blockReason == TunnelOperationBlockReason.CleanupPending
+                    ? Resources.TunnelConnectCleanupPending
+                    : Resources.TunnelOperationPending;
+                ShowTunnelOperationBlockedMessage(message);
                 return;
             }
 
-            Global.TryDeleteNativeRecoveryMarker();
+            cmiResetKillSwitch.Enabled = false;
+            var profile = _wiresock.ProfileName;
 
-            MessageBox.Show(Resources.KillSwitchResetSuccess, Resources.KillSwitchResetTitle,
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            try
+            {
+                var handleReleased = !_wiresock.HasTunnelHandle ||
+                                     await DisconnectNativeTunnelAsync(showWarning: false);
+                var networkLockReset = WireSockManager.TryResetNetworkLock(out var diagnostic);
+
+                if (!networkLockReset || !handleReleased)
+                {
+                    var failureDiagnostic = !networkLockReset
+                        ? diagnostic
+                        : _wiresock.LastError ?? Resources.TunnelHandleReleaseWarning;
+                    Global.WriteNativeRecoveryMarker("manual Kill Switch recovery", failureDiagnostic);
+                    _tunnelSession.RequireRecovery();
+                    SetNativeRecoveryUi(profile);
+
+                    var message = !networkLockReset
+                        ? $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{diagnostic}"
+                        : Resources.TunnelHandleReleaseWarning;
+                    MessageBox.Show(message, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                Global.TryDeleteNativeRecoveryMarker();
+                _tunnelSession.ClearRecovery();
+                UpdateState(ConnectionState.Disconnected, false, profile);
+
+                MessageBox.Show(Resources.KillSwitchResetSuccess, Resources.KillSwitchResetTitle,
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Manual Kill Switch recovery failed unexpectedly: {ex.Message}");
+                _tunnelSession.RequireRecovery();
+                SetNativeRecoveryUi(profile);
+                MessageBox.Show(
+                    $"{Resources.KillSwitchResetError}{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                _tunnelSession.EndOperation();
+                if (!_shutdownComplete && !IsDisposed && !Disposing)
+                    cmiResetKillSwitch.Enabled = !IsTimedOutConnectCleanupInProgress() &&
+                                                 (_currentState == ConnectionState.Disconnected ||
+                                                  _currentState == ConnectionState.Indeterminate);
+            }
         }
 
         /// <summary>

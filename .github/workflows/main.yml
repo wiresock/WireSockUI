@@ -1,32 +1,41 @@
 name: 'Build and publish release'
 
+permissions:
+  contents: read
+
 on:
   push:
     tags:
-      - '*'
+      - 'v*'
 
 jobs:
   test:
     runs-on: windows-latest
     steps:
       - name: Checkout from GitHub
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.ref }}
 
       - name: Setup dotnet
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.x'
 
+      - name: Restore
+        run: dotnet restore WireSockUI.sln -p:Platform=x64
+
+      - name: Verify formatting
+        run: dotnet format WireSockUI.sln whitespace --verify-no-changes --no-restore
+
       - name: Test
-        run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows
+        run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Platform=x64 -p:UseSharedCompilation=false --no-restore
 
   build-and-package:
     needs: test
     strategy:
       matrix:
-        platform: ['AnyCPU', 'ARM64']
+        platform: ['AnyCPU', 'x64', 'ARM64']
         framework: ['net472-windows']
         build_configuration: ['Release', 'Release UWP']
         include:
@@ -36,65 +45,172 @@ jobs:
             uwp_suffix: ''
     runs-on: windows-latest
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
     env:
       ARTIFACT_ZIP_NAME: 'WireSockUI-${{ github.ref_name }}-${{ matrix.platform }}${{ matrix.uwp_suffix }}'
       ARTIFACT_SRC_PATH: 'bin/${{ matrix.platform }}/${{ matrix.build_configuration }}/${{ matrix.framework }}/publish/'
     steps:
       - name: Checkout from GitHub
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.ref }}
 
       - name: Setup dotnet
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: '10.x'
 
       - name: Parse Version
-        shell: bash
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          # Strip "v" prefix from tag name 
-          WIRESOCKUI_VERSION=$(echo ${{ github.ref_name }} | sed -e 's/^v//') 
-          echo "WIRESOCKUI_VERSION=${WIRESOCKUI_VERSION}" >> $GITHUB_ENV
+          if ($env:RELEASE_TAG -notmatch '^v(?<version>(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*))$') {
+            throw "Release tag '$env:RELEASE_TAG' must use the vMAJOR.MINOR.PATCH format."
+          }
+
+          "WIRESOCKUI_VERSION=$($Matches.version)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build
         run: dotnet publish WireSockUI/WireSockUI.csproj --configuration "${{ matrix.build_configuration }}" --framework "${{ matrix.framework }}" --no-self-contained /p:Platform="${{ matrix.platform }}" /p:UseSharedCompilation=false /p:Version="${{ env.WIRESOCKUI_VERSION }}" /p:Repository="${{ github.repository }}" -m:1
 
-      - name: Create zip archive
-        shell: bash
+      - name: Import signing certificate
+        shell: pwsh
+        env:
+          SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
+          SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_PASSWORD }}
         run: |
-          # Exclude .pdb and .winmd files
-          cd "${{ env.ARTIFACT_SRC_PATH }}"
-          7z a -tzip "${{ github.workspace }}/${{ env.ARTIFACT_ZIP_NAME }}.zip" . -xr!*.pdb -xr!*.winmd
+          if ([string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_BASE64)) {
+            throw 'WINDOWS_SIGNING_CERTIFICATE_BASE64 is required for release publication.'
+          }
+
+          $pfxPath = Join-Path $env:RUNNER_TEMP 'wiresockui-signing.pfx'
+          try {
+            [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
+            $password = ConvertTo-SecureString $env:SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
+            $certificates = @(Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation Cert:\CurrentUser\My -Password $password)
+            $certificate = $certificates | Where-Object HasPrivateKey | Select-Object -First 1
+            if ($null -eq $certificate) {
+              throw 'The release signing certificate could not be imported with its private key.'
+            }
+
+            "SIGNING_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          }
+          finally {
+            Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Sign and verify executable
+        shell: pwsh
+        run: |
+          $executable = Join-Path '${{ env.ARTIFACT_SRC_PATH }}' 'WireSockUI.exe'
+          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+              -Filter signtool.exe -Recurse -File -ErrorAction Stop |
+            Where-Object { $_.DirectoryName.EndsWith('\x64', [StringComparison]::OrdinalIgnoreCase) } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if ([string]::IsNullOrWhiteSpace($signTool)) { throw 'signtool.exe was not found.' }
+
+          & $signTool sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /sha1 $env:SIGNING_CERTIFICATE_THUMBPRINT $executable
+          if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE." }
+
+          $signature = Get-AuthenticodeSignature -FilePath $executable
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+            throw "Signed executable verification failed: $($signature.StatusMessage)"
+          }
+
+      - name: Generate SPDX SBOM
+        shell: pwsh
+        run: |
+          $toolPath = Join-Path $env:RUNNER_TEMP 'sbom-tool'
+          dotnet tool install Microsoft.Sbom.DotNetTool --tool-path $toolPath --version 4.1.5
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to install the pinned Microsoft SBOM tool.' }
+
+          & (Join-Path $toolPath 'sbom-tool.exe') generate `
+            -b '${{ env.ARTIFACT_SRC_PATH }}' `
+            -bc '${{ github.workspace }}' `
+            -pn WireSockUI `
+            -pv '${{ env.WIRESOCKUI_VERSION }}' `
+            -ps Wiresock-Foundation `
+            -nsb 'https://github.com/${{ github.repository }}' `
+            -V Information
+          if ($LASTEXITCODE -ne 0) { throw 'SBOM generation failed.' }
+
+      - name: Create zip archive
+        shell: pwsh
+        run: |
+          $source = Resolve-Path '${{ env.ARTIFACT_SRC_PATH }}'
+          $archive = Join-Path '${{ github.workspace }}' '${{ env.ARTIFACT_ZIP_NAME }}.zip'
+          Push-Location $source
+          try {
+            & 7z a -tzip $archive . -xr!*.pdb -xr!*.winmd
+            if ($LASTEXITCODE -ne 0) { throw "7z failed with exit code $LASTEXITCODE." }
+          }
+          finally {
+            Pop-Location
+          }
+
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $archive).Hash.ToLowerInvariant()
+          "$hash  $([IO.Path]::GetFileName($archive))" |
+            Set-Content -LiteralPath "$archive.sha256" -Encoding ascii
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: '${{ env.ARTIFACT_ZIP_NAME }}'
-          path: '${{ env.ARTIFACT_ZIP_NAME }}.zip'
+          path: |
+            ${{ env.ARTIFACT_ZIP_NAME }}.zip
+            ${{ env.ARTIFACT_ZIP_NAME }}.zip.sha256
           if-no-files-found: error
+
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@96b4a1ef7235a096b17240c259729fdd70c83d45 # v2
+        with:
+          subject-path: '${{ env.ARTIFACT_ZIP_NAME }}.*'
+
+      - name: Remove signing certificate
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_THUMBPRINT)) {
+            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:SIGNING_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
+          }
 
   upload-release:
     if: ${{ success() }}
     needs: build-and-package
     runs-on: windows-latest
+    permissions:
+      contents: write
     steps:
-      - name: Checkout from GitHub
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.ref }}
-
       - name: Download artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: 'artifacts'
 
       - name: Upload Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: 'artifacts/**/*.zip'
-          name: 'WireSockUI-${{ github.ref_name }}'
-          tag: ${{ github.ref_name }}
-          token: ${{ secrets.MY_GITHUB_PAT }}
-          skipIfReleaseExists: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $assets = @(Get-ChildItem -LiteralPath artifacts -Recurse -File |
+            Where-Object { $_.Name.EndsWith('.zip') -or $_.Name.EndsWith('.zip.sha256') } |
+            Select-Object -ExpandProperty FullName)
+          if ($assets.Count -eq 0) { throw 'No signed release artifacts were downloaded.' }
+
+          gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload '${{ github.ref_name }}' $assets `
+              --repo '${{ github.repository }}' `
+              --clobber
+          }
+          else {
+            gh release create '${{ github.ref_name }}' $assets `
+              --repo '${{ github.repository }}' `
+              --verify-tag `
+              --title 'WireSockUI-${{ github.ref_name }}' `
+              --generate-notes
+          }
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release publication failed with exit code $LASTEXITCODE." }

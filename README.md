@@ -43,7 +43,7 @@ Amnezia 2.0 padding values `S1` through `S4` must be in the range `0..1279`. Whe
 - User-scoped settings are upgraded once after installing a new application version, preserving autorun, profile, adapter, notification, logging, and Kill Switch preferences.
 - Profiles that remain writable by non-administrative users after startup hardening are not listed or activated. ACL hardening failures now stop initialization instead of continuing with a privileged, mutable configuration.
 
-Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are moved into the secured folder on startup when no secured profile with the same name exists. Legacy migration and manual import use bounded temporary copies and reject reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. If a secured profile already exists, the legacy copy is deleted only when its content matches. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening, and unsafe directories or failed ACL updates stop startup. Legacy profiles containing script hooks are not auto-migrated; import them manually so the hook warning can be reviewed.
+Profiles are stored in `%ProgramData%\WireSockUI\Configs` with an administrators-only ACL because WireSockUI runs elevated. Existing profiles from the older per-user `%AppData%\WireSockUI\Configs` folder are copied into `%ProgramData%\WireSockUI\PendingLegacyProfiles` and presented for explicit review in the full profile editor. The legacy source remains untouched until the reviewed profile is saved successfully; approval then removes the staged copy and original source. Name collisions are never overwritten automatically. Legacy migration and manual import use bounded temporary copies and reject reparse-point sources; profiles larger than 1 MiB must be moved or trimmed manually. Profile files that are reparse points are not loaded, imported, saved over, or activated; app-owned reparse-point files in the secured profile tree are removed during startup hardening, and unsafe directories or failed ACL updates stop startup. Script hooks are displayed and require confirmation before the reviewed profile can be saved or activated.
 
 Runtime state that can be written by the elevated process, including the native recovery marker, is kept under the secured `%ProgramData%\WireSockUI` folder rather than per-user AppData. The UWP notification icon is stored under a dedicated `%ProgramData%\WireSockUI-Notifications` folder with a read-only Users ACL so the toast platform can load it without allowing unelevated writes.
 
@@ -53,7 +53,9 @@ Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks req
 
 The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel, preserves the native lock during reconnect/profile-switch cleanup, and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
 
-If a native connect cleanup call does not return, WireSockUI attempts to reset the network lock and disables further tunnel operations with a recovery warning instead of leaving the Activate button silently stuck. Shutdown cleanup timeouts do not block process exit; if WireSockUI cannot verify/reset the network lock during shutdown it writes a secured recovery marker and shows a visible startup warning on the next elevated launch. Restart WireSockUI as administrator and use **Reset Kill Switch** from the tray menu while disconnected or in recovery mode if network access remains blocked.
+If a native connect or cleanup call does not return, WireSockUI marks the state as indeterminate and disables further tunnel operations. It does not issue a concurrent reset against the process-global SDK while the original call is still executing. Once that call returns, WireSockUI performs sequence-checked cleanup and records a secured recovery marker if the outcome remains uncertain. Shutdown cleanup timeouts do not block process exit; the next elevated launch always queries the global network-lock state, including when no marker could be written. Use **Reset Kill Switch** from the tray menu while disconnected or in recovery mode if network access remains blocked.
+
+Bounded diagnostic logs are written to `%ProgramData%\WireSockUI\Logs\WireSockUI.log`. The current log is limited to 1 MiB with three rotated archives, uses an administrators-only ACL, and redacts WireGuard private keys, preshared keys, SOCKS5 passwords, and URI credentials. Include these logs when reporting startup, recovery, or SDK-loading failures.
 
 ## Compatibility Notes
 
@@ -71,6 +73,15 @@ dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:Use
 ```
 
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
+
+## Releases
+
+The release workflow signs `WireSockUI.exe`, verifies the Authenticode signature, generates an SPDX SBOM, publishes the ZIP with a SHA-256 checksum, and creates a GitHub artifact-provenance attestation. Configure these repository secrets before publishing a tag:
+
+- `WINDOWS_SIGNING_CERTIFICATE_BASE64`: base64-encoded PFX containing the code-signing certificate and private key.
+- `WINDOWS_SIGNING_CERTIFICATE_PASSWORD`: password for that PFX.
+
+Release tags must use the `vMAJOR.MINOR.PATCH` form. The workflow uses the repository `GITHUB_TOKEN`; a separate release PAT is not required.
 
 ## Remaining Runtime Risks
 

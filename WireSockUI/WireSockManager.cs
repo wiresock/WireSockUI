@@ -45,6 +45,9 @@ namespace WireSockUI
         private readonly IWireSockNativeApi _nativeApi;
 
         private const int MaxQueuedLogMessages = 1000;
+        private const string DroppedHandleDiagnostic =
+            "The native tunnel was already dropped, but its handle could not be released. Retry disconnect or restart WireSock UI.";
+        private static readonly object NativeOperationSyncRoot = new object();
         private readonly BlockingCollection<LogMessage> _logQueue;
         private readonly object _logQueueSyncRoot = new object();
         private readonly BackgroundWorker _logWorker;
@@ -54,6 +57,7 @@ namespace WireSockUI
         private WgbLogLevel _logLevel;
         private GCHandle _logPrinterHandle;
         private long _connectionSequence;
+        private bool _handleTunnelDropped;
         private volatile bool _disposed;
 
         /// <summary>
@@ -74,15 +78,26 @@ namespace WireSockUI
                 new ConcurrentQueue<LogMessage>(),
                 MaxQueuedLogMessages);
             _logWorker = InitializeLogWorker(logMessageCallback);
-            _logWorker.RunWorkerAsync();
 
             TunnelMode = Mode.Transparent;
 
             // Create a new instance of the LogPrinter delegate
             _logPrinter = PrintNativeLog;
 
-            // Create a GCHandle to keep the delegate alive
-            _logPrinterHandle = GCHandle.Alloc(_logPrinter);
+            try
+            {
+                // Create a GCHandle to keep the delegate alive
+                _logPrinterHandle = GCHandle.Alloc(_logPrinter);
+                _logWorker.RunWorkerAsync();
+            }
+            catch
+            {
+                if (_logPrinterHandle.IsAllocated)
+                    _logPrinterHandle.Free();
+                _logWorker.Dispose();
+                _logQueue.Dispose();
+                throw;
+            }
         }
 
         /// <summary>
@@ -102,6 +117,10 @@ namespace WireSockUI
                 lock (_syncRoot)
                 {
                     ThrowIfDisposed();
+
+                    if (value != Mode.Transparent && value != Mode.VirtualAdapter)
+                        throw new ArgumentOutOfRangeException(nameof(value), value,
+                            "WireSock tunnel mode must be Transparent or VirtualAdapter.");
 
                     if (value == _adapterMode)
                         return;
@@ -147,11 +166,19 @@ namespace WireSockUI
                 {
                     ThrowIfDisposed();
 
+                    if (_handleTunnelDropped)
+                        throw new InvalidOperationException(DroppedHandleDiagnostic);
+
                     _logLevel = value;
 
                     // Update loglevel directly if instantiated
                     if (_handle != IntPtr.Zero)
-                        _nativeApi.SetLogLevel(_adapterMode, _handle, value);
+                    {
+                        lock (NativeOperationSyncRoot)
+                        {
+                            _nativeApi.SetLogLevel(_adapterMode, _handle, value);
+                        }
+                    }
                 }
             }
         }
@@ -178,13 +205,28 @@ namespace WireSockUI
                 connected = false;
                 diagnostic = null;
 
+                if (_disposed)
+                {
+                    diagnostic = "The WireSock manager has been disposed.";
+                    return false;
+                }
+
                 if (_handle == IntPtr.Zero)
                     return true;
 
+                if (_handleTunnelDropped)
+                {
+                    diagnostic = DroppedHandleDiagnostic;
+                    return false;
+                }
+
                 try
                 {
-                    return NativeCall.TryQuery(() => _nativeApi.GetTunnelActive(_adapterMode, _handle), value => !value, out connected,
-                        out diagnostic);
+                    lock (NativeOperationSyncRoot)
+                    {
+                        return NativeCall.TryQuery(() => _nativeApi.GetTunnelActive(_adapterMode, _handle),
+                            value => !value, out connected, out diagnostic);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -227,6 +269,9 @@ namespace WireSockUI
                     if (_handle == IntPtr.Zero)
                         throw new InvalidOperationException("Kill Switch mode cannot be changed before a tunnel handle is allocated.");
 
+                    if (_handleTunnelDropped)
+                        throw new InvalidOperationException(DroppedHandleDiagnostic);
+
                     if (!SetNetworkLockMode(value))
                         throw new InvalidOperationException(
                             LastError ?? "Failed to update Kill Switch network lock mode.");
@@ -252,16 +297,32 @@ namespace WireSockUI
                 enabled = false;
                 diagnostic = null;
 
+                if (_disposed)
+                {
+                    diagnostic = "The WireSock manager has been disposed.";
+                    return false;
+                }
+
                 if (_handle == IntPtr.Zero)
                     return true;
 
+                if (_handleTunnelDropped)
+                {
+                    diagnostic = DroppedHandleDiagnostic;
+                    return false;
+                }
+
                 try
                 {
-                    if (!NativeCall.TryQuery(() => _nativeApi.GetNetworkLockMode(_adapterMode, _handle),
-                            value => value == WgbNetworkLockMode.Disabled, out var mode, out diagnostic))
+                    WgbNetworkLockMode mode;
+                    lock (NativeOperationSyncRoot)
                     {
-                        PrintLog($"Failed to query kill switch network lock mode: {diagnostic}");
-                        return false;
+                        if (!NativeCall.TryQuery(() => _nativeApi.GetNetworkLockMode(_adapterMode, _handle),
+                                value => value == WgbNetworkLockMode.Disabled, out mode, out diagnostic))
+                        {
+                            PrintLog($"Failed to query kill switch network lock mode: {diagnostic}");
+                            return false;
+                        }
                     }
 
                     if (mode != WgbNetworkLockMode.Disabled && mode != WgbNetworkLockMode.Enabled)
@@ -515,90 +576,97 @@ namespace WireSockUI
 
             lock (_syncRoot)
             {
-                ThrowIfDisposed();
-                LastError = null;
-
-                try
+                lock (NativeOperationSyncRoot)
                 {
-                    if (!Profile.IsRegularProfileFile(profilePath, out var profileDiagnostic))
-                        return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
-
-                    if (_handle != IntPtr.Zero && !DropCurrentHandle(true, preserveNetworkLock: Settings.Default.EnableKillSwitch))
-                        return ShowTunnelError(
-                            "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");
-
-                    if (_handle == IntPtr.Zero)
-                    {
-                        NativeCall.ClearLastError();
-                        _handle = _nativeApi.GetHandle(_adapterMode, _logPrinter, _logLevel, false);
-                    }
-
-                    if (_handle == IntPtr.Zero)
-                        return ShowTunnelError(Resources.TunnelErrorManager);
-
-                    if (Settings.Default.EnableKillSwitch && !SetNetworkLockMode(true))
-                    {
-                        DropFailedConnectHandle();
-                        return false;
-                    }
-
-                    NativeCall.ClearLastError();
-                    if (!_nativeApi.CreateTunnelFromFile(_adapterMode, _handle, profilePath))
-                    {
-                        ShowTunnelError(Resources.TunnelErrorCreate);
-
-                        DropFailedConnectHandle();
-                        return false;
-                    }
-
-                    NativeCall.ClearLastError();
-                    if (!_nativeApi.StartTunnel(_adapterMode, _handle))
-                    {
-                        ShowTunnelError(Resources.TunnelErrorStart);
-
-                        DropFailedConnectHandle();
-                        return false;
-                    }
-
-                    if (_adapterMode == Mode.VirtualAdapter)
-                    {
-                        try
-                        {
-                            ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
-                        }
-                        catch (Exception ex)
-                        {
-                            PrintLog($"Tunnel is active, but WireSock UI could not rename the virtual adapter: {ex.Message}");
-                        }
-                    }
+                    return ConnectLocked(profile, profilePath);
                 }
-                catch (DllNotFoundException ex)
-                {
-                    DropFailedConnectHandle();
-                    return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
-                }
-                catch (EntryPointNotFoundException ex)
-                {
-                    DropFailedConnectHandle();
-                    return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
-                }
-                catch (BadImageFormatException ex)
-                {
-                    DropFailedConnectHandle();
-                    return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
-                }
-                catch (Exception ex)
-                {
-                    DropFailedConnectHandle();
-                    return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
-                }
-
-                // Update connected profile
-                ProfileName = profile;
-                _connectionSequence++;
-
-                return true;
             }
+        }
+
+        private bool ConnectLocked(string profile, string profilePath)
+        {
+            ThrowIfDisposed();
+            LastError = null;
+
+            try
+            {
+                if (!Profile.IsRegularProfileFile(profilePath, out var profileDiagnostic))
+                    return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
+
+                if (_handle != IntPtr.Zero &&
+                    !DropCurrentHandle(true, preserveNetworkLock: Settings.Default.EnableKillSwitch))
+                    return ShowTunnelError(
+                        "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");
+
+                if (_handle == IntPtr.Zero)
+                {
+                    NativeCall.ClearLastError();
+                    _handle = _nativeApi.CreateHandle(_adapterMode, _logPrinter, _logLevel, false, false);
+                    _handleTunnelDropped = false;
+                }
+
+                if (_handle == IntPtr.Zero)
+                    return ShowTunnelError(Resources.TunnelErrorManager);
+
+                if (Settings.Default.EnableKillSwitch && !SetNetworkLockMode(true))
+                {
+                    DropFailedConnectHandle();
+                    return false;
+                }
+
+                NativeCall.ClearLastError();
+                if (!_nativeApi.CreateTunnelFromFile(_adapterMode, _handle, profilePath))
+                {
+                    ShowTunnelError(Resources.TunnelErrorCreate);
+                    DropFailedConnectHandle();
+                    return false;
+                }
+
+                NativeCall.ClearLastError();
+                if (!_nativeApi.StartTunnel(_adapterMode, _handle))
+                {
+                    ShowTunnelError(Resources.TunnelErrorStart);
+                    DropFailedConnectHandle();
+                    return false;
+                }
+
+                if (_adapterMode == Mode.VirtualAdapter)
+                {
+                    try
+                    {
+                        ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
+                    }
+                    catch (Exception ex)
+                    {
+                        PrintLog($"Tunnel is active, but WireSock UI could not rename the virtual adapter: {ex.Message}");
+                    }
+                }
+            }
+            catch (DllNotFoundException ex)
+            {
+                DropFailedConnectHandle();
+                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
+            }
+            catch (EntryPointNotFoundException ex)
+            {
+                DropFailedConnectHandle();
+                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
+            }
+            catch (BadImageFormatException ex)
+            {
+                DropFailedConnectHandle();
+                return ShowTunnelError(Resources.AppUnsupportedArchMessage, ex.Message);
+            }
+            catch (Exception ex)
+            {
+                DropFailedConnectHandle();
+                return ShowTunnelError(Resources.TunnelErrorManager, ex.Message);
+            }
+
+            ProfileName = profile;
+            _connectionSequence++;
+
+            return true;
         }
 
         public bool DisconnectIfConnectionSequence(long connectionSequence, bool preserveNetworkLock = false)
@@ -619,28 +687,34 @@ namespace WireSockUI
         {
             lock (_syncRoot)
             {
-                LastError = null;
-
-                if (_handle == IntPtr.Zero)
-                    return true;
-
-                try
+                lock (NativeOperationSyncRoot)
                 {
-                    NativeCall.ClearLastError();
-                    if (!_nativeApi.StopTunnel(_adapterMode, _handle))
-                        PrintLog(
-                            $"Failed to stop tunnel cleanly: {GetLastNativeErrorOrDefault("native stop_tunnel returned false.")}");
-                }
-                catch (EntryPointNotFoundException ex)
-                {
-                    PrintLog($"Failed to stop tunnel cleanly: stop_tunnel export is unavailable. {ex.Message}");
-                }
-                catch (Exception ex)
-                {
-                    PrintLog($"Failed to stop tunnel cleanly: {ex.Message}");
-                }
+                    LastError = null;
 
-                return DropCurrentHandle(true, preserveNetworkLock: preserveNetworkLock);
+                    if (_handle == IntPtr.Zero)
+                        return true;
+
+                    if (!_handleTunnelDropped)
+                    {
+                        try
+                        {
+                            NativeCall.ClearLastError();
+                            if (!_nativeApi.StopTunnel(_adapterMode, _handle))
+                                PrintLog(
+                                    $"Failed to stop tunnel cleanly: {GetLastNativeErrorOrDefault("native stop_tunnel returned false.")}");
+                        }
+                        catch (EntryPointNotFoundException ex)
+                        {
+                            PrintLog($"Failed to stop tunnel cleanly: stop_tunnel export is unavailable. {ex.Message}");
+                        }
+                        catch (Exception ex)
+                        {
+                            PrintLog($"Failed to stop tunnel cleanly: {ex.Message}");
+                        }
+                    }
+
+                    return DropCurrentHandle(true, preserveNetworkLock: preserveNetworkLock);
+                }
             }
         }
 
@@ -666,13 +740,28 @@ namespace WireSockUI
                 state = new WgbStats();
                 diagnostic = null;
 
+                if (_disposed)
+                {
+                    diagnostic = "The WireSock manager has been disposed.";
+                    return false;
+                }
+
                 if (_handle == IntPtr.Zero)
                     return true;
 
+                if (_handleTunnelDropped)
+                {
+                    diagnostic = DroppedHandleDiagnostic;
+                    return false;
+                }
+
                 try
                 {
-                    return NativeCall.TryQuery(() => _nativeApi.GetTunnelState(_adapterMode, _handle), IsEmptyStats, out state,
-                        out diagnostic);
+                    lock (NativeOperationSyncRoot)
+                    {
+                        return NativeCall.TryQuery(() => _nativeApi.GetTunnelState(_adapterMode, _handle),
+                            IsEmptyStats, out state, out diagnostic);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -718,6 +807,7 @@ namespace WireSockUI
             if (!string.IsNullOrWhiteSpace(diagnostic))
             {
                 PrintLog($"{message} {diagnostic}");
+                System.Diagnostics.Trace.TraceWarning($"{message} {diagnostic}");
                 message = $"{message}{Environment.NewLine}{Environment.NewLine}{diagnostic}";
             }
 
@@ -744,24 +834,27 @@ namespace WireSockUI
 
         private bool SetNetworkLockMode(bool enabled)
         {
-            try
+            lock (NativeOperationSyncRoot)
             {
-                var mode = enabled ? WgbNetworkLockMode.Enabled : WgbNetworkLockMode.Disabled;
-                NativeCall.ClearLastError();
-                if (_nativeApi.SetNetworkLockMode(_adapterMode, _handle, mode))
-                    return true;
+                try
+                {
+                    var mode = enabled ? WgbNetworkLockMode.Enabled : WgbNetworkLockMode.Disabled;
+                    NativeCall.ClearLastError();
+                    if (_nativeApi.SetNetworkLockMode(_adapterMode, _handle, mode))
+                        return true;
 
-                return ShowTunnelError("Failed to update Kill Switch network lock mode.",
-                    GetLastNativeErrorOrDefault("native set_network_lock_mode returned false."));
-            }
-            catch (EntryPointNotFoundException ex)
-            {
-                return ShowTunnelError("Failed to update Kill Switch network lock mode.",
-                    $"The loaded wgbooster.dll does not expose network lock support. {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                return ShowTunnelError("Failed to update Kill Switch network lock mode.", ex.Message);
+                    return ShowTunnelError("Failed to update Kill Switch network lock mode.",
+                        GetLastNativeErrorOrDefault("native set_network_lock_mode returned false."));
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    return ShowTunnelError("Failed to update Kill Switch network lock mode.",
+                        $"The loaded wgbooster.dll does not expose network lock support. {ex.Message}");
+                }
+                catch (Exception ex)
+                {
+                    return ShowTunnelError("Failed to update Kill Switch network lock mode.", ex.Message);
+                }
             }
         }
 
@@ -772,26 +865,29 @@ namespace WireSockUI
 
         public static bool TryResetNetworkLock(out string diagnostic)
         {
-            diagnostic = null;
+            lock (NativeOperationSyncRoot)
+            {
+                diagnostic = null;
 
-            try
-            {
-                NativeCall.ClearLastError();
-                if (wg_reset_network_lock())
-                    return true;
+                try
+                {
+                    NativeCall.ClearLastError();
+                    if (wg_reset_network_lock())
+                        return true;
 
-                diagnostic = GetLastNativeErrorOrDefault("native reset_network_lock returned false.");
-                return false;
-            }
-            catch (EntryPointNotFoundException ex)
-            {
-                diagnostic = $"The loaded wgbooster.dll does not expose network lock reset support. {ex.Message}";
-                return false;
-            }
-            catch (Exception ex)
-            {
-                diagnostic = ex.Message;
-                return false;
+                    diagnostic = GetLastNativeErrorOrDefault("native reset_network_lock returned false.");
+                    return false;
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    diagnostic = $"The loaded wgbooster.dll does not expose network lock reset support. {ex.Message}";
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    diagnostic = ex.Message;
+                    return false;
+                }
             }
         }
 
@@ -802,23 +898,26 @@ namespace WireSockUI
 
         public static bool TryIsNetworkLockActive(out bool active, out string diagnostic)
         {
-            active = false;
-            diagnostic = null;
+            lock (NativeOperationSyncRoot)
+            {
+                active = false;
+                diagnostic = null;
 
-            try
-            {
-                return NativeCall.TryQuery(wg_is_network_lock_active, value => !value, out active,
-                    out diagnostic);
-            }
-            catch (EntryPointNotFoundException ex)
-            {
-                diagnostic = $"The loaded wgbooster.dll does not expose network lock state support. {ex.Message}";
-                return false;
-            }
-            catch (Exception ex)
-            {
-                diagnostic = ex.Message;
-                return false;
+                try
+                {
+                    return NativeCall.TryQuery(wg_is_network_lock_active, value => !value, out active,
+                        out diagnostic);
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    diagnostic = $"The loaded wgbooster.dll does not expose network lock state support. {ex.Message}";
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    diagnostic = ex.Message;
+                    return false;
+                }
             }
         }
 
@@ -840,39 +939,48 @@ namespace WireSockUI
 
         private bool DropCurrentHandle(bool logFailure, bool preserveNetworkLock = false)
         {
-            if (_handle == IntPtr.Zero)
-                return true;
+            lock (NativeOperationSyncRoot)
+            {
+                if (_handle == IntPtr.Zero)
+                    return true;
 
-            var dropped = false;
-
-            try
-            {
-                NativeCall.ClearLastError();
-                dropped = _nativeApi.DropTunnel(_adapterMode, _handle, preserveNetworkLock);
-                if (!dropped && logFailure)
-                    RecordHandleReleaseFailure(
-                        GetLastNativeErrorOrDefault("native drop_tunnel returned false."));
-            }
-            catch (EntryPointNotFoundException ex)
-            {
-                if (logFailure)
-                    RecordHandleReleaseFailure($"drop_tunnel export is unavailable. {ex.Message}");
-            }
-            catch (Exception ex)
-            {
-                if (logFailure)
-                    RecordHandleReleaseFailure(ex.Message);
-            }
-            finally
-            {
-                if (dropped)
+                var handle = _handle;
+                try
                 {
+                    if (!_handleTunnelDropped)
+                    {
+                        NativeCall.ClearLastError();
+                        if (!_nativeApi.DropTunnel(_adapterMode, handle, preserveNetworkLock))
+                        {
+                            if (logFailure)
+                                RecordHandleReleaseFailure(
+                                    GetLastNativeErrorOrDefault("native drop_tunnel returned false."));
+                            return false;
+                        }
+
+                        _handleTunnelDropped = true;
+                    }
+
+                    _nativeApi.ReleaseHandle(_adapterMode, handle);
                     _handle = IntPtr.Zero;
+                    _handleTunnelDropped = false;
                     ProfileName = null;
+                    return true;
+                }
+                catch (EntryPointNotFoundException ex)
+                {
+                    if (logFailure)
+                        RecordHandleReleaseFailure(
+                            $"{(_handleTunnelDropped ? "release_handle" : "drop_tunnel")} export is unavailable. {ex.Message}");
+                    return false;
+                }
+                catch (Exception ex)
+                {
+                    if (logFailure)
+                        RecordHandleReleaseFailure(ex.Message);
+                    return false;
                 }
             }
-
-            return dropped;
         }
 
         private void RecordHandleReleaseFailure(string diagnostic)

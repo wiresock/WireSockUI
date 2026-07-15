@@ -81,14 +81,20 @@ namespace WireSockUI.Forms
                 if (!File.Exists(shortcutPath))
                     return;
 
-                if (!IsShortcutOwnedByCurrentExecutable(shortcutPath))
+                using (var shortcutFile = SecureFileSystem.OpenFileForDelete(shortcutPath))
                 {
-                    Trace.TraceWarning(
-                        $"Skipping legacy Startup shortcut '{shortcutPath}' because it points to a different executable.");
-                    return;
-                }
+                    using (var shortcut = new ShellLink(shortcutPath))
+                    {
+                        if (!IsSameExecutablePath(shortcut.TargetPath, Application.ExecutablePath))
+                        {
+                            Trace.TraceWarning(
+                                $"Skipping legacy Startup shortcut '{shortcutPath}' because it points to a different executable.");
+                            return;
+                        }
+                    }
 
-                File.Delete(shortcutPath);
+                    shortcutFile.Delete();
+                }
             }
             catch (Exception ex)
             {
@@ -113,13 +119,17 @@ namespace WireSockUI.Forms
             {
                 using (var ts = new TaskService())
                 {
-                    if (IsTaskOwnedByCurrentExecutable(ts.FindTask(GetAutoRunTaskName())))
+                    using (var pathScopedTask = ts.FindTask(GetAutoRunTaskName()))
                     {
-                        usesPathScopedTask = true;
-                        return true;
+                        if (IsTaskEnabledAndOwnedByCurrentExecutable(pathScopedTask))
+                        {
+                            usesPathScopedTask = true;
+                            return true;
+                        }
                     }
 
-                    return IsTaskOwnedByCurrentExecutable(ts.FindTask(GetLegacyAutoRunTaskName()));
+                    using (var legacyTask = ts.FindTask(GetLegacyAutoRunTaskName()))
+                        return IsTaskEnabledAndOwnedByCurrentExecutable(legacyTask);
                 }
             }
             catch (Exception ex)
@@ -145,8 +155,8 @@ namespace WireSockUI.Forms
             try
             {
                 using (var ts = new TaskService())
+                using (var td = ts.NewTask())
                 {
-                    var td = ts.NewTask();
                     td.RegistrationInfo.Description = "Auto start for " + GetAppName();
 
                     td.Principal.RunLevel = TaskRunLevel.Highest; // Run with the highest privileges
@@ -171,6 +181,7 @@ namespace WireSockUI.Forms
                     if (!IsExecutablePathTrustedForAutoRun(appPath, out trustDiagnostic))
                         throw new InvalidOperationException(trustDiagnostic);
 
+                    EnsureAutoRunTaskCanBeReplaced(ts, GetAutoRunTaskName());
                     ts.RootFolder.RegisterTaskDefinition(GetAutoRunTaskName(), td);
                     TryDeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
                 }
@@ -290,15 +301,17 @@ namespace WireSockUI.Forms
 
         private static void DeleteAutoRunTaskIfOwned(TaskService ts, string taskName)
         {
-            var task = ts.FindTask(taskName);
-            if (task == null)
-                return;
-
-            if (!IsTaskOwnedByCurrentExecutable(task))
+            using (var task = ts.FindTask(taskName))
             {
-                Trace.TraceWarning(
-                    $"Skipping autorun task '{taskName}' because it points to a different executable.");
-                return;
+                if (task == null)
+                    return;
+
+                if (!IsTaskOwnedByCurrentExecutable(task))
+                {
+                    Trace.TraceWarning(
+                        $"Skipping autorun task '{taskName}' because its complete definition is not owned by this WireSock UI installation.");
+                    return;
+                }
             }
 
             ts.RootFolder.DeleteTask(taskName, false);
@@ -316,27 +329,48 @@ namespace WireSockUI.Forms
             }
         }
 
-        private static bool IsTaskOwnedByCurrentExecutable(Microsoft.Win32.TaskScheduler.Task task)
+        private static void EnsureAutoRunTaskCanBeReplaced(TaskService taskService, string taskName)
         {
-            if (task?.Definition?.Actions == null)
-                return false;
-
-            foreach (var action in task.Definition.Actions)
+            using (var existingTask = taskService.FindTask(taskName))
             {
-                var execAction = action as ExecAction;
-                if (execAction != null && IsSameExecutablePath(execAction.Path, Application.ExecutablePath))
-                    return true;
+                if (existingTask != null && !IsTaskOwnedByCurrentExecutable(existingTask))
+                    throw new InvalidOperationException(
+                        $"Autorun task '{taskName}' already exists with a definition that does not belong to this WireSock UI installation.");
             }
-
-            return false;
         }
 
-        private static bool IsShortcutOwnedByCurrentExecutable(string shortcutPath)
+        private static bool IsTaskOwnedByCurrentExecutable(Microsoft.Win32.TaskScheduler.Task task)
         {
-            using (var shortcut = new ShellLink(shortcutPath))
-            {
-                return IsSameExecutablePath(shortcut.TargetPath, Application.ExecutablePath);
-            }
+            return task != null &&
+                   IsTaskDefinitionOwnedByExecutable(task.Definition, Application.ExecutablePath);
+        }
+
+        private static bool IsTaskEnabledAndOwnedByCurrentExecutable(
+            Microsoft.Win32.TaskScheduler.Task task)
+        {
+            return task != null && task.Enabled && IsTaskOwnedByCurrentExecutable(task);
+        }
+
+        internal static bool IsTaskDefinitionOwnedByExecutable(TaskDefinition definition, bool taskEnabled,
+            string executablePath)
+        {
+            return taskEnabled && IsTaskDefinitionOwnedByExecutable(definition, executablePath);
+        }
+
+        private static bool IsTaskDefinitionOwnedByExecutable(TaskDefinition definition, string executablePath)
+        {
+            if (definition?.Actions == null || definition.Actions.Count != 1 ||
+                definition.Triggers == null || definition.Triggers.Count != 1 ||
+                definition.Principal == null || definition.Principal.RunLevel != TaskRunLevel.Highest)
+                return false;
+
+            var execAction = definition.Actions[0] as ExecAction;
+            if (execAction == null || !string.IsNullOrWhiteSpace(execAction.Arguments) ||
+                !string.IsNullOrWhiteSpace(execAction.WorkingDirectory) ||
+                !IsSameExecutablePath(execAction.Path, executablePath))
+                return false;
+
+            return definition.Triggers[0] is LogonTrigger logonTrigger && logonTrigger.Enabled;
         }
 
         private static bool IsSameExecutablePath(string first, string second)
@@ -367,8 +401,9 @@ namespace WireSockUI.Forms
 
         private void OnSaveClick(object sender, EventArgs e)
         {
-            if (_initialAutoRun != chkAutorun.Checked ||
-                (chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask))
+            var autoRunChanged = _initialAutoRun != chkAutorun.Checked ||
+                                 chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask;
+            if (autoRunChanged)
             {
                 var autoRunUpdated = chkAutorun.Checked ? EnableAutoRun() : DisableAutoRun();
                 if (!autoRunUpdated)
@@ -377,6 +412,14 @@ namespace WireSockUI.Forms
                     return;
                 }
             }
+
+            var previousAutoRun = Settings.Default.AutoRun;
+            var previousAutoConnect = Settings.Default.AutoConnect;
+            var previousAutoMinimize = Settings.Default.AutoMinimize;
+            var previousAutoUpdate = Settings.Default.AutoUpdate;
+            var previousUseAdapter = Settings.Default.UseAdapter;
+            var previousEnableNotifications = Settings.Default.EnableNotifications;
+            var previousLogLevel = Settings.Default.LogLevel;
 
             Settings.Default.AutoRun = chkAutorun.Checked;
             Settings.Default.AutoConnect = chkAutoConnect.Checked;
@@ -392,6 +435,32 @@ namespace WireSockUI.Forms
             }
             catch (Exception ex)
             {
+                Settings.Default.AutoRun = previousAutoRun;
+                Settings.Default.AutoConnect = previousAutoConnect;
+                Settings.Default.AutoMinimize = previousAutoMinimize;
+                Settings.Default.AutoUpdate = previousAutoUpdate;
+                Settings.Default.UseAdapter = previousUseAdapter;
+                Settings.Default.EnableNotifications = previousEnableNotifications;
+                Settings.Default.LogLevel = previousLogLevel;
+
+                if (autoRunChanged)
+                {
+                    var rollbackSucceeded = _initialAutoRun ? EnableAutoRun() : DisableAutoRun();
+                    if (!rollbackSucceeded)
+                        Trace.TraceError(
+                            "Autorun task rollback failed after settings persistence failed; inspect the Task Scheduler entry before the next launch.");
+                }
+
+                try
+                {
+                    Settings.Default.Save();
+                }
+                catch (Exception rollbackException)
+                {
+                    Trace.TraceError(
+                        $"Unable to persist the previous settings after a failed settings save: {rollbackException.Message}");
+                }
+
                 ShowSettingsError(Resources.SettingsSaveError, ex);
                 DialogResult = DialogResult.None;
                 return;

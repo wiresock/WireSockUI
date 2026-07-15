@@ -5,9 +5,10 @@ namespace WireSockUI.Native
 {
     internal interface IWireSockNativeApi
     {
-        IntPtr GetHandle(WireSockManager.Mode mode, LogPrinter logPrinter, WgbLogLevel logLevel,
-            bool enableTrafficCapture);
+        IntPtr CreateHandle(WireSockManager.Mode mode, LogPrinter logPrinter, WgbLogLevel logLevel,
+            bool enableTrafficCapture, bool enableAnalytics);
 
+        void ReleaseHandle(WireSockManager.Mode mode, IntPtr handle);
         void SetLogLevel(WireSockManager.Mode mode, IntPtr handle, WgbLogLevel logLevel);
         bool CreateTunnelFromFile(WireSockManager.Mode mode, IntPtr handle, string fileName);
         bool StartTunnel(WireSockManager.Mode mode, IntPtr handle);
@@ -21,12 +22,20 @@ namespace WireSockUI.Native
 
     internal sealed class WireSockNativeApi : IWireSockNativeApi
     {
-        public IntPtr GetHandle(WireSockManager.Mode mode, LogPrinter logPrinter, WgbLogLevel logLevel,
-            bool enableTrafficCapture)
+        public IntPtr CreateHandle(WireSockManager.Mode mode, LogPrinter logPrinter, WgbLogLevel logLevel,
+            bool enableTrafficCapture, bool enableAnalytics)
         {
             return IsVirtualAdapter(mode)
-                ? wgbp_get_handle(logPrinter, logLevel, enableTrafficCapture)
-                : wgb_get_handle(logPrinter, logLevel, enableTrafficCapture);
+                ? wgbp_get_handle_ex(logPrinter, logLevel, IntPtr.Zero, enableTrafficCapture, enableAnalytics)
+                : wgb_get_handle_ex(logPrinter, logLevel, IntPtr.Zero, enableTrafficCapture, enableAnalytics);
+        }
+
+        public void ReleaseHandle(WireSockManager.Mode mode, IntPtr handle)
+        {
+            if (IsVirtualAdapter(mode))
+                wgbp_release_handle(handle);
+            else
+                wgb_release_handle(handle);
         }
 
         public void SetLogLevel(WireSockManager.Mode mode, IntPtr handle, WgbLogLevel logLevel)
