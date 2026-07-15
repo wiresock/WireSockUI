@@ -122,6 +122,7 @@ namespace WireSockUI.Tests
                 { "Tunnel monitor stops after a bounded query timeout", TunnelMonitorStopsAfterBoundedQueryTimeout },
                 { "Tunnel monitor preserves statistics query timeouts", TunnelMonitorPreservesStatisticsQueryTimeouts },
                 { "Tunnel monitor suppresses canceled query updates", TunnelMonitorSuppressesCanceledQueryUpdates },
+                { "Tunnel monitor classifies unexpected statistics failures", TunnelMonitorClassifiesUnexpectedStatisticsFailures },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
@@ -2851,6 +2852,41 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void TunnelMonitorClassifiesUnexpectedStatisticsFailures()
+        {
+            var generation = 1;
+            var updateSource = new TaskCompletionSource<TunnelMonitorUpdate>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (var monitor = new TunnelMonitor(
+                       _ => Task.FromResult(NativeOperationResult<bool>.Success(true)),
+                       _ => Task.FromException<NativeOperationResult<WireguardBoosterExports.WgbStats>>(
+                           new InvalidOperationException("simulated statistics failure")),
+                       () => generation,
+                       update =>
+                       {
+                           updateSource.TrySetResult(update);
+                           return Task.CompletedTask;
+                       },
+                       100,
+                       100,
+                       1,
+                       1))
+            {
+                monitor.StartConnected(generation);
+                AssertTrue(updateSource.Task.Wait(2000),
+                    "Expected the monitor to report the unexpected statistics failure.");
+
+                var update = updateSource.Task.GetAwaiter().GetResult();
+                AssertTrue(update.ConnectionQuery == null,
+                    "Expected a statistics failure not to be classified as a connection query failure.");
+                AssertTrue(update.StatisticsQuery?.Succeeded == false,
+                    "Expected the unexpected failure to retain statistics-query context.");
+                AssertTrue(update.StatisticsQuery.Diagnostic.Contains("simulated statistics failure"),
+                    "Expected the original statistics failure diagnostic to be preserved.");
+            }
+        }
+
         private static void WireSockManagerRollsBackFailedLogLevelChanges()
         {
             WithTemporaryConfigFolder(() =>
@@ -2908,9 +2944,9 @@ namespace WireSockUI.Tests
                 var missingTemporary = Path.Combine(directory, "missing.tmp");
                 File.WriteAllText(rollbackOriginal, "preserved");
 
-                AssertThrows<FileNotFoundException>(
+                AssertThrows<IOException>(
                     () => ProfileFileTransaction.Commit(missingTemporary, rollbackDestination, rollbackOriginal),
-                    string.Empty);
+                    "does not exist");
                 AssertEqual("preserved", File.ReadAllText(rollbackOriginal));
                 AssertFalse(File.Exists(rollbackDestination),
                     "Expected a failed replacement to restore the original profile name.");
@@ -2930,7 +2966,19 @@ namespace WireSockUI.Tests
 
                 AssertEqual("locked", File.ReadAllText(lockedOriginal));
                 AssertFalse(File.Exists(lockedDestination),
-                    "Expected a failed original deletion to remove the new profile copy.");
+                    "Expected a failed original deletion to remove the new profile destination.");
+                AssertEqual("replacement", File.ReadAllText(lockedTemporary));
+
+                var invalidTemporary = Path.Combine(directory, "invalid.tmp");
+                var invalidDestination = Path.Combine(directory, "invalid.conf");
+                Directory.CreateDirectory(invalidTemporary);
+                AssertThrows<IOException>(
+                    () => ProfileFileTransaction.Commit(invalidTemporary, invalidDestination),
+                    "directory");
+                AssertTrue(Directory.Exists(invalidTemporary),
+                    "Expected temporary-path validation to leave the invalid source untouched.");
+                AssertFalse(File.Exists(invalidDestination),
+                    "Expected temporary-path validation to run before mutating the destination.");
             }
             finally
             {

@@ -73,6 +73,12 @@ namespace WireSockUI.Forms
 
     internal sealed class TunnelMonitor : IDisposable
     {
+        private enum FailureSource
+        {
+            ConnectionQuery,
+            StatisticsQuery
+        }
+
         private readonly int _connectedPollIntervalMilliseconds;
         private readonly int _connectionPollIntervalMilliseconds;
         private readonly int _connectionTimeoutMilliseconds;
@@ -214,12 +220,15 @@ namespace WireSockUI.Forms
             }
             catch (Exception ex)
             {
-                await PublishUnexpectedFailureAsync(generation, "Tunnel connection monitor", ex, cancellationToken);
+                await PublishUnexpectedFailureAsync(
+                    generation, "Tunnel connection monitor", FailureSource.ConnectionQuery, ex, cancellationToken);
             }
         }
 
         private async Task MonitorConnectedAsync(int generation, CancellationToken cancellationToken)
         {
+            var failureSource = FailureSource.ConnectionQuery;
+
             try
             {
                 while (generation == _currentGeneration())
@@ -228,6 +237,7 @@ namespace WireSockUI.Forms
                     if (generation != _currentGeneration())
                         return;
 
+                    failureSource = FailureSource.ConnectionQuery;
                     var connectedResult = await _getConnectedAsync(_queryTimeoutMilliseconds);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (generation != _currentGeneration())
@@ -246,6 +256,7 @@ namespace WireSockUI.Forms
                         return;
                     }
 
+                    failureSource = FailureSource.StatisticsQuery;
                     var stateResult = await _getStateAsync(_queryTimeoutMilliseconds);
                     cancellationToken.ThrowIfCancellationRequested();
                     if (generation != _currentGeneration())
@@ -265,19 +276,24 @@ namespace WireSockUI.Forms
             }
             catch (Exception ex)
             {
-                await PublishUnexpectedFailureAsync(generation, "Tunnel state monitor", ex, cancellationToken);
+                await PublishUnexpectedFailureAsync(
+                    generation, "Tunnel state monitor", failureSource, ex, cancellationToken);
             }
         }
 
-        private async Task PublishUnexpectedFailureAsync(int generation, string context, Exception exception,
-            CancellationToken cancellationToken)
+        private async Task PublishUnexpectedFailureAsync(int generation, string context, FailureSource failureSource,
+            Exception exception, CancellationToken cancellationToken)
         {
             if (cancellationToken.IsCancellationRequested || generation != _currentGeneration())
                 return;
 
-            await _updateHandler(TunnelMonitorUpdate.ConnectionQueryFailed(
-                generation,
-                NativeOperationResult<bool>.Failure($"{context} stopped unexpectedly: {exception.Message}")));
+            var diagnostic = $"{context} stopped unexpectedly: {exception.Message}";
+            var update = failureSource == FailureSource.StatisticsQuery
+                ? TunnelMonitorUpdate.StatisticsQueryFailed(
+                    generation, NativeOperationResult<WgbStats>.Failure(diagnostic))
+                : TunnelMonitorUpdate.ConnectionQueryFailed(
+                    generation, NativeOperationResult<bool>.Failure(diagnostic));
+            await _updateHandler(update);
         }
 
         private static void CancelAndDisposeWhenComplete(CancellationTokenSource cancellation, Task task)

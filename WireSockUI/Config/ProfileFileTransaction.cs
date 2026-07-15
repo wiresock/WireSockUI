@@ -12,6 +12,8 @@ namespace WireSockUI.Config
             if (string.IsNullOrWhiteSpace(destinationPath))
                 throw new ArgumentException("A destination profile path is required.", nameof(destinationPath));
 
+            Profile.EnsureRegularProfileFile(temporaryPath);
+
             if (string.IsNullOrWhiteSpace(originalPath) ||
                 string.Equals(Path.GetFullPath(originalPath), Path.GetFullPath(destinationPath),
                     StringComparison.OrdinalIgnoreCase))
@@ -33,12 +35,12 @@ namespace WireSockUI.Config
             {
                 try
                 {
-                    File.Delete(destinationPath);
+                    File.Move(destinationPath, temporaryPath);
                 }
                 catch (Exception rollbackException)
                 {
                     throw new AggregateException(
-                        "The profile rename failed and the new profile copy could not be removed.",
+                        "The profile rename failed and the temporary profile could not be restored.",
                         commitException,
                         rollbackException);
                 }
