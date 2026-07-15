@@ -95,6 +95,7 @@ namespace WireSockUI.Tests
                 { "Program distinguishes x64 and ARM64 PE images", ProgramDistinguishesBinaryArchitectures },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
+                { "Program reports attribute inspection failures", ProgramReportsAttributeInspectionFailures },
                 { "Program rejects an untrusted WireSock crash handler", ProgramRejectsUntrustedWireSockCrashHandler },
                 { "Program distinguishes read-only and writable ACLs", ProgramDistinguishesReadOnlyAndWritableAcls },
                 { "Program recognizes administrative owner SIDs", ProgramRecognizesAdministrativeOwnerSids },
@@ -2776,6 +2777,31 @@ namespace WireSockUI.Tests
                 AssertEqual(1, Volatile.Read(ref queryCount));
                 pendingQuery.TrySetResult(NativeOperationResult<bool>.Failure("simulated completion"));
             }
+        }
+
+        private static void ProgramReportsAttributeInspectionFailures()
+        {
+            var missingPath = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", $"{Guid.NewGuid():N}.dll");
+            AssertFalse(WireSockUI.Program.TryGetExistingAttributes(
+                    missingPath, out _, out var missingDiagnostic),
+                "Expected missing attribute inspection targets to fail.");
+            AssertTrue(missingDiagnostic == null,
+                $"Expected missing attribute inspection targets to remain silent, got '{missingDiagnostic}'.");
+
+            var malformedPath = "invalid\0wgbooster.dll";
+
+            AssertFalse(WireSockUI.Program.TryGetExistingAttributes(
+                    malformedPath, out _, out var diagnostic),
+                "Expected malformed attribute inspection to fail.");
+            AssertTrue(!string.IsNullOrWhiteSpace(diagnostic),
+                "Expected unexpected attribute inspection failures to produce a diagnostic.");
+            AssertTrue(diagnostic.IndexOf("Unable to inspect file system attributes",
+                           StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected an actionable attribute inspection diagnostic, got '{diagnostic}'.");
+            AssertFalse(diagnostic.Contains("\0"),
+                $"Expected attribute inspection diagnostics to escape embedded NULs, got '{diagnostic}'.");
+            AssertTrue(diagnostic.Contains("\\0"),
+                $"Expected attribute inspection diagnostics to include the escaped NUL marker, got '{diagnostic}'.");
         }
 
         private static void TunnelMonitorPreservesStatisticsQueryTimeouts()

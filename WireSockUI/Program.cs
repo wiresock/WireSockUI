@@ -418,9 +418,17 @@ namespace WireSockUI
             diagnostic = null;
 
             var fullDirectory = NormalizePathDirectory(directory);
-            if (fullDirectory == null ||
-                !TryGetExistingAttributes(fullDirectory, out var directoryAttributes) ||
-                (directoryAttributes & FileAttributes.Directory) == 0)
+            if (fullDirectory == null)
+                return false;
+
+            if (!TryGetExistingAttributes(fullDirectory, out var directoryAttributes, out diagnostic))
+            {
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    Trace.TraceWarning(diagnostic);
+                return false;
+            }
+
+            if ((directoryAttributes & FileAttributes.Directory) == 0)
                 return false;
 
             if ((directoryAttributes & FileAttributes.ReparsePoint) != 0)
@@ -432,8 +440,12 @@ namespace WireSockUI
             }
 
             var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
-            if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes))
+            if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes, out diagnostic))
+            {
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    Trace.TraceWarning(diagnostic);
                 return false;
+            }
 
             if ((libraryAttributes & FileAttributes.Directory) != 0)
             {
@@ -742,7 +754,20 @@ namespace WireSockUI
         private static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
             bool warnOnFailure = false)
         {
+            return TryGetExistingAttributesCore(path, out attributes, out _, warnOnFailure);
+        }
+
+        internal static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
+            out string diagnostic)
+        {
+            return TryGetExistingAttributesCore(path, out attributes, out diagnostic, false);
+        }
+
+        private static bool TryGetExistingAttributesCore(string path, out FileAttributes attributes,
+            out string diagnostic, bool warnOnFailure)
+        {
             attributes = 0;
+            diagnostic = null;
 
             try
             {
@@ -759,11 +784,18 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
+                diagnostic =
+                    $"Unable to inspect file system attributes for '{EscapeDiagnosticText(path)}': {EscapeDiagnosticText(ex.Message)}";
                 if (warnOnFailure)
-                    Trace.TraceWarning($"Unable to inspect file system attributes for '{path}': {ex.Message}");
+                    Trace.TraceWarning(diagnostic);
 
                 return false;
             }
+        }
+
+        private static string EscapeDiagnosticText(string value)
+        {
+            return (value ?? string.Empty).Replace("\0", "\\0");
         }
 
         internal static bool IsPotentiallyUserWritableDirectory(string directory)
