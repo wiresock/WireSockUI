@@ -77,7 +77,7 @@ dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:Use
 
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
 
-CI also checks the direct-driver ABI against the current `Wiresock-Foundation/wiresock-vpn-client` `main` branch. A manual `SDK Integration` workflow runs an additional handle lifecycle smoke test on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths; `WIRESOCKUI_TEST_PROFILE` is optional and enables a full start/query/stop/drop smoke test with a non-production profile.
+CI checks the direct-driver ABI against the pinned SDK contract snapshot under `sdk-contract`. The snapshot currently comes from `Wiresock-Foundation/wiresock-vpn-client` revision `aa72bc6ab8dce8f8128f74b8a6e3167b8caaf11a`; update the header, export definition, and `SDK_REVISION` together when intentionally adopting a newer SDK revision. A manual `SDK Integration` workflow runs an additional handle lifecycle smoke test on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths; `WIRESOCKUI_TEST_PROFILE` is optional and enables a full start/query/stop/drop smoke test with a non-production profile.
 
 ## Releases
 

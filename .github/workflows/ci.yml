@@ -13,17 +13,9 @@ jobs:
       - name: Checkout WireSockUI
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
 
-      - name: Checkout current WireSock SDK source
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-        with:
-          repository: Wiresock-Foundation/wiresock-vpn-client
-          ref: main
-          path: wiresock-sdk
-          persist-credentials: false
-
-      - name: Verify direct SDK contract
+      - name: Verify pinned direct SDK contract
         shell: pwsh
-        run: ./scripts/Verify-WgboosterContract.ps1 -SdkRoot ./wiresock-sdk
+        run: ./scripts/Verify-WgboosterContract.ps1 -SdkRoot ./sdk-contract
 
   test:
     runs-on: windows-latest

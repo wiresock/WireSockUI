@@ -184,25 +184,16 @@ namespace WireSockUI.Tests
             {
                 libraryPath = Path.GetFullPath(libraryPath);
                 var libraryDirectory = Path.GetDirectoryName(libraryPath);
-                var validate = typeof(WireSockUI.Program).GetMethod("TryValidateWireSockLibraryDirectory",
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                if (validate == null)
-                    throw new InvalidOperationException("The SDK trust validator was not found.");
-                var validateArgs = new object[] { libraryDirectory, null };
-                if (!(bool)validate.Invoke(null, validateArgs) ||
-                    !string.Equals(Path.GetFullPath(validateArgs[1] as string ?? string.Empty), libraryDirectory,
+                if (!WireSockUI.Program.TryValidateWireSockLibraryDirectory(
+                        libraryDirectory, out var validatedDirectory) ||
+                    !string.Equals(Path.GetFullPath(validatedDirectory ?? string.Empty), libraryDirectory,
                         StringComparison.OrdinalIgnoreCase))
                     throw new InvalidOperationException(
                         "The configured SDK directory is not administrator-owned or is missing required files.");
 
-                var configure = typeof(WireSockUI.Program).GetMethod("TryConfigureRestrictedDllSearchPath",
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                if (configure == null)
-                    throw new InvalidOperationException("The restricted SDK loader was not found.");
-
-                var configureArgs = new object[] { libraryDirectory, libraryPath, null };
-                if (!(bool)configure.Invoke(null, configureArgs))
-                    throw new InvalidOperationException(configureArgs[2] as string ?? "Unable to load wgbooster.dll.");
+                if (!WireSockUI.Program.TryConfigureRestrictedDllSearchPath(
+                        libraryDirectory, libraryPath, out var loaderDiagnostic))
+                    throw new InvalidOperationException(loaderDiagnostic ?? "Unable to load wgbooster.dll.");
 
                 var api = new WireSockNativeApi();
                 WireguardBoosterExports.LogPrinter logPrinter = message =>
@@ -1059,11 +1050,6 @@ namespace WireSockUI.Tests
 
         private static void ProgramRejectsUserWritableWireSockLibraryDirectories()
         {
-            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateWireSockLibraryDirectory",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            if (validate == null)
-                throw new InvalidOperationException("TryValidateWireSockLibraryDirectory helper was not found.");
-
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
 
@@ -1087,11 +1073,12 @@ namespace WireSockUI.Tests
                     // Temporary test folders are normally user-writable already; explicit ACL setup is best effort.
                 }
 
-                var args = new object[] { directory, null };
-                var accepted = (bool)validate.Invoke(null, args);
+                var accepted = WireSockUI.Program.TryValidateWireSockLibraryDirectory(
+                    directory, out var validatedDirectory);
 
                 AssertFalse(accepted, "Expected user-writable WireSock library directories to be rejected.");
-                AssertTrue(args[1] == null, "Expected rejected WireSock library directories not to return a path.");
+                AssertTrue(validatedDirectory == null,
+                    "Expected rejected WireSock library directories not to return a path.");
             }
             finally
             {

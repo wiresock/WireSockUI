@@ -313,7 +313,7 @@ namespace WireSockUI
             }
         }
 
-        private static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
+        internal static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
         {
             libraryDirectory = null;
 
@@ -503,7 +503,7 @@ namespace WireSockUI
             return false;
         }
 
-        private static bool TryConfigureRestrictedDllSearchPath(
+        internal static bool TryConfigureRestrictedDllSearchPath(
             string fullDirectory,
             string libraryPath,
             out string diagnostic)
