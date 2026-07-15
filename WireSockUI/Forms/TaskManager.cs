@@ -71,6 +71,9 @@ namespace WireSockUI.Forms
 
         private async Task RefreshProcessesAsync()
         {
+            if (IsDisposed || Disposing)
+                return;
+
             _refreshCancellation?.Cancel();
             _refreshCancellation?.Dispose();
             var refreshCancellation = new CancellationTokenSource();
@@ -110,8 +113,14 @@ namespace WireSockUI.Forms
                 result?.Dispose();
                 if (ReferenceEquals(_refreshCancellation, refreshCancellation))
                 {
-                    btnRefresh.Enabled = true;
-                    checkBoxShowUserProcesses.Enabled = true;
+                    _refreshCancellation = null;
+                    refreshCancellation.Dispose();
+
+                    if (!IsDisposed && !Disposing)
+                    {
+                        btnRefresh.Enabled = true;
+                        checkBoxShowUserProcesses.Enabled = true;
+                    }
                 }
             }
         }
