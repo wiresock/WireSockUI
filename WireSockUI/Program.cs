@@ -10,6 +10,7 @@ using System.Security.Principal;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using WireSockUI.Config;
+using WireSockUI.Diagnostics;
 using WireSockUI.Extensions;
 using WireSockUI.Forms;
 using WireSockUI.Native;
@@ -19,9 +20,6 @@ namespace WireSockUI
 {
     internal static class Program
     {
-        private const long MaxMigratedProfileSizeBytes = 1024 * 1024;
-        private static readonly string[] ScriptHookKeys = { "PreUp", "PostUp", "PreDown", "PostDown" };
-
         private const uint LoadLibrarySearchDllLoadDir = 0x00000100;
         private const uint LoadLibrarySearchSystem32 = 0x00000800;
         private const uint LoadLibrarySearchUserDirs = 0x00000400;
@@ -29,6 +27,7 @@ namespace WireSockUI
         private static IntPtr _wireSockLibraryHandle = IntPtr.Zero;
         private static IntPtr _wireSockLibraryDirectoryCookie = IntPtr.Zero;
         private static bool _restrictedDllSearchPathConfigured;
+        private static int _handlingUnhandledUiException;
 
         [DllImport("kernel32.dll", SetLastError = true)]
         private static extern bool SetDefaultDllDirectories(uint directoryFlags);
@@ -63,14 +62,29 @@ namespace WireSockUI
             try
             {
                 Global.EnsureApplicationFolders();
-                MigrateLegacyProfiles();
+                SecureRollingTraceListener.Initialize();
             }
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"Unable to initialize WireSock UI profile folders.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    $"Unable to initialize WireSock UI secure data folders and diagnostics.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
                     Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(1);
+            }
+
+            RegisterUnhandledExceptionHandlers();
+
+            try
+            {
+                LegacyProfileMigrationService.StageLegacyProfiles();
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Unable to stage legacy WireSock UI profiles: {ex}");
+                MessageBox.Show(
+                    $"WireSock UI could not inspect profiles from an earlier installation. " +
+                    $"Those profiles will remain untouched, and startup will continue.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
             if (!IsWireSockArchitectureSupported())
@@ -90,6 +104,40 @@ namespace WireSockUI
             }
 
             Application.Run(new FrmMain());
+        }
+
+        private static void RegisterUnhandledExceptionHandlers()
+        {
+            Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+            Application.ThreadException += (sender, args) =>
+            {
+                if (System.Threading.Interlocked.Exchange(ref _handlingUnhandledUiException, 1) != 0)
+                    return;
+
+                Trace.TraceError($"Unhandled UI exception: {args.Exception}");
+                Trace.Flush();
+                try
+                {
+                    MessageBox.Show(
+                        $"WireSock UI encountered an unexpected error and must close.{Environment.NewLine}{Environment.NewLine}{args.Exception.Message}",
+                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+                finally
+                {
+                    Application.Exit();
+                }
+            };
+            AppDomain.CurrentDomain.UnhandledException += (sender, args) =>
+            {
+                Trace.TraceError($"Unhandled process exception. Terminating={args.IsTerminating}. {args.ExceptionObject}");
+                Trace.Flush();
+            };
+            System.Threading.Tasks.TaskScheduler.UnobservedTaskException += (sender, args) =>
+            {
+                Trace.TraceError($"Unobserved task exception: {args.Exception}");
+                Trace.Flush();
+                args.SetObserved();
+            };
         }
 
         private static void UpgradeUserSettings()
@@ -500,132 +548,6 @@ namespace WireSockUI
             }
         }
 
-        private static void MigrateLegacyProfiles()
-        {
-            if (!Directory.Exists(Global.LegacyConfigsFolder))
-                return;
-
-            if (!TryIsReparsePoint(Global.LegacyConfigsFolder, out var legacyConfigsIsReparsePoint) ||
-                legacyConfigsIsReparsePoint)
-            {
-                Trace.TraceWarning(
-                    $"Skipping legacy profile migration because '{Global.LegacyConfigsFolder}' is a reparse point or cannot be inspected.");
-                return;
-            }
-
-            string[] legacyProfilePaths;
-            try
-            {
-                legacyProfilePaths = Directory.GetFiles(Global.LegacyConfigsFolder, "*.conf");
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Unable to enumerate legacy WireSock UI profiles: {ex.Message}");
-                return;
-            }
-
-            foreach (var legacyProfilePath in legacyProfilePaths)
-            {
-                if (!TryIsReparsePoint(legacyProfilePath, out var legacyProfileIsReparsePoint) ||
-                    legacyProfileIsReparsePoint)
-                {
-                    Trace.TraceWarning(
-                        $"Skipping legacy profile '{Path.GetFileName(legacyProfilePath)}' because it is a reparse point or cannot be inspected.");
-                    continue;
-                }
-
-                var profileName = Path.GetFileNameWithoutExtension(legacyProfilePath);
-                if (!Profile.IsValidProfileName(profileName))
-                {
-                    Trace.TraceWarning($"Skipping legacy profile with unsafe name '{Path.GetFileName(legacyProfilePath)}'.");
-                    continue;
-                }
-
-                var destinationPath = Profile.GetProfilePath(profileName);
-                if (Profile.ProfilePathExists(destinationPath))
-                {
-                    if (!Profile.IsRegularProfileFile(destinationPath, out var diagnostic))
-                    {
-                        Trace.TraceWarning(
-                            $"Skipping legacy profile '{profileName}' because the secured profile path is unsafe: {diagnostic}");
-                        continue;
-                    }
-
-                    if (FilesHaveSameContent(legacyProfilePath, destinationPath))
-                        TryDeleteLegacyProfile(legacyProfilePath, profileName);
-                    else
-                        Trace.TraceWarning(
-                            $"Skipping legacy profile '{profileName}' because a secured profile with different content already exists.");
-
-                    continue;
-                }
-
-                if (TryCopyLegacyProfileToSecureProfile(legacyProfilePath, destinationPath, profileName))
-                    TryDeleteLegacyProfile(legacyProfilePath, profileName);
-            }
-        }
-
-        private static bool TryCopyLegacyProfileToSecureProfile(string legacyProfilePath, string destinationPath,
-            string profileName)
-        {
-            var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
-
-            try
-            {
-                CopyLegacyProfileToTemporaryFile(legacyProfilePath, tmpProfile);
-                EnsureMigratedProfileCanBePromoted(tmpProfile);
-                File.Move(tmpProfile, destinationPath);
-                tmpProfile = null;
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to migrate legacy profile '{profileName}': {ex.Message}");
-                return false;
-            }
-            finally
-            {
-                if (tmpProfile != null)
-                    TryDeleteTemporaryMigratedProfile(tmpProfile, profileName);
-            }
-        }
-
-        private static void EnsureMigratedProfileCanBePromoted(string migratedProfilePath)
-        {
-            var parser = new WireguardConfigParser.ConfigParser(migratedProfilePath);
-            var interfaceSection = parser.GetSection("Interface");
-            if (interfaceSection.Count == 0)
-                return;
-
-            foreach (var item in interfaceSection)
-                foreach (var key in ScriptHookKeys)
-                    if (string.Equals(item.Key, key, StringComparison.OrdinalIgnoreCase) &&
-                        !string.IsNullOrWhiteSpace(item.Value))
-                        throw new InvalidOperationException(
-                            "The legacy profile contains script hooks. Import this profile manually to review and confirm the scripts.");
-        }
-
-        private static void CopyLegacyProfileToTemporaryFile(string sourcePath, string destinationPath)
-        {
-            RegularFileSource.CopyToTemporaryFile(
-                sourcePath,
-                destinationPath,
-                MaxMigratedProfileSizeBytes,
-                "legacy profile",
-                "The legacy profile file is too large to be migrated.");
-        }
-
-        private static bool TryIsReparsePoint(string path, out bool isReparsePoint)
-        {
-            isReparsePoint = false;
-
-            if (!TryGetExistingAttributes(path, out var attributes, true))
-                return false;
-
-            isReparsePoint = (attributes & FileAttributes.ReparsePoint) != 0;
-            return true;
-        }
-
         private static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
             bool warnOnFailure = false)
         {
@@ -650,85 +572,6 @@ namespace WireSockUI
                     Trace.TraceWarning($"Unable to inspect file system attributes for '{path}': {ex.Message}");
 
                 return false;
-            }
-        }
-
-        private static bool FilesHaveSameContent(string firstPath, string secondPath)
-        {
-            try
-            {
-                using (var first = RegularFileSource.OpenForRead(firstPath, "legacy profile"))
-                using (var second = File.OpenRead(secondPath))
-                {
-                    if (first.Length != second.Length)
-                        return false;
-
-                    var firstBuffer = new byte[81920];
-                    var secondBuffer = new byte[81920];
-
-                    while (true)
-                    {
-                        var firstBytesRead = ReadBlock(first, firstBuffer);
-                        var secondBytesRead = ReadBlock(second, secondBuffer);
-                        if (firstBytesRead != secondBytesRead)
-                            return false;
-
-                        if (firstBytesRead == 0)
-                            return true;
-
-                        for (var i = 0; i < firstBytesRead; i++)
-                        {
-                            if (firstBuffer[i] != secondBuffer[i])
-                                return false;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to compare migrated profile files: {ex.Message}");
-                return false;
-            }
-        }
-
-        private static int ReadBlock(Stream stream, byte[] buffer)
-        {
-            var totalRead = 0;
-            while (totalRead < buffer.Length)
-            {
-                var bytesRead = stream.Read(buffer, totalRead, buffer.Length - totalRead);
-                if (bytesRead == 0)
-                    break;
-
-                totalRead += bytesRead;
-            }
-
-            return totalRead;
-        }
-
-        private static void TryDeleteTemporaryMigratedProfile(string tmpProfile, string profileName)
-        {
-            try
-            {
-                if (File.Exists(tmpProfile))
-                    File.Delete(tmpProfile);
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning(
-                    $"Failed to delete temporary migrated profile for '{profileName}': {ex.Message}");
-            }
-        }
-
-        private static void TryDeleteLegacyProfile(string legacyProfilePath, string profileName)
-        {
-            try
-            {
-                File.Delete(legacyProfilePath);
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Migrated legacy profile '{profileName}', but could not delete the old copy: {ex.Message}");
             }
         }
 
@@ -914,26 +757,26 @@ namespace WireSockUI
                 if (sid.IsWellKnown(WellKnownSidType.CreatorOwnerSid))
                     return true;
 
-                if (!IsAdministrativeOrServiceSid(sid))
+                if (!IsTrustedAdministrativeSid(sid))
                     return true;
             }
 
             return false;
         }
 
-        private static bool IsAdministrativeOrServiceSid(SecurityIdentifier sid)
+        private static bool IsTrustedAdministrativeSid(SecurityIdentifier sid)
         {
             return sid.IsWellKnown(WellKnownSidType.LocalSystemSid) ||
                    sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) ||
-                   sid.IsWellKnown(WellKnownSidType.LocalServiceSid) ||
-                   sid.IsWellKnown(WellKnownSidType.NetworkServiceSid) ||
-                   sid.Value.StartsWith("S-1-5-80-", StringComparison.OrdinalIgnoreCase) ||
-                   sid.Value.StartsWith("S-1-5-83-", StringComparison.OrdinalIgnoreCase);
+                   string.Equals(
+                       sid.Value,
+                       "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464",
+                       StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsTrustedOwnerSid(SecurityIdentifier sid)
         {
-            if (IsAdministrativeOrServiceSid(sid))
+            if (IsTrustedAdministrativeSid(sid))
                 return true;
 
             var accountDomainSid = sid.AccountDomainSid;

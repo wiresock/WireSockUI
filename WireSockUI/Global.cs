@@ -5,6 +5,7 @@ using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
+using WireSockUI.Native;
 
 namespace WireSockUI
 {
@@ -19,6 +20,13 @@ namespace WireSockUI
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ApplicationFolderName);
 
         public static string ConfigsFolder = Path.Combine(SecureMainFolder, "Configs");
+
+        public static string PendingLegacyProfilesFolder =
+            Path.Combine(SecureMainFolder, "PendingLegacyProfiles");
+
+        public static string DiagnosticsFolder = Path.Combine(SecureMainFolder, "Logs");
+
+        public static string DiagnosticLogPath => Path.Combine(DiagnosticsFolder, "WireSockUI.log");
 
         public static string NotificationAssetsFolder =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
@@ -64,6 +72,26 @@ namespace WireSockUI
             EnsureUsersReadOnlyDirectory(NotificationAssetsFolder);
         }
 
+        public static void EnsurePendingLegacyProfilesFolderExists()
+        {
+            if (!IsSameOrChildPath(PendingLegacyProfilesFolder, SecureMainFolder))
+                throw new InvalidOperationException(
+                    $"Pending legacy profiles folder '{PendingLegacyProfilesFolder}' must be inside '{SecureMainFolder}'.");
+
+            EnsureAdministratorsOnlyDirectory(SecureMainFolder, false);
+            EnsureAdministratorsOnlyDirectory(PendingLegacyProfilesFolder, false);
+        }
+
+        public static void EnsureDiagnosticsFolderExists()
+        {
+            if (!IsSameOrChildPath(DiagnosticsFolder, SecureMainFolder))
+                throw new InvalidOperationException(
+                    $"Diagnostics folder '{DiagnosticsFolder}' must be inside '{SecureMainFolder}'.");
+
+            EnsureAdministratorsOnlyDirectory(SecureMainFolder, false);
+            EnsureAdministratorsOnlyDirectory(DiagnosticsFolder, false);
+        }
+
         private static void EnsureConfigsFolder(bool secureExistingChildren)
         {
             if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
@@ -93,13 +121,15 @@ namespace WireSockUI
             try
             {
                 var security = CreateAdministratorsOnlyDirectorySecurity();
-                Directory.CreateDirectory(path, security);
-                if (IsReparsePoint(path))
-                    throw new IOException($"Refusing to secure WireSock UI directory reparse point '{path}'.");
-
-                Directory.SetAccessControl(path, security);
+                if (SecureFileSystem.AllowOwnerWriteFailureForTests)
+                    Directory.CreateDirectory(path);
+                else
+                    Directory.CreateDirectory(path, security);
                 if (secureExistingChildren)
                     SecureExistingChildren(path, excludedChildDirectory);
+                else
+                    using (var directory = SecureFileSystem.OpenDirectory(path, true))
+                        directory.SetSecurity(security);
             }
             catch (Exception ex)
             {
@@ -113,7 +143,7 @@ namespace WireSockUI
             try
             {
                 EnsureSecureMainFolderExists();
-                DeleteNativeRecoveryMarkerPathIfUnsafeForWrite();
+                DeleteNativeRecoveryMarkerPathBeforeWrite();
 
                 var message =
                     $"UTC: {DateTime.UtcNow:o}{Environment.NewLine}" +
@@ -121,7 +151,8 @@ namespace WireSockUI
                     $"Diagnostic: {diagnostic ?? "No diagnostic available."}{Environment.NewLine}";
 
                 File.WriteAllText(NativeRecoveryMarkerPath, message);
-                File.SetAccessControl(NativeRecoveryMarkerPath, CreateAdministratorsOnlyFileSecurity());
+                using (var marker = SecureFileSystem.OpenFile(NativeRecoveryMarkerPath, true))
+                    marker.SetSecurity(CreateAdministratorsOnlyFileSecurity());
             }
             catch (Exception ex)
             {
@@ -172,12 +203,9 @@ namespace WireSockUI
             }
         }
 
-        private static void DeleteNativeRecoveryMarkerPathIfUnsafeForWrite()
+        private static void DeleteNativeRecoveryMarkerPathBeforeWrite()
         {
             if (!TryGetAttributes(NativeRecoveryMarkerPath, out var attributes))
-                return;
-
-            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) == 0)
                 return;
 
             DeleteNativeRecoveryMarkerPath(attributes);
@@ -193,13 +221,25 @@ namespace WireSockUI
         {
             if ((attributes & FileAttributes.Directory) != 0)
             {
-                Directory.Delete(
-                    NativeRecoveryMarkerPath,
-                    (attributes & FileAttributes.ReparsePoint) == 0);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    using (var marker = SecureFileSystem.OpenReparsePointForDelete(
+                               NativeRecoveryMarkerPath,
+                               true))
+                        marker.Delete();
+                }
+                else
+                {
+                    Directory.Delete(NativeRecoveryMarkerPath, false);
+                }
+
                 return;
             }
 
-            File.Delete(NativeRecoveryMarkerPath);
+            using (var marker = (attributes & FileAttributes.ReparsePoint) != 0
+                       ? SecureFileSystem.OpenReparsePointForDelete(NativeRecoveryMarkerPath, false)
+                       : SecureFileSystem.OpenFileForDelete(NativeRecoveryMarkerPath))
+                marker.Delete();
         }
 
         private static bool TryGetAttributes(string path, out FileAttributes attributes)
@@ -251,11 +291,12 @@ namespace WireSockUI
             try
             {
                 var security = CreateUsersReadOnlyDirectorySecurity();
-                Directory.CreateDirectory(path, security);
-                if (IsReparsePoint(path))
-                    throw new IOException($"Refusing to secure WireSock UI read-only directory reparse point '{path}'.");
-
-                Directory.SetAccessControl(path, security);
+                if (SecureFileSystem.AllowOwnerWriteFailureForTests)
+                    Directory.CreateDirectory(path);
+                else
+                    Directory.CreateDirectory(path, security);
+                using (var directory = SecureFileSystem.OpenDirectory(path, true))
+                    directory.SetSecurity(security);
             }
             catch (Exception ex)
             {
@@ -296,7 +337,7 @@ namespace WireSockUI
             return security;
         }
 
-        private static FileSecurity CreateAdministratorsOnlyFileSecurity()
+        internal static FileSecurity CreateAdministratorsOnlyFileSecurity()
         {
             var administratorsSid = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
             var systemSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null);
@@ -316,24 +357,26 @@ namespace WireSockUI
             return security;
         }
 
-        private static void SecureExistingChildren(string path, string excludedDirectory = null)
+        private static void SecureExistingChildren(string path, string excludedDirectory = null, int depth = 0)
         {
-            var directories = new Stack<string>();
-            directories.Push(path);
+            const int maximumDepth = 64;
+            if (depth > maximumDepth)
+                throw new IOException(
+                    $"WireSock UI configuration directory nesting exceeds {maximumDepth} levels at '{path}'.");
 
-            while (directories.Count > 0)
+            using (var directoryHandle = SecureFileSystem.OpenDirectory(path, true))
             {
-                var directory = directories.Pop();
+                directoryHandle.SetSecurity(CreateAdministratorsOnlyDirectorySecurity());
                 string[] files;
 
                 try
                 {
-                    files = Directory.GetFiles(directory);
+                    files = Directory.GetFiles(path);
                 }
                 catch (Exception ex)
                 {
                     throw new IOException(
-                        $"Unable to enumerate WireSock UI configuration files in '{directory}'.", ex);
+                        $"Unable to enumerate WireSock UI configuration files in '{path}'.", ex);
                 }
 
                 foreach (var file in files)
@@ -346,7 +389,8 @@ namespace WireSockUI
 
                     try
                     {
-                        File.SetAccessControl(file, CreateAdministratorsOnlyFileSecurity());
+                        using (var fileHandle = SecureFileSystem.OpenFile(file, true))
+                            fileHandle.SetSecurity(CreateAdministratorsOnlyFileSecurity());
                     }
                     catch (Exception ex)
                     {
@@ -358,12 +402,12 @@ namespace WireSockUI
                 string[] childDirectories;
                 try
                 {
-                    childDirectories = Directory.GetDirectories(directory);
+                    childDirectories = Directory.GetDirectories(path);
                 }
                 catch (Exception ex)
                 {
                     throw new IOException(
-                        $"Unable to enumerate WireSock UI configuration directories in '{directory}'.", ex);
+                        $"Unable to enumerate WireSock UI configuration directories in '{path}'.", ex);
                 }
 
                 foreach (var childDirectory in childDirectories)
@@ -372,14 +416,13 @@ namespace WireSockUI
                         IsSameOrChildPath(childDirectory, excludedDirectory))
                         continue;
 
-                    if (IsReparsePoint(childDirectory))
-                        throw new IOException(
-                            $"Refusing to secure WireSock UI configuration directory reparse point '{childDirectory}'.");
-
                     try
                     {
-                        Directory.SetAccessControl(childDirectory, CreateAdministratorsOnlyDirectorySecurity());
-                        directories.Push(childDirectory);
+                        SecureExistingChildren(childDirectory, null, depth + 1);
+                    }
+                    catch (IOException)
+                    {
+                        throw;
                     }
                     catch (Exception ex)
                     {
@@ -444,25 +487,10 @@ namespace WireSockUI
 
         private static void DeleteConfigurationFileReparsePoint(string file)
         {
-            FileAttributes attributes;
-
             try
             {
-                attributes = File.GetAttributes(file);
-            }
-            catch (Exception ex)
-            {
-                throw new IOException(
-                    $"Unable to inspect WireSock UI configuration file reparse point '{file}'.", ex);
-            }
-
-            if ((attributes & FileAttributes.ReparsePoint) == 0)
-                throw new IOException(
-                    $"WireSock UI configuration file '{file}' changed while its reparse-point status was being validated.");
-
-            try
-            {
-                File.Delete(file);
+                using (var reparsePoint = SecureFileSystem.OpenReparsePointForDelete(file, false))
+                    reparsePoint.Delete();
                 Trace.TraceWarning($"Deleted WireSock UI configuration file reparse point '{file}'.");
             }
             catch (Exception ex)

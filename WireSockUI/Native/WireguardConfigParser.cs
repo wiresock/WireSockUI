@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using WireSockUI.Properties;
 
 namespace WireSockUI.Native
 {
@@ -96,10 +95,7 @@ namespace WireSockUI.Native
                         if (string.IsNullOrEmpty(currentSection))
                             throw new FormatException($"Invalid WireGuard configuration line {lineNumber}: section name is empty.");
 
-                        if (Sections.ContainsKey(currentSection))
-                            throw new FormatException(
-                                $"Invalid WireGuard configuration line {lineNumber}: {string.Format(Resources.ParserDuplicateSectionError, currentSection)}");
-
+                        // The current SDK resets a section when it is repeated; the final section wins.
                         Sections[currentSection] = new Section();
                     }
                     else

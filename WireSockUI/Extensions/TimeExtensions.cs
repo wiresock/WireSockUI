@@ -14,6 +14,13 @@ namespace WireSockUI.Extensions
             return TimeSpan.FromSeconds(clampedSeconds).AsTimeAgo();
         }
 
+        public static string AsHandshakeAge(this long seconds)
+        {
+            return seconds < 0
+                ? Resources.ResourceManager.GetString("StateHandshakeUnavailable") ?? "Never"
+                : seconds.AsTimeAgo();
+        }
+
         public static string AsTimeAgo(this TimeSpan value)
         {
             const int second = 1;

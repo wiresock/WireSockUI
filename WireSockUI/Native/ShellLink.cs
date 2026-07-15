@@ -13,7 +13,7 @@ namespace WireSockUI.Native
     // Originally from http://www.vbaccelerator.com/home/NET/Code/Libraries/Shell_Projects
     // /Creating_and_Modifying_Shortcuts/article.asp
     // Partly based on Sending toast notifications from desktop apps sample
-    public class ShellLink : IDisposable
+    public sealed class ShellLink : IDisposable
     {
         #region Win32 and COM
 
@@ -23,23 +23,23 @@ namespace WireSockUI.Native
         [Guid("000214F9-0000-0000-C000-000000000046")]
         private interface IShellLinkW
         {
-            uint GetPath([Out] [MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile,
+            uint GetPath([Out][MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile,
                 int cchMaxPath, ref Win32FindDataw pfd, uint fFlags);
 
             uint GetIDList(out IntPtr ppidl);
             uint SetIDList(IntPtr pidl);
 
-            uint GetDescription([Out] [MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName,
+            uint GetDescription([Out][MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszName,
                 int cchMaxName);
 
             uint SetDescription([MarshalAs(UnmanagedType.LPWStr)] string pszName);
 
-            uint GetWorkingDirectory([Out] [MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir,
+            uint GetWorkingDirectory([Out][MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszDir,
                 int cchMaxPath);
 
             uint SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string pszDir);
 
-            uint GetArguments([Out] [MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs,
+            uint GetArguments([Out][MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszArgs,
                 int cchMaxPath);
 
             uint SetArguments([MarshalAs(UnmanagedType.LPWStr)] string pszArgs);
@@ -48,7 +48,7 @@ namespace WireSockUI.Native
             uint GetShowCmd(out int piShowCmd);
             uint SetShowCmd(int iShowCmd);
 
-            uint GetIconLocation([Out] [MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath,
+            uint GetIconLocation([Out][MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszIconPath,
                 int cchIconPath, out int piIcon);
 
             uint SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string pszIconPath, int iIcon);
@@ -197,20 +197,32 @@ namespace WireSockUI.Native
 
             ~PropVariant()
             {
-                Dispose();
+                Dispose(false);
             }
 
             public void Dispose()
             {
-                PropVariantClear(this);
+                Dispose(true);
                 GC.SuppressFinalize(this);
+            }
+
+            private void Dispose(bool disposing)
+            {
+                try
+                {
+                    PropVariantClear(this);
+                }
+                catch when (!disposing)
+                {
+                    // Finalizers must never allow interop cleanup failures to escape.
+                }
             }
 
             #endregion
         }
 
         [DllImport("Ole32.dll", PreserveSig = false)]
-        private static extern void PropVariantClear([In] [Out] PropVariant pvar);
+        private static extern void PropVariantClear([In][Out] PropVariant pvar);
 
         #endregion
 
@@ -361,35 +373,38 @@ namespace WireSockUI.Native
                 throw new COMException("Failed to create ShellLink object.");
             }
 
-            if (file != null) Load(file);
-        }
+            if (file == null)
+                return;
 
-        #endregion
-
-        #region Destructor
-
-        ~ShellLink()
-        {
-            Dispose(false);
-        }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (_shellLinkW != null)
+            try
             {
-                // Release all references.
-                Marshal.FinalReleaseComObject(_shellLinkW);
-                _shellLinkW = null;
+                Load(file);
+            }
+            catch
+            {
+                Dispose();
+                throw;
             }
         }
 
         #endregion
+
+        public void Dispose()
+        {
+            var shellLink = _shellLinkW;
+            _shellLinkW = null;
+            if (shellLink == null)
+                return;
+
+            try
+            {
+                Marshal.FinalReleaseComObject(shellLink);
+            }
+            catch
+            {
+                // COM cleanup is best effort during explicit disposal.
+            }
+        }
 
         #region Methods
 
@@ -424,9 +439,8 @@ namespace WireSockUI.Native
         // Verify if operation succeeded.
         public static void VerifySucceeded(uint hresult)
         {
-            if (hresult > 1)
-                throw new InvalidOperationException("Failed with HRESULT: " +
-                                                    hresult.ToString("X"));
+            if (unchecked((int)hresult) < 0)
+                Marshal.ThrowExceptionForHR(unchecked((int)hresult));
         }
 
         #endregion

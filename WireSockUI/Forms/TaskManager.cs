@@ -46,7 +46,9 @@ namespace WireSockUI.Forms
             _cachedProcessListItems.Clear();
             lstProcesses.SmallImageList.Images.Clear();
 
-            var currentUser = WindowsIdentity.GetCurrent().Name;
+            string currentUser;
+            using (var identity = WindowsIdentity.GetCurrent())
+                currentUser = identity.Name;
 
             // Get unique processes for the current user
             var processes = ProcessList.GetProcessList()
@@ -66,6 +68,9 @@ namespace WireSockUI.Forms
                     : Path.GetFileNameWithoutExtension(process.Name);
                 if (string.IsNullOrWhiteSpace(displayName))
                     displayName = process.Name;
+                var matchName = GetProcessMatchName(process);
+                if (string.IsNullOrWhiteSpace(matchName))
+                    continue;
                 var iconKey = process.ProcessId.ToString();
 
                 // If the process's image file exists, extract its associated icon and add it to the list view's image list.
@@ -94,9 +99,23 @@ namespace WireSockUI.Forms
                 }
 
                 // Create a new list view item for the process and add it to the list view
-                var listViewItem = new ListViewItem(displayName, iconKey);
+                var listViewItem = new ListViewItem(displayName, iconKey) { Tag = matchName };
                 _cachedProcessListItems.Add(listViewItem);
             }
+        }
+
+        internal static string GetProcessMatchName(ProcessEntry process)
+        {
+            if (process == null)
+                return null;
+
+            var matchName = !string.IsNullOrWhiteSpace(process.ImageName)
+                ? Path.GetFileName(process.ImageName)
+                : Path.GetFileName(process.Name);
+            if (string.IsNullOrWhiteSpace(matchName))
+                return null;
+
+            return string.IsNullOrEmpty(Path.GetExtension(matchName)) ? matchName + ".exe" : matchName;
         }
 
         private void FilterProcesses(string filter)
@@ -145,8 +164,10 @@ namespace WireSockUI.Forms
             if (lstProcesses.SelectedItems.Count == 0)
                 return;
 
+            ReturnValue = lstProcesses.SelectedItems[0].Tag as string;
+            if (string.IsNullOrWhiteSpace(ReturnValue))
+                return;
             DialogResult = DialogResult.OK;
-            ReturnValue = lstProcesses.SelectedItems[0].Text;
             Close();
         }
 

@@ -33,12 +33,16 @@ namespace WireSockUI.Forms
         {
         }
 
-        public FrmEdit(string config)
+        public FrmEdit(string config) : this(config, null)
+        {
+        }
+
+        internal FrmEdit(string config, string sourcePath)
         {
             Initialize();
 
             ShowInTaskbar = false;
-            _originalProfileName = config;
+            _originalProfileName = sourcePath == null ? config : null;
 
             if (string.IsNullOrEmpty(config))
             {
@@ -51,9 +55,16 @@ namespace WireSockUI.Forms
                 Text = string.Format(Resources.EditProfileTitle, config);
 
                 txtProfileName.Text = config;
-                var profilePath = Profile.GetProfilePath(config);
-                Profile.EnsureRegularProfileFile(profilePath);
-                txtEditor.Text = File.ReadAllText(profilePath);
+                var profilePath = sourcePath ?? Profile.GetProfilePath(config);
+                if (sourcePath == null)
+                {
+                    Profile.EnsureRegularProfileFile(profilePath);
+                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath);
+                }
+                else
+                {
+                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath);
+                }
             }
         }
 
@@ -444,7 +455,7 @@ namespace WireSockUI.Forms
 
             try
             {
-                Global.EnsureConfigsFolder();
+                Global.EnsureConfigsFolderExists();
                 tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
                 File.WriteAllText(tmpProfile, txtEditor.Text);
                 profile = new Profile(tmpProfile);

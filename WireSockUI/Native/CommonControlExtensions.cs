@@ -22,7 +22,7 @@ namespace WireSockUI.Native
 
         [DllImport("user32", CharSet = CharSet.Unicode, SetLastError = false)]
         private static extern IntPtr SendMessage(HandleRef hWnd, uint msg, uint wParam,
-            [In] [Out] ref Charformat2W lParam);
+            [In][Out] ref Charformat2W lParam);
 
         [DllImport("user32", CharSet = CharSet.Unicode, SetLastError = false)]
         private static extern IntPtr SendMessage(HandleRef hWnd, uint msg, uint wParam,

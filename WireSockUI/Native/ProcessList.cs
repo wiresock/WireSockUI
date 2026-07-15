@@ -30,7 +30,7 @@ namespace WireSockUI.Native
 
         [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
         private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, [Out] char[] lpExeName,
-            [In] [Out] ref int lpdwSize);
+            [In][Out] ref int lpdwSize);
 
         private static string GetProcessUser(IntPtr handle)
         {
