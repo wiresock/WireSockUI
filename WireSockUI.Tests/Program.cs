@@ -91,6 +91,8 @@ namespace WireSockUI.Tests
                 { "Release version parser handles SemVer tags", ReleaseVersionParserHandlesSemVerTags },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects untrusted application payloads", ProgramRejectsUntrustedApplicationPayloads },
+                { "Program enumerates nested application payloads", ProgramEnumeratesNestedApplicationPayloads },
+                { "Program distinguishes x64 and ARM64 PE images", ProgramDistinguishesBinaryArchitectures },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
                 { "Program rejects an untrusted WireSock crash handler", ProgramRejectsUntrustedWireSockCrashHandler },
@@ -117,6 +119,9 @@ namespace WireSockUI.Tests
                 { "Secure filesystem reads text through validated handles", SecureFileSystemReadsTextThroughValidatedHandles },
                 { "Secure filesystem rejects writable hard links", SecureFileSystemRejectsWritableHardLinks },
                 { "Tunnel session coordinator enforces recovery invariants", TunnelSessionCoordinatorEnforcesRecoveryInvariants },
+                { "Tunnel monitor stops after a bounded query timeout", TunnelMonitorStopsAfterBoundedQueryTimeout },
+                { "Tunnel monitor preserves statistics query timeouts", TunnelMonitorPreservesStatisticsQueryTimeouts },
+                { "Tunnel monitor suppresses canceled query updates", TunnelMonitorSuppressesCanceledQueryUpdates },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
@@ -139,6 +144,9 @@ namespace WireSockUI.Tests
                 { "WireSock manager retains handles when cleanup fails", WireSockManagerRetainsHandlesWhenCleanupFails },
                 { "WireSock manager retries release without dropping twice", WireSockManagerRetriesReleaseWithoutDroppingTwice },
                 { "WireSock manager quarantines dropped handles", WireSockManagerQuarantinesDroppedHandles },
+                { "WireSock manager rolls back failed log-level changes", WireSockManagerRollsBackFailedLogLevelChanges },
+                { "Profile rename commits and rolls back transactionally", ProfileRenameCommitsAndRollsBackTransactionally },
+                { "Single-instance event rejects broad access", SingleInstanceEventRejectsBroadAccess },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "WireSock exports use restricted DLL search", WireSockExportsUseRestrictedDllSearch },
                 { "WireSock handle booleans match the C++ ABI", WireSockHandleBooleansMatchCppAbi },
@@ -1049,6 +1057,76 @@ namespace WireSockUI.Tests
             {
                 TryDeleteDirectory(directory, true);
             }
+        }
+
+        private static void ProgramEnumeratesNestedApplicationPayloads()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var localeDirectory = Path.Combine(directory, "zh-Hant");
+            var resourceAssembly = Path.Combine(localeDirectory, "Microsoft.Win32.TaskScheduler.resources.dll");
+
+            try
+            {
+                Directory.CreateDirectory(localeDirectory);
+                File.WriteAllText(Path.Combine(directory, "WireSockUI.exe"), string.Empty);
+                File.WriteAllText(resourceAssembly, string.Empty);
+
+                AssertTrue(WireSockUI.Program.TryEnumerateApplicationPayloadEntries(
+                        directory, out var files, out var directories, out var diagnostic),
+                    diagnostic ?? "Expected nested application payload enumeration to succeed.");
+                AssertTrue(files.Contains(resourceAssembly, StringComparer.OrdinalIgnoreCase),
+                    "Expected nested resource assemblies to be included in payload validation.");
+                AssertTrue(directories.Contains(localeDirectory, StringComparer.OrdinalIgnoreCase),
+                    "Expected locale directories to be included in payload validation.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void ProgramDistinguishesBinaryArchitectures()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var x64Path = Path.Combine(directory, "x64.dll");
+            var arm64Path = Path.Combine(directory, "arm64.dll");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                WriteMinimalPortableExecutable(x64Path, 0x8664);
+                WriteMinimalPortableExecutable(arm64Path, 0xaa64);
+
+                AssertTrue(WindowsBinaryArchitectureInfo.TryReadPortableExecutableArchitecture(
+                        x64Path, out var x64, out var x64Diagnostic),
+                    x64Diagnostic ?? "Expected the x64 image to parse.");
+                AssertTrue(WindowsBinaryArchitectureInfo.TryReadPortableExecutableArchitecture(
+                        arm64Path, out var arm64, out var arm64Diagnostic),
+                    arm64Diagnostic ?? "Expected the ARM64 image to parse.");
+
+                AssertEqual((int)WindowsBinaryArchitecture.X64, (int)x64);
+                AssertEqual((int)WindowsBinaryArchitecture.Arm64, (int)arm64);
+                AssertTrue(WindowsBinaryArchitectureInfo.AreCompatible(x64, x64),
+                    "Expected matching PE architectures to be compatible.");
+                AssertFalse(WindowsBinaryArchitectureInfo.AreCompatible(x64, arm64),
+                    "Expected x64 and ARM64 images to be rejected as incompatible.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void WriteMinimalPortableExecutable(string path, ushort machine)
+        {
+            var image = new byte[70];
+            image[0] = (byte)'M';
+            image[1] = (byte)'Z';
+            BitConverter.GetBytes(64).CopyTo(image, 0x3c);
+            image[64] = (byte)'P';
+            image[65] = (byte)'E';
+            BitConverter.GetBytes(machine).CopyTo(image, 68);
+            File.WriteAllBytes(path, image);
         }
 
         private static void ProgramRejectsUserWritableWireSockLibraryDirectories()
@@ -2656,6 +2734,232 @@ namespace WireSockUI.Tests
             });
         }
 
+        private static void TunnelMonitorStopsAfterBoundedQueryTimeout()
+        {
+            var generation = 1;
+            var queryCount = 0;
+            var pendingQuery = new TaskCompletionSource<NativeOperationResult<bool>>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var updateSource = new TaskCompletionSource<TunnelMonitorUpdate>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (var monitor = new TunnelMonitor(
+                       _ =>
+                       {
+                           Interlocked.Increment(ref queryCount);
+                           return Task.FromResult(NativeOperationResult<bool>.Timeout(
+                               "simulated native query timeout", pendingQuery.Task));
+                       },
+                       _ => Task.FromResult(NativeOperationResult<WireguardBoosterExports.WgbStats>.Success(
+                           new WireguardBoosterExports.WgbStats())),
+                       () => generation,
+                       update =>
+                       {
+                           updateSource.TrySetResult(update);
+                           return Task.CompletedTask;
+                       },
+                       10,
+                       100,
+                       1,
+                       1))
+            {
+                monitor.StartConnected(generation);
+                AssertTrue(updateSource.Task.Wait(2000), "Expected the monitor to report the timed-out query.");
+
+                var update = updateSource.Task.GetAwaiter().GetResult();
+                AssertEqual((int)TunnelMonitorUpdateKind.QueryFailed, (int)update.Kind);
+                AssertTrue(update.ConnectionQuery?.TimedOut == true,
+                    "Expected the complete timeout result, including pending completion, to be preserved.");
+
+                Thread.Sleep(25);
+                AssertEqual(1, Volatile.Read(ref queryCount));
+                pendingQuery.TrySetResult(NativeOperationResult<bool>.Failure("simulated completion"));
+            }
+        }
+
+        private static void TunnelMonitorPreservesStatisticsQueryTimeouts()
+        {
+            var generation = 1;
+            var pendingQuery = new TaskCompletionSource<NativeOperationResult<WireguardBoosterExports.WgbStats>>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var updateSource = new TaskCompletionSource<TunnelMonitorUpdate>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (var monitor = new TunnelMonitor(
+                       _ => Task.FromResult(NativeOperationResult<bool>.Success(true)),
+                       _ => Task.FromResult(NativeOperationResult<WireguardBoosterExports.WgbStats>.Timeout(
+                           "simulated statistics timeout", pendingQuery.Task)),
+                       () => generation,
+                       update =>
+                       {
+                           updateSource.TrySetResult(update);
+                           return Task.CompletedTask;
+                       },
+                       10,
+                       100,
+                       1,
+                       1))
+            {
+                monitor.StartConnected(generation);
+                AssertTrue(updateSource.Task.Wait(2000),
+                    "Expected the monitor to report the timed-out statistics query.");
+
+                var update = updateSource.Task.GetAwaiter().GetResult();
+                AssertEqual((int)TunnelMonitorUpdateKind.QueryFailed, (int)update.Kind);
+                AssertTrue(update.StatisticsQuery?.TimedOut == true,
+                    "Expected the statistics timeout and pending completion to be preserved.");
+                pendingQuery.TrySetResult(
+                    NativeOperationResult<WireguardBoosterExports.WgbStats>.Failure("simulated completion"));
+            }
+        }
+
+        private static void TunnelMonitorSuppressesCanceledQueryUpdates()
+        {
+            var generation = 1;
+            var queryStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var queryCompletion = new TaskCompletionSource<NativeOperationResult<bool>>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var updateCount = 0;
+
+            using (var monitor = new TunnelMonitor(
+                       _ =>
+                       {
+                           queryStarted.TrySetResult(true);
+                           return queryCompletion.Task;
+                       },
+                       _ => Task.FromResult(NativeOperationResult<WireguardBoosterExports.WgbStats>.Success(
+                           new WireguardBoosterExports.WgbStats())),
+                       () => generation,
+                       _ =>
+                       {
+                           Interlocked.Increment(ref updateCount);
+                           return Task.CompletedTask;
+                       },
+                       100,
+                       100,
+                       1,
+                       1))
+            {
+                monitor.StartConnected(generation);
+                AssertTrue(queryStarted.Task.Wait(2000), "Expected the native query to start.");
+
+                monitor.Cancel();
+                queryCompletion.TrySetResult(NativeOperationResult<bool>.Success(false));
+                Thread.Sleep(25);
+
+                AssertEqual(0, Volatile.Read(ref updateCount));
+            }
+        }
+
+        private static void WireSockManagerRollsBackFailedLogLevelChanges()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        manager.LogLevel = WireguardBoosterExports.WgbLogLevel.Info;
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+
+                        nativeApi.SetLogLevelFailuresRemaining = 1;
+                        AssertThrows<InvalidOperationException>(
+                            () => manager.LogLevel = WireguardBoosterExports.WgbLogLevel.Debug,
+                            "Simulated set_log_level failure");
+                        AssertEqual((int)WireguardBoosterExports.WgbLogLevel.Info, (int)manager.LogLevel);
+
+                        AssertTrue(manager.Disconnect(), "Expected the fake tunnel to disconnect.");
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to reconnect.");
+                        AssertEqual((int)WireguardBoosterExports.WgbLogLevel.Info,
+                            (int)nativeApi.LastCreateLogLevel);
+                    }
+                    finally
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void ProfileRenameCommitsAndRollsBackTransactionally()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var original = Path.Combine(directory, "original.conf");
+            var destination = Path.Combine(directory, "renamed.conf");
+            var temporary = Path.Combine(directory, "profile.tmp");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(original, "old");
+                File.WriteAllText(temporary, "new");
+
+                ProfileFileTransaction.Commit(temporary, destination, original);
+                AssertFalse(File.Exists(original), "Expected the old profile name to disappear after commit.");
+                AssertEqual("new", File.ReadAllText(destination));
+                AssertFalse(File.Exists(temporary), "Expected the temporary profile to be consumed.");
+
+                var rollbackOriginal = Path.Combine(directory, "rollback-original.conf");
+                var rollbackDestination = Path.Combine(directory, "rollback-renamed.conf");
+                var missingTemporary = Path.Combine(directory, "missing.tmp");
+                File.WriteAllText(rollbackOriginal, "preserved");
+
+                AssertThrows<FileNotFoundException>(
+                    () => ProfileFileTransaction.Commit(missingTemporary, rollbackDestination, rollbackOriginal),
+                    string.Empty);
+                AssertEqual("preserved", File.ReadAllText(rollbackOriginal));
+                AssertFalse(File.Exists(rollbackDestination),
+                    "Expected a failed replacement to restore the original profile name.");
+
+                var lockedOriginal = Path.Combine(directory, "locked-original.conf");
+                var lockedDestination = Path.Combine(directory, "locked-renamed.conf");
+                var lockedTemporary = Path.Combine(directory, "locked.tmp");
+                File.WriteAllText(lockedOriginal, "locked");
+                File.WriteAllText(lockedTemporary, "replacement");
+                using (new FileStream(lockedOriginal, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    AssertThrows<IOException>(
+                        () => ProfileFileTransaction.Commit(
+                            lockedTemporary, lockedDestination, lockedOriginal),
+                        string.Empty);
+                }
+
+                AssertEqual("locked", File.ReadAllText(lockedOriginal));
+                AssertFalse(File.Exists(lockedDestination),
+                    "Expected a failed original deletion to remove the new profile copy.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void SingleInstanceEventRejectsBroadAccess()
+        {
+            var currentUser = WindowsIdentity.GetCurrent().User;
+            var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
+            var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+            var security = new EventWaitHandleSecurity();
+            security.SetOwner(currentUser);
+            security.SetAccessRuleProtection(true, false);
+            security.AddAccessRule(new EventWaitHandleAccessRule(
+                administrators, EventWaitHandleRights.FullControl, AccessControlType.Allow));
+
+            AssertTrue(FrmMain.IsSingleInstanceEventSecurityTrusted(security, currentUser, out var diagnostic),
+                diagnostic ?? "Expected an administrator-only event ACL to be trusted.");
+
+            security.AddAccessRule(new EventWaitHandleAccessRule(
+                everyone, EventWaitHandleRights.Synchronize, AccessControlType.Allow));
+            AssertFalse(FrmMain.IsSingleInstanceEventSecurityTrusted(security, currentUser, out diagnostic),
+                "Expected a globally writable/openable ownership event to be rejected.");
+            AssertTrue(diagnostic?.IndexOf("untrusted identity", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected an actionable event ACL diagnostic, got '{diagnostic}'.");
+        }
+
         private static void NetworkLockEnumMatchesWgboosterAbi()
         {
             AssertEqual(0, (int)WireguardBoosterExports.WgbNetworkLockMode.Disabled);
@@ -2793,6 +3097,8 @@ namespace WireSockUI.Tests
             public int TunnelStateQueryCount { get; private set; }
             public int NetworkLockQueryCount { get; private set; }
             public int SetLogLevelCount { get; private set; }
+            public int SetLogLevelFailuresRemaining { get; set; }
+            public WireguardBoosterExports.WgbLogLevel LastCreateLogLevel { get; private set; }
             public int SetNetworkLockCount { get; private set; }
             public ManualResetEventSlim DropEntered { get; set; }
             public ManualResetEventSlim ContinueDrop { get; set; }
@@ -2803,6 +3109,7 @@ namespace WireSockUI.Tests
                 SetLastErrorForTest(0);
                 GetHandleCount++;
                 LastEnableAnalytics = enableAnalytics;
+                LastCreateLogLevel = logLevel;
                 return CreateHandleResult;
             }
 
@@ -2822,6 +3129,11 @@ namespace WireSockUI.Tests
             {
                 SetLastErrorForTest(0);
                 SetLogLevelCount++;
+                if (SetLogLevelFailuresRemaining > 0)
+                {
+                    SetLogLevelFailuresRemaining--;
+                    throw new InvalidOperationException("Simulated set_log_level failure.");
+                }
             }
 
             public bool CreateTunnelFromFile(WireSockManager.Mode mode, IntPtr handle, string fileName)

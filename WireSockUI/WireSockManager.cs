@@ -171,8 +171,6 @@ namespace WireSockUI
                     if (_handleTunnelDropped)
                         throw new InvalidOperationException(DroppedHandleDiagnostic);
 
-                    _logLevel = value;
-
                     // Update loglevel directly if instantiated
                     if (_handle != IntPtr.Zero)
                     {
@@ -181,6 +179,8 @@ namespace WireSockUI
                             _nativeApi.SetLogLevel(_adapterMode, _handle, value);
                         }
                     }
+
+                    _logLevel = value;
                 }
             }
         }

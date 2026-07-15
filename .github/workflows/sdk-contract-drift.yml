@@ -1,0 +1,51 @@
+name: WireSock SDK Contract Drift
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 4 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  compare-upstream:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout WireSockUI
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          path: wiresockui
+
+      - name: Checkout current WireSock SDK
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          repository: Wiresock-Foundation/wiresock-vpn-client
+          path: wiresock-sdk
+
+      - name: Verify current upstream contract
+        shell: pwsh
+        run: ./wiresockui/scripts/Verify-WgboosterContract.ps1 -SdkRoot ./wiresock-sdk
+
+      - name: Detect upstream SDK contract drift
+        shell: pwsh
+        run: |
+          $pinnedRevision = (Get-Content ./wiresockui/sdk-contract/SDK_REVISION)[1].Trim()
+          $upstreamRevision = (git -C ./wiresock-sdk rev-parse HEAD).Trim()
+          if ($pinnedRevision -ne $upstreamRevision) {
+            Write-Warning "WireSock SDK moved from pinned revision $pinnedRevision to $upstreamRevision."
+          }
+
+          git diff --no-index --ignore-all-space --exit-code `
+            ./wiresockui/sdk-contract/include/wgbooster.h `
+            ./wiresock-sdk/include/wgbooster.h
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The upstream wgbooster.h differs from the pinned contract. Review and update sdk-contract explicitly.'
+          }
+
+          git diff --no-index --ignore-all-space --exit-code `
+            ./wiresockui/sdk-contract/wgbooster/wgbooster.def `
+            ./wiresock-sdk/wgbooster/wgbooster.def
+          if ($LASTEXITCODE -ne 0) {
+            throw 'The upstream wgbooster.def differs from the pinned contract. Review and update sdk-contract explicitly.'
+          }

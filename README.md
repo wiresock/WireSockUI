@@ -10,7 +10,7 @@ WireSockUI does not talk to the newer WireSock Secure Connect service API. Keep 
 - `wgbooster.dll` available next to `WireSockUI.exe` or installed through the WireSock SDK/minimal installer.
 - The WireSock driver installed and usable by the current system.
 - Administrator privileges. Starting with WireSock Secure Connect v3, the driver interface is available only to elevated users, so WireSockUI now always starts elevated.
-- An administrator-owned installation directory. Before initializing settings or diagnostics, WireSockUI validates its executable, configuration, and every top-level DLL/EXE companion. Portable copies in user-writable locations are rejected because an elevated process must not load mutable application code.
+- An administrator-owned installation directory. Before initializing settings or diagnostics, WireSockUI recursively validates its executable, configuration, payload directories, and every DLL/EXE companion without following reparse points. Portable copies in user-writable locations are rejected because an elevated process must not load mutable application code.
 
 At startup WireSockUI looks for `wgbooster.dll` in this order:
 
@@ -70,6 +70,7 @@ Bounded diagnostic logs are written to `%ProgramData%\WireSockUI\Logs\WireSockUI
 ## Building
 
 ```powershell
+dotnet restore WireSockUI.sln -p:Platform=x64 -m:1
 dotnet run --project WireSockUI.Tests\WireSockUI.Tests.csproj --configuration Release --framework net472-windows
 dotnet build WireSockUI.sln --configuration Release -p:Platform=x64 -p:UseSharedCompilation=false -m:1
 dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:UseSharedCompilation=false -m:1
@@ -77,7 +78,9 @@ dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:Use
 
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
 
-CI checks the direct-driver ABI against the pinned SDK contract snapshot under `sdk-contract`. The snapshot currently comes from `Wiresock-Foundation/wiresock-vpn-client` revision `aa72bc6ab8dce8f8128f74b8a6e3167b8caaf11a`; update the header, export definition, and `SDK_REVISION` together when intentionally adopting a newer SDK revision. A manual `SDK Integration` workflow runs an additional handle lifecycle smoke test on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths; `WIRESOCKUI_TEST_PROFILE` is optional and enables a full start/query/stop/drop smoke test with a non-production profile.
+CI checks both the native header/export ABI and the managed P/Invoke declarations against the pinned SDK contract snapshot under `sdk-contract`. The snapshot currently comes from `Wiresock-Foundation/wiresock-vpn-client` revision `aa72bc6ab8dce8f8128f74b8a6e3167b8caaf11a`; update the header, export definition, and `SDK_REVISION` together when intentionally adopting a newer SDK revision. A scheduled workflow compares the snapshot with current upstream contract files. The `SDK Integration` workflow runs a handle lifecycle smoke test on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`; it remains manually runnable and is also a required release job. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths; `WIRESOCKUI_TEST_PROFILE` is optional and enables a full start/query/stop/drop smoke test with a non-production profile.
+
+Native state and statistics polling use bounded asynchronous queries. If `wgbooster.dll` does not return before the query timeout, WireSockUI stops issuing additional native operations, records a recovery marker, and requires recovery or restart. Startup also compares the process and `wgbooster.dll` PE architectures so x64/ARM64 mismatches are reported directly.
 
 ## Releases
 
@@ -90,9 +93,10 @@ Release tags must use the `vMAJOR.MINOR.PATCH` form. The workflow uses the repos
 
 ## Remaining Runtime Risks
 
-- The ABI contract job does not prove that the installed driver and SDK DLL work together. Keep the manual real-SDK smoke workflow available on representative x64 and ARM64 hosts.
+- The ABI contract job does not prove that the installed driver and SDK DLL work together. Keep the release-gated real-SDK smoke runners available on representative x64 and ARM64 hosts.
 - Tunnel start/stop still depends on driver state and Windows networking permissions after elevation succeeds.
-- The `WireSockUI.Tests` harness covers parser/profile validation, native error-sentinel handling, lifecycle cleanup through a deterministic native facade, ACL checks, and reparse-point rejection. Real driver and `wgbooster.dll` validation remains environment-specific and is handled by the manual SDK Integration workflow.
+- The global `WiresockClientService` event is an SDK compatibility primitive shared with the direct C++ CLI. WireSockUI rejects unexpected owners and broad ACLs, but changing to a private authenticated namespace requires a coordinated SDK change.
+- The `WireSockUI.Tests` harness covers parser/profile validation, native error-sentinel handling, lifecycle cleanup and bounded monitoring through a deterministic native facade, ACL checks, architecture matching, transactional profile renames, and reparse-point rejection. Real driver and `wgbooster.dll` validation remains environment-specific and is handled by the SDK Integration workflow.
 
 ## License
 

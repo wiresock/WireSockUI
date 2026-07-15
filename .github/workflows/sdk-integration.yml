@@ -2,6 +2,7 @@ name: WireSock SDK Integration
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -31,7 +32,7 @@ jobs:
           dotnet-version: '10.x'
 
       - name: Restore
-        run: dotnet restore WireSockUI.sln /p:Platform=${{ matrix.platform }}
+        run: dotnet restore WireSockUI.sln /p:Platform=${{ matrix.platform }} -m:1
 
       - name: Run elevated real-SDK lifecycle smoke test
         env:
