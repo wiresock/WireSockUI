@@ -517,8 +517,11 @@
   <data name="TunnelConnectTimeout" xml:space="preserve">
     <value>The tunnel did not report an active connection in time. WireSock UI stopped the pending tunnel; try again or check the log.</value>
   </data>
+  <data name="TunnelDisconnectTimeout" xml:space="preserve">
+    <value>The native tunnel disconnect did not finish in time. WireSock UI will keep tunnel operations disabled until cleanup completes.</value>
+  </data>
   <data name="TunnelConnectCleanupPending" xml:space="preserve">
-    <value>WireSock UI is still cleaning up a timed-out tunnel connection. Wait for cleanup to finish before trying another tunnel operation.</value>
+    <value>WireSock UI is still waiting for a timed-out native operation to finish. Wait for cleanup before trying another tunnel operation.</value>
   </data>
   <data name="TunnelErrorStart" xml:space="preserve">
     <value>Tunnel has failed to start. Please check log.</value>

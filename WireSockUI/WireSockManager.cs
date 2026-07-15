@@ -59,6 +59,8 @@ namespace WireSockUI
         private long _connectionSequence;
         private bool _handleTunnelDropped;
         private volatile bool _disposed;
+        private volatile string _lastError;
+        private volatile string _profileName;
 
         /// <summary>
         ///     Initializes a new instance of the <see cref="WireSockManager" />.
@@ -238,21 +240,23 @@ namespace WireSockUI
 
         public bool HasTunnelHandle
         {
-            get
-            {
-                lock (_syncRoot)
-                {
-                    return _handle != IntPtr.Zero;
-                }
-            }
+            get => _handle != IntPtr.Zero;
         }
 
         /// <summary>
         ///     Current active profile, if any
         /// </summary>
-        public string ProfileName { get; private set; }
+        public string ProfileName
+        {
+            get => _profileName;
+            private set => _profileName = value;
+        }
 
-        public string LastError { get; private set; }
+        public string LastError
+        {
+            get => _lastError;
+            private set => _lastError = value;
+        }
 
         public bool KillSwitchEnabled
         {

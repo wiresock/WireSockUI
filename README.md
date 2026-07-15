@@ -10,6 +10,7 @@ WireSockUI does not talk to the newer WireSock Secure Connect service API. Keep 
 - `wgbooster.dll` available next to `WireSockUI.exe` or installed through the WireSock SDK/minimal installer.
 - The WireSock driver installed and usable by the current system.
 - Administrator privileges. Starting with WireSock Secure Connect v3, the driver interface is available only to elevated users, so WireSockUI now always starts elevated.
+- An administrator-owned installation directory. Before initializing settings or diagnostics, WireSockUI validates its executable, configuration, and every top-level DLL/EXE companion. Portable copies in user-writable locations are rejected because an elevated process must not load mutable application code.
 
 At startup WireSockUI looks for `wgbooster.dll` in this order:
 
@@ -49,6 +50,8 @@ Runtime state that can be written by the elevated process, including the native 
 
 Elevated autorun and SDK DLL loading are available only when the target file, containing directory, and replacement-sensitive ancestor path are administrator-owned. Install WireSockUI and the SDK into administrator-owned locations.
 
+This release applies the same trust requirement to the complete WireSockUI application payload. Move existing portable installations to a directory created and owned by Administrators or `SYSTEM`, and ensure ordinary users have no write, delete, permission-change, or ownership rights on the executable, its `.config`, or companion DLL/EXE files.
+
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
 
 The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel, preserves the native lock during reconnect/profile-switch cleanup, and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
@@ -74,6 +77,8 @@ dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:Use
 
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
 
+CI also checks the direct-driver ABI against the current `Wiresock-Foundation/wiresock-vpn-client` `main` branch. A manual `SDK Integration` workflow runs an additional handle lifecycle smoke test on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths; `WIRESOCKUI_TEST_PROFILE` is optional and enables a full start/query/stop/drop smoke test with a non-production profile.
+
 ## Releases
 
 The release workflow signs `WireSockUI.exe`, verifies the Authenticode signature, generates an SPDX SBOM, publishes the ZIP with a SHA-256 checksum, and creates a GitHub artifact-provenance attestation. Configure these repository secrets before publishing a tag:
@@ -85,9 +90,9 @@ Release tags must use the `vMAJOR.MINOR.PATCH` form. The workflow uses the repos
 
 ## Remaining Runtime Risks
 
-- A clean build does not prove that the installed driver and SDK DLL are present or compatible on the target machine.
+- The ABI contract job does not prove that the installed driver and SDK DLL work together. Keep the manual real-SDK smoke workflow available on representative x64 and ARM64 hosts.
 - Tunnel start/stop still depends on driver state and Windows networking permissions after elevation succeeds.
-- The `WireSockUI.Tests` harness covers parser/profile validation, native error-sentinel handling, lifecycle cleanup through a deterministic native facade, ACL checks, and reparse-point rejection. Actual driver and `wgbooster.dll` operation still needs runtime validation on a machine with the SDK installed.
+- The `WireSockUI.Tests` harness covers parser/profile validation, native error-sentinel handling, lifecycle cleanup through a deterministic native facade, ACL checks, and reparse-point rejection. Real driver and `wgbooster.dll` validation remains environment-specific and is handled by the manual SDK Integration workflow.
 
 ## License
 

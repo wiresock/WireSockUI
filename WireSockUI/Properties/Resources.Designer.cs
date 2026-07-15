@@ -1254,7 +1254,16 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
-        ///   Looks up a localized string similar to WireSock UI is still cleaning up a timed-out tunnel connection. Wait for cleanup to finish before trying another tunnel operation..
+        ///   Looks up a localized string similar to The native tunnel disconnect did not finish in time. WireSock UI will keep tunnel operations disabled until cleanup completes..
+        /// </summary>
+        internal static string TunnelDisconnectTimeout {
+            get {
+                return ResourceManager.GetString("TunnelDisconnectTimeout", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to WireSock UI is still waiting for a timed-out native operation to finish. Wait for cleanup before trying another tunnel operation..
         /// </summary>
         internal static string TunnelConnectCleanupPending {
             get {

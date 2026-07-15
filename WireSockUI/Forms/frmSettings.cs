@@ -35,12 +35,21 @@ namespace WireSockUI.Forms
         }
 
         public bool RequestedEnableKillSwitch => chkEnableKillSwitch.Checked;
+        public string RequestedLogLevel => ddlLogLevel.SelectedItem as string ?? "Error";
 
         private void OnProfilesFolderClick(object sender, EventArgs e)
         {
             try
             {
-                Process.Start("explorer.exe", Global.ConfigsFolder);
+                var windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                if (string.IsNullOrWhiteSpace(windowsDirectory))
+                    throw new DirectoryNotFoundException("The Windows installation directory is unavailable.");
+
+                var explorerPath = Path.Combine(windowsDirectory, "explorer.exe");
+                if (!File.Exists(explorerPath))
+                    throw new FileNotFoundException("Windows Explorer was not found.", explorerPath);
+
+                Process.Start(explorerPath, $"\"{Global.ConfigsFolder}\"");
             }
             catch (Exception ex)
             {
@@ -446,7 +455,6 @@ namespace WireSockUI.Forms
             var previousAutoUpdate = Settings.Default.AutoUpdate;
             var previousUseAdapter = Settings.Default.UseAdapter;
             var previousEnableNotifications = Settings.Default.EnableNotifications;
-            var previousLogLevel = Settings.Default.LogLevel;
 
             Settings.Default.AutoRun = chkAutorun.Checked;
             Settings.Default.AutoConnect = chkAutoConnect.Checked;
@@ -454,7 +462,6 @@ namespace WireSockUI.Forms
             Settings.Default.AutoUpdate = chkAutoUpdate.Checked;
             Settings.Default.UseAdapter = chkUseAdapter.Checked;
             Settings.Default.EnableNotifications = chkNotify.Checked;
-            Settings.Default.LogLevel = ddlLogLevel.SelectedItem as string;
 
             try
             {
@@ -468,7 +475,6 @@ namespace WireSockUI.Forms
                 Settings.Default.AutoUpdate = previousAutoUpdate;
                 Settings.Default.UseAdapter = previousUseAdapter;
                 Settings.Default.EnableNotifications = previousEnableNotifications;
-                Settings.Default.LogLevel = previousLogLevel;
 
                 if (autoRunChanged)
                 {
