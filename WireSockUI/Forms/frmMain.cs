@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Drawing;
 using System.IO;
@@ -866,7 +867,67 @@ namespace WireSockUI.Forms
             return true;
         }
 
-        private async Task HandleTunnelMonitorUpdateAsync(TunnelMonitorUpdate update)
+        private Task HandleTunnelMonitorUpdateAsync(TunnelMonitorUpdate update)
+        {
+            if (_shutdownComplete || IsDisposed || Disposing || !IsHandleCreated)
+                return Task.CompletedTask;
+
+            return InvokeOnUiThreadAsync(this, () => HandleTunnelMonitorUpdateOnUiThreadAsync(update));
+        }
+
+        internal static Task InvokeOnUiThreadAsync(ISynchronizeInvoke synchronizer, Func<Task> action)
+        {
+            if (synchronizer == null)
+                throw new ArgumentNullException(nameof(synchronizer));
+            if (action == null)
+                throw new ArgumentNullException(nameof(action));
+
+            bool invokeRequired;
+            try
+            {
+                invokeRequired = synchronizer.InvokeRequired;
+            }
+            catch (ObjectDisposedException)
+            {
+                return Task.CompletedTask;
+            }
+            catch (InvalidOperationException)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (!invokeRequired)
+                return action();
+
+            var completion = new TaskCompletionSource<object>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                synchronizer.BeginInvoke(new Action(async () =>
+                {
+                    try
+                    {
+                        await action();
+                        completion.TrySetResult(null);
+                    }
+                    catch (Exception ex)
+                    {
+                        completion.TrySetException(ex);
+                    }
+                }), Array.Empty<object>());
+                return completion.Task;
+            }
+            catch (ObjectDisposedException)
+            {
+                return Task.CompletedTask;
+            }
+            catch (InvalidOperationException)
+            {
+                return Task.CompletedTask;
+            }
+        }
+
+        private async Task HandleTunnelMonitorUpdateOnUiThreadAsync(TunnelMonitorUpdate update)
         {
             try
             {

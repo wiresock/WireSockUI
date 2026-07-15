@@ -124,6 +124,7 @@ namespace WireSockUI.Tests
                 { "Tunnel monitor preserves statistics query timeouts", TunnelMonitorPreservesStatisticsQueryTimeouts },
                 { "Tunnel monitor suppresses canceled query updates", TunnelMonitorSuppressesCanceledQueryUpdates },
                 { "Tunnel monitor classifies unexpected statistics failures", TunnelMonitorClassifiesUnexpectedStatisticsFailures },
+                { "Tunnel monitor UI dispatch awaits marshaled updates", TunnelMonitorUiDispatchAwaitsMarshaledUpdates },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
@@ -2913,6 +2914,37 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void TunnelMonitorUiDispatchAwaitsMarshaledUpdates()
+        {
+            var actionStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var actionRelease = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var synchronizer = new QueuedSynchronizeInvoke();
+            try
+            {
+                var dispatchTask = FrmMain.InvokeOnUiThreadAsync(synchronizer, async () =>
+                {
+                    actionStarted.TrySetResult(true);
+                    await actionRelease.Task;
+                });
+
+                AssertFalse(actionStarted.Task.IsCompleted, "Expected the queued UI callback not to run early.");
+
+                synchronizer.RunCallback();
+                AssertTrue(actionStarted.Task.Wait(2000), "Expected the marshaled UI callback to start.");
+                AssertFalse(dispatchTask.IsCompleted,
+                    "Expected the dispatch task to wait for the asynchronous UI callback.");
+
+                actionRelease.TrySetResult(true);
+                AssertTrue(dispatchTask.Wait(2000),
+                    "Expected the dispatch task to complete with the UI callback.");
+            }
+            finally
+            {
+                actionRelease.TrySetResult(true);
+            }
+        }
+
         private static void WireSockManagerRollsBackFailedLogLevelChanges()
         {
             WithTemporaryConfigFolder(() =>
@@ -3299,6 +3331,44 @@ namespace WireSockUI.Tests
             public override void Post(SendOrPostCallback callback, object state)
             {
                 // Intentionally do not dispatch posted work. The timeout helper must not post here.
+            }
+        }
+
+        private sealed class QueuedSynchronizeInvoke : ISynchronizeInvoke
+        {
+            private object[] _arguments;
+            private Delegate _callback;
+
+            public bool InvokeRequired => true;
+
+            public IAsyncResult BeginInvoke(Delegate method, object[] args)
+            {
+                _callback = method;
+                _arguments = args;
+                return Task.CompletedTask;
+            }
+
+            public object EndInvoke(IAsyncResult result)
+            {
+                return null;
+            }
+
+            public object Invoke(Delegate method, object[] args)
+            {
+                return method.DynamicInvoke(args);
+            }
+
+            public void RunCallback()
+            {
+                var callback = _callback;
+                var arguments = _arguments;
+                _callback = null;
+                _arguments = null;
+
+                if (callback == null)
+                    throw new InvalidOperationException("No UI callback is queued.");
+
+                callback.DynamicInvoke(arguments);
             }
         }
 
