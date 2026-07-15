@@ -112,13 +112,19 @@ namespace WireSockUI.Forms
         public void BeginCleanup()
         {
             lock (_syncRoot)
-                _cleanupPending = 1;
+                _cleanupPending++;
         }
 
-        public void EndCleanup()
+        public bool EndCleanup()
         {
             lock (_syncRoot)
-                _cleanupPending = 0;
+            {
+                if (_cleanupPending == 0)
+                    return false;
+
+                _cleanupPending--;
+                return _cleanupPending == 0;
+            }
         }
 
         public bool RequireRecovery()

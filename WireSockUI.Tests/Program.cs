@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -8,6 +9,8 @@ using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using WireSockUI;
 using WireSockUI.Config;
 using WireSockUI.Diagnostics;
@@ -39,8 +42,11 @@ namespace WireSockUI.Tests
         private static extern bool CreateHardLink(string newFileName, string existingFileName,
             IntPtr securityAttributes);
 
-        private static int Main()
+        private static int Main(string[] args)
         {
+            if (args?.Any(arg => string.Equals(arg, "--sdk-integration", StringComparison.OrdinalIgnoreCase)) == true)
+                return RunSdkIntegrationSmoke();
+
             var tests = new Dictionary<string, Action>
             {
                 { "Profile rejects empty required values", ProfileRejectsEmptyRequiredValues },
@@ -84,6 +90,7 @@ namespace WireSockUI.Tests
                 { "Profile rejects user-writable secured files", ProfileRejectsUserWritableSecuredFiles },
                 { "Release version parser handles SemVer tags", ReleaseVersionParserHandlesSemVerTags },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
+                { "Program rejects untrusted application payloads", ProgramRejectsUntrustedApplicationPayloads },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
                 { "Program rejects an untrusted WireSock crash handler", ProgramRejectsUntrustedWireSockCrashHandler },
@@ -115,6 +122,7 @@ namespace WireSockUI.Tests
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
                 { "Settings upgrade runs exactly once", SettingsUpgradeRunsExactlyOnce },
                 { "Persisted setting transactions compensate failures", PersistedSettingTransactionsCompensateFailures },
+                { "Settings updates stop after the first failure", SettingsUpdatesStopAfterFirstFailure },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
                 { "Notification shortcut name is path seeded", NotificationShortcutNameIsPathSeeded },
@@ -123,6 +131,9 @@ namespace WireSockUI.Tests
                 { "Autorun validates the complete task definition", AutoRunValidatesCompleteTaskDefinition },
                 { "Process picker preserves executable match names", ProcessPickerPreservesExecutableMatchNames },
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
+                { "Lifecycle resets a preserved lock after handle creation fails", LifecycleResetsPreservedLockAfterHandleCreationFails },
+                { "Lifecycle tracks late disconnect completion after timeout", LifecycleTracksLateDisconnectCompletionAfterTimeout },
+                { "Lifecycle shutdown avoids synchronization-context deadlocks", LifecycleShutdownAvoidsSynchronizationContextDeadlocks },
                 { "WireSock manager surfaces native query failures", WireSockManagerSurfacesNativeQueryFailures },
                 { "WireSock manager cleans up failed starts", WireSockManagerCleansUpFailedStarts },
                 { "WireSock manager retains handles when cleanup fails", WireSockManagerRetainsHandlesWhenCleanupFails },
@@ -130,6 +141,7 @@ namespace WireSockUI.Tests
                 { "WireSock manager quarantines dropped handles", WireSockManagerQuarantinesDroppedHandles },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "WireSock exports use restricted DLL search", WireSockExportsUseRestrictedDllSearch },
+                { "WireSock handle booleans match the C++ ABI", WireSockHandleBooleansMatchCppAbi },
                 { "WireSock log callback decodes UTF-8 explicitly", WireSockLogCallbackDecodesUtf8Explicitly },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
@@ -150,6 +162,143 @@ namespace WireSockUI.Tests
             }
 
             return failures == 0 ? 0 : 1;
+        }
+
+        private static int RunSdkIntegrationSmoke()
+        {
+            using (var identity = WindowsIdentity.GetCurrent())
+            {
+                var principal = new WindowsPrincipal(identity);
+                if (!principal.IsInRole(WindowsBuiltInRole.Administrator))
+                {
+                    Console.WriteLine("FAIL --sdk-integration requires an elevated runner token.");
+                    return 1;
+                }
+            }
+
+            var libraryPath = Environment.GetEnvironmentVariable("WIRESOCKUI_WGBOOSTER_PATH");
+            if (string.IsNullOrWhiteSpace(libraryPath))
+            {
+                Console.WriteLine("FAIL WIRESOCKUI_WGBOOSTER_PATH is required for --sdk-integration.");
+                return 1;
+            }
+
+            try
+            {
+                libraryPath = Path.GetFullPath(libraryPath);
+                var libraryDirectory = Path.GetDirectoryName(libraryPath);
+                if (!WireSockUI.Program.TryValidateWireSockLibraryDirectory(
+                        libraryDirectory, out var validatedDirectory) ||
+                    !string.Equals(Path.GetFullPath(validatedDirectory ?? string.Empty), libraryDirectory,
+                        StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException(
+                        "The configured SDK directory is not administrator-owned or is missing required files.");
+
+                if (!WireSockUI.Program.TryConfigureRestrictedDllSearchPath(
+                        libraryDirectory, libraryPath, out var loaderDiagnostic))
+                    throw new InvalidOperationException(loaderDiagnostic ?? "Unable to load wgbooster.dll.");
+
+                var api = new WireSockNativeApi();
+                WireguardBoosterExports.LogPrinter logPrinter = message =>
+                {
+                    try
+                    {
+                        var text = WireguardBoosterExports.DecodeLogMessage(message);
+                        if (!string.IsNullOrWhiteSpace(text))
+                            Console.WriteLine($"SDK {text}");
+                    }
+                    catch
+                    {
+                        // A managed exception must never cross the native logging callback boundary.
+                    }
+                };
+                var handle = api.CreateHandle(WireSockManager.Mode.Transparent, logPrinter,
+                    WireguardBoosterExports.WgbLogLevel.Error, false, false);
+                if (handle == IntPtr.Zero)
+                    throw new Win32Exception(Marshal.GetLastWin32Error(), "wgbooster failed to create a handle.");
+
+                var tunnelCreated = false;
+                var tunnelStarted = false;
+                try
+                {
+                    var profilePath = Environment.GetEnvironmentVariable("WIRESOCKUI_TEST_PROFILE");
+                    if (!string.IsNullOrWhiteSpace(profilePath))
+                    {
+                        profilePath = Path.GetFullPath(profilePath);
+                        if (!File.Exists(profilePath))
+                            throw new FileNotFoundException("The SDK integration profile was not found.", profilePath);
+
+                        if (!api.CreateTunnelFromFile(WireSockManager.Mode.Transparent, handle, profilePath))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                                "wgbooster failed to create the integration tunnel.");
+                        tunnelCreated = true;
+
+                        if (!api.StartTunnel(WireSockManager.Mode.Transparent, handle))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                                "wgbooster failed to start the integration tunnel.");
+                        tunnelStarted = true;
+
+                        if (!api.GetTunnelActive(WireSockManager.Mode.Transparent, handle))
+                            throw new Win32Exception(Marshal.GetLastWin32Error(),
+                                "wgbooster did not report the integration tunnel active.");
+                    }
+                }
+                finally
+                {
+                    Exception cleanupException = null;
+                    var tunnelDropped = !tunnelCreated;
+                    try
+                    {
+                        if (tunnelStarted && !api.StopTunnel(WireSockManager.Mode.Transparent, handle))
+                            cleanupException = new Win32Exception(Marshal.GetLastWin32Error(),
+                                "wgbooster failed to stop the integration tunnel.");
+                    }
+                    catch (Exception ex)
+                    {
+                        cleanupException = ex;
+                    }
+
+                    try
+                    {
+                        if (tunnelCreated)
+                            tunnelDropped = api.DropTunnel(WireSockManager.Mode.Transparent, handle, false);
+                        if (!tunnelDropped && cleanupException == null)
+                            cleanupException = new Win32Exception(Marshal.GetLastWin32Error(),
+                                "wgbooster failed to drop the integration tunnel.");
+                    }
+                    catch (Exception ex)
+                    {
+                        if (cleanupException == null)
+                            cleanupException = ex;
+                    }
+
+                    try
+                    {
+                        if (tunnelDropped)
+                            api.ReleaseHandle(WireSockManager.Mode.Transparent, handle);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (cleanupException == null)
+                            cleanupException = ex;
+                    }
+                    finally
+                    {
+                        GC.KeepAlive(logPrinter);
+                    }
+
+                    if (cleanupException != null)
+                        throw cleanupException;
+                }
+
+                Console.WriteLine("PASS real wgbooster.dll load and handle lifecycle smoke test.");
+                return 0;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"FAIL real wgbooster.dll smoke test: {ex.GetBaseException().Message}");
+                return 1;
+            }
         }
 
         private static void ProfileRejectsEmptyRequiredValues()
@@ -878,13 +1027,32 @@ namespace WireSockUI.Tests
             AssertEqual(Path.Combine(root, "Windows"), normalizedChild);
         }
 
+        private static void ProgramRejectsUntrustedApplicationPayloads()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var executable = Path.Combine(directory, "WireSockUI.exe");
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(executable, string.Empty);
+                File.WriteAllText(executable + ".config", "<configuration />");
+                File.WriteAllText(Path.Combine(directory, "dependency.dll"), string.Empty);
+
+                AssertFalse(WireSockUI.Program.TryValidateApplicationPayload(executable, out var diagnostic),
+                    "Expected an elevated application payload in a user-writable directory to be rejected.");
+                AssertTrue(!string.IsNullOrWhiteSpace(diagnostic) &&
+                           diagnostic.IndexOf("writable", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable application trust diagnostic, got '{diagnostic}'.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
         private static void ProgramRejectsUserWritableWireSockLibraryDirectories()
         {
-            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateWireSockLibraryDirectory",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            if (validate == null)
-                throw new InvalidOperationException("TryValidateWireSockLibraryDirectory helper was not found.");
-
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
 
@@ -908,11 +1076,12 @@ namespace WireSockUI.Tests
                     // Temporary test folders are normally user-writable already; explicit ACL setup is best effort.
                 }
 
-                var args = new object[] { directory, null };
-                var accepted = (bool)validate.Invoke(null, args);
+                var accepted = WireSockUI.Program.TryValidateWireSockLibraryDirectory(
+                    directory, out var validatedDirectory);
 
                 AssertFalse(accepted, "Expected user-writable WireSock library directories to be rejected.");
-                AssertTrue(args[1] == null, "Expected rejected WireSock library directories not to return a path.");
+                AssertTrue(validatedDirectory == null,
+                    "Expected rejected WireSock library directories not to return a path.");
             }
             finally
             {
@@ -1499,7 +1668,7 @@ namespace WireSockUI.Tests
                     File.WriteAllText(target, "unchanged");
                     if (!CreateHardLink(Global.NativeRecoveryMarkerPath, target, IntPtr.Zero))
                     {
-                        Console.WriteLine("SKIP hard-link creation unavailable; recovery marker replacement not exercised.");
+                        SkipOrFail("hard-link creation unavailable; recovery marker replacement not exercised.");
                         return;
                     }
 
@@ -1528,7 +1697,7 @@ namespace WireSockUI.Tests
                 File.WriteAllText(target, "contents");
                 if (!CreateHardLink(link, target, IntPtr.Zero))
                 {
-                    Console.WriteLine("SKIP hard-link creation unavailable; writable-file rejection not exercised.");
+                    SkipOrFail("hard-link creation unavailable; writable-file rejection not exercised.");
                     return;
                 }
 
@@ -1560,7 +1729,7 @@ namespace WireSockUI.Tests
                 AssertEqual("[Interface]\r\nPrivateKey = test", SecureFileSystem.ReadAllText(path));
                 if (!CreateHardLink(hardLinkPath, path, IntPtr.Zero))
                 {
-                    Console.WriteLine("SKIP hard-link creation unavailable; validated content-read rejection not exercised.");
+                    SkipOrFail("hard-link creation unavailable; validated content-read rejection not exercised.");
                     return;
                 }
 
@@ -1733,6 +1902,56 @@ namespace WireSockUI.Tests
             AssertEqual((int)PersistedSettingUpdateStatus.RollbackSaveFailed, (int)result.Status);
             AssertTrue(value,
                 "Expected a rollback save failure to retain the last value known to have been saved successfully.");
+
+            value = false;
+            saveCount = 0;
+            result = PersistedSettingTransaction.ApplyAsync(
+                    true,
+                    false,
+                    requested => value = requested,
+                    () => saveCount++,
+                    () => System.Threading.Tasks.Task.FromResult(false))
+                .GetAwaiter().GetResult();
+            AssertEqual((int)PersistedSettingUpdateStatus.RuntimeApplyFailed, (int)result.Status);
+            AssertFalse(value, "Expected asynchronous runtime failure to restore the previous value.");
+            AssertEqual(2, saveCount);
+        }
+
+        private static void SettingsUpdatesStopAfterFirstFailure()
+        {
+            var calls = new List<string>();
+            var result = FrmMain.ApplySettingsUpdatesAsync(
+                    () =>
+                    {
+                        calls.Add("log-level");
+                        return Task.FromResult(false);
+                    },
+                    () =>
+                    {
+                        calls.Add("kill-switch");
+                        return Task.FromResult(true);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(result, "Expected a failed log-level update to fail the settings workflow.");
+            AssertEqual("log-level", string.Join(",", calls));
+
+            calls.Clear();
+            result = FrmMain.ApplySettingsUpdatesAsync(
+                    () =>
+                    {
+                        calls.Add("log-level");
+                        return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("kill-switch");
+                        return Task.FromResult(false);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(result, "Expected a failed Kill Switch update to fail the settings workflow.");
+            AssertEqual("log-level,kill-switch", string.Join(",", calls));
         }
 
         private static void EditorValidatesAmneziaOptions()
@@ -1808,10 +2027,18 @@ namespace WireSockUI.Tests
                 "Expected advancing the generation to clear the timeout marker.");
 
             coordinator.BeginCleanup();
+            coordinator.BeginCleanup();
             AssertFalse(coordinator.TryBeginOperation(out blockReason),
                 "Expected pending cleanup to block new operations.");
             AssertEqual((int)TunnelOperationBlockReason.CleanupPending, (int)blockReason);
-            coordinator.EndCleanup();
+            AssertFalse(coordinator.EndCleanup(),
+                "Expected the first completion to retain overlapping cleanup ownership.");
+            AssertTrue(coordinator.CleanupPending,
+                "Expected cleanup to remain pending until every owner completes.");
+            AssertTrue(coordinator.EndCleanup(),
+                "Expected the final completion to release cleanup ownership.");
+            AssertFalse(coordinator.EndCleanup(),
+                "Expected unmatched cleanup completion not to report an ownership release.");
 
             AssertTrue(coordinator.RequireRecovery(), "Expected the first recovery transition to be observable.");
             AssertFalse(coordinator.RequireRecovery(), "Expected duplicate recovery transitions to be idempotent.");
@@ -2036,6 +2263,167 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void LifecycleResetsPreservedLockAfterHandleCreationFails()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi { CreateHandleResult = IntPtr.Zero };
+                var networkLockApi = new FakeNetworkLockApi { Active = true };
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = true;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        var controller = new TunnelLifecycleController(manager, networkLockApi);
+
+                        var result = controller.ConnectAsync("office", true, 1000).GetAwaiter().GetResult();
+
+                        AssertFalse(result.Succeeded, "Expected handle creation failure to fail the connection.");
+                        AssertFalse(result.TimedOut, "Expected the failed fake connection to complete normally.");
+                        AssertFalse(result.Value.RecoveryRequired,
+                            "Expected a successful preserved-lock reset not to require recovery.");
+                        AssertEqual(1, networkLockApi.ResetCount);
+                        AssertFalse(networkLockApi.Active,
+                            "Expected failed reconnect cleanup to release the preserved network lock.");
+
+                        networkLockApi.Active = true;
+                        networkLockApi.ResetResult = false;
+                        var failedReset = controller.ConnectAsync("office", true, 1000).GetAwaiter().GetResult();
+                        AssertTrue(failedReset.Value.RecoveryRequired,
+                            "Expected an unreset preserved lock to require explicit recovery.");
+                        AssertTrue(failedReset.Diagnostic?.Contains("simulated reset failure") == true,
+                            "Expected the preserved-lock reset diagnostic to be retained.");
+                    }
+                    finally
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void LifecycleTracksLateDisconnectCompletionAfterTimeout()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    DropEntered = new ManualResetEventSlim(false),
+                    ContinueDrop = new ManualResetEventSlim(false)
+                };
+                using (nativeApi.DropEntered)
+                using (nativeApi.ContinueDrop)
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+
+                        var result = controller.DisconnectAsync(null, false, 50).GetAwaiter().GetResult();
+                        AssertTrue(result.TimedOut, "Expected the blocked native disconnect to time out.");
+                        AssertTrue(result.PendingCompletion != null,
+                            "Expected timed-out native cleanup to retain its late completion task.");
+                        AssertTrue(nativeApi.DropEntered.Wait(1000),
+                            "Expected the fake native drop operation to start.");
+
+                        nativeApi.ContinueDrop.Set();
+                        var lateResult = result.PendingCompletion.GetAwaiter().GetResult();
+                        AssertTrue(lateResult.Succeeded, "Expected late native disconnect cleanup to succeed.");
+                        AssertFalse(manager.HasTunnelHandle,
+                            "Expected late disconnect completion to release the native handle.");
+                    }
+                    finally
+                    {
+                        nativeApi.ContinueDrop.Set();
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void LifecycleShutdownAvoidsSynchronizationContextDeadlocks()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    DropEntered = new ManualResetEventSlim(false),
+                    ContinueDrop = new ManualResetEventSlim(false)
+                };
+                using (nativeApi.DropEntered)
+                using (nativeApi.ContinueDrop)
+                using (var completion = new ManualResetEventSlim(false))
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+
+                        NativeOperationResult<bool> shutdownResult = null;
+                        Exception shutdownException = null;
+                        var shutdownThread = new Thread(() =>
+                        {
+                            SynchronizationContext.SetSynchronizationContext(
+                                new NonPumpingSynchronizationContext());
+                            try
+                            {
+                                shutdownResult = controller.ShutdownAsync(100).GetAwaiter().GetResult();
+                            }
+                            catch (Exception ex)
+                            {
+                                shutdownException = ex;
+                            }
+                            finally
+                            {
+                                SynchronizationContext.SetSynchronizationContext(null);
+                                completion.Set();
+                            }
+                        })
+                        {
+                            IsBackground = true
+                        };
+
+                        shutdownThread.Start();
+                        AssertTrue(nativeApi.DropEntered.Wait(1000),
+                            "Expected the fake native shutdown cleanup to start.");
+
+                        var completedWithoutPumping = completion.Wait(2000);
+                        nativeApi.ContinueDrop.Set();
+
+                        AssertTrue(completedWithoutPumping,
+                            "Expected shutdown timeout handling not to require a synchronization-context pump.");
+                        if (shutdownException != null)
+                            throw new InvalidOperationException("The shutdown workflow failed unexpectedly.",
+                                shutdownException);
+
+                        AssertTrue(shutdownResult != null && shutdownResult.TimedOut,
+                            "Expected the blocked native shutdown cleanup to return a timeout result.");
+                        AssertTrue(shutdownResult.PendingCompletion != null,
+                            "Expected the timed-out shutdown to retain its late completion task.");
+                        AssertTrue(shutdownResult.PendingCompletion.GetAwaiter().GetResult().Succeeded,
+                            "Expected the released native shutdown cleanup to complete successfully.");
+                        AssertTrue(shutdownThread.Join(1000),
+                            "Expected the synchronous shutdown caller to exit after receiving the timeout result.");
+                    }
+                    finally
+                    {
+                        nativeApi.ContinueDrop.Set();
                         WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
                     }
                 }
@@ -2309,6 +2697,28 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void WireSockHandleBooleansMatchCppAbi()
+        {
+            foreach (var methodName in new[] { "wgb_get_handle_ex", "wgbp_get_handle_ex" })
+            {
+                var method = typeof(WireguardBoosterExports).GetMethod(methodName,
+                    BindingFlags.Public | BindingFlags.Static);
+                if (method == null)
+                    throw new InvalidOperationException($"Expected export '{methodName}' to exist.");
+
+                var parameters = method.GetParameters();
+                AssertEqual(5, parameters.Length);
+                foreach (var parameter in parameters.Skip(3))
+                {
+                    var marshalAs = parameter.GetCustomAttributes(typeof(MarshalAsAttribute), false)
+                        .OfType<MarshalAsAttribute>()
+                        .SingleOrDefault();
+                    AssertTrue(marshalAs?.Value == UnmanagedType.I1,
+                        $"Expected '{methodName}' parameter '{parameter.Name}' to marshal C++ bool as one byte.");
+                }
+            }
+        }
+
         private static void WireSockLogCallbackDecodesUtf8Explicitly()
         {
             var parameter = typeof(WireguardBoosterExports.LogPrinter).GetMethod("Invoke")?.GetParameters().Single();
@@ -2361,6 +2771,7 @@ namespace WireSockUI.Tests
 
         private sealed class FakeWireSockNativeApi : IWireSockNativeApi
         {
+            public IntPtr CreateHandleResult { get; set; } = new IntPtr(1234);
             public bool StartResult { get; set; } = true;
             public int StartError { get; set; }
             public bool TunnelActive { get; set; } = true;
@@ -2383,6 +2794,8 @@ namespace WireSockUI.Tests
             public int NetworkLockQueryCount { get; private set; }
             public int SetLogLevelCount { get; private set; }
             public int SetNetworkLockCount { get; private set; }
+            public ManualResetEventSlim DropEntered { get; set; }
+            public ManualResetEventSlim ContinueDrop { get; set; }
 
             public IntPtr CreateHandle(WireSockManager.Mode mode, WireguardBoosterExports.LogPrinter logPrinter,
                 WireguardBoosterExports.WgbLogLevel logLevel, bool enableTrafficCapture, bool enableAnalytics)
@@ -2390,7 +2803,7 @@ namespace WireSockUI.Tests
                 SetLastErrorForTest(0);
                 GetHandleCount++;
                 LastEnableAnalytics = enableAnalytics;
-                return new IntPtr(1234);
+                return CreateHandleResult;
             }
 
             public void ReleaseHandle(WireSockManager.Mode mode, IntPtr handle)
@@ -2434,6 +2847,8 @@ namespace WireSockUI.Tests
                 SetLastErrorForTest((uint)DropError);
                 LastPreserveNetworkLock = preserveNetworkLock;
                 DropCount++;
+                DropEntered?.Set();
+                ContinueDrop?.Wait();
                 return DropResult;
             }
 
@@ -2466,6 +2881,38 @@ namespace WireSockUI.Tests
                 SetLastErrorForTest((uint)NetworkLockModeError);
                 NetworkLockQueryCount++;
                 return NetworkLockMode;
+            }
+        }
+
+        private sealed class FakeNetworkLockApi : INetworkLockApi
+        {
+            public bool Active { get; set; }
+            public bool QueryResult { get; set; } = true;
+            public bool ResetResult { get; set; } = true;
+            public int ResetCount { get; private set; }
+
+            public bool TryIsActive(out bool active, out string diagnostic)
+            {
+                active = Active;
+                diagnostic = QueryResult ? null : "simulated query failure";
+                return QueryResult;
+            }
+
+            public bool TryReset(out string diagnostic)
+            {
+                ResetCount++;
+                diagnostic = ResetResult ? null : "simulated reset failure";
+                if (ResetResult)
+                    Active = false;
+                return ResetResult;
+            }
+        }
+
+        private sealed class NonPumpingSynchronizationContext : SynchronizationContext
+        {
+            public override void Post(SendOrPostCallback callback, object state)
+            {
+                // Intentionally do not dispatch posted work. The timeout helper must not post here.
             }
         }
 

@@ -1,0 +1,48 @@
+name: WireSock SDK Integration
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  elevated-sdk-smoke:
+    environment: wiresock-sdk
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - ARM64
+          - x64
+    runs-on:
+      - self-hosted
+      - windows
+      - ${{ matrix.platform }}
+      - wiresock-sdk
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Setup dotnet
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9
+        with:
+          dotnet-version: '10.x'
+
+      - name: Restore
+        run: dotnet restore WireSockUI.sln /p:Platform=${{ matrix.platform }}
+
+      - name: Run elevated real-SDK lifecycle smoke test
+        env:
+          WIRESOCKUI_WGBOOSTER_PATH: ${{ matrix.platform == 'ARM64' && vars.WIRESOCKUI_WGBOOSTER_PATH_ARM64 || vars.WIRESOCKUI_WGBOOSTER_PATH_X64 }}
+          WIRESOCKUI_TEST_PROFILE: ${{ vars.WIRESOCKUI_TEST_PROFILE }}
+        run: >
+          dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj
+          --configuration Release
+          --framework net472-windows
+          --no-restore
+          /p:Platform=${{ matrix.platform }}
+          /p:UseSharedCompilation=false
+          --
+          --sdk-integration

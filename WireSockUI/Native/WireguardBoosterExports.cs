@@ -51,7 +51,8 @@ namespace WireSockUI.Native
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern IntPtr wgb_get_handle_ex(LogPrinter logPrinter, WgbLogLevel level,
-            IntPtr eventLogger, bool enableTrafficCapture, bool enableAnalytics);
+            IntPtr eventLogger, [MarshalAs(UnmanagedType.I1)] bool enableTrafficCapture,
+            [MarshalAs(UnmanagedType.I1)] bool enableAnalytics);
 
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall)]
@@ -110,7 +111,8 @@ namespace WireSockUI.Native
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall, SetLastError = true)]
         public static extern IntPtr wgbp_get_handle_ex(LogPrinter logPrinter, WgbLogLevel level,
-            IntPtr eventLogger, bool enableTrafficCapture, bool enableAnalytics);
+            IntPtr eventLogger, [MarshalAs(UnmanagedType.I1)] bool enableTrafficCapture,
+            [MarshalAs(UnmanagedType.I1)] bool enableAnalytics);
 
         [DefaultDllImportSearchPaths(DllImportSearchPath.UserDirectories | DllImportSearchPath.System32)]
         [DllImport("wgbooster.dll", CallingConvention = CallingConvention.StdCall)]

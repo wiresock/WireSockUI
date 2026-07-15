@@ -4,6 +4,8 @@ using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Security.Principal;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using WireSockUI.Native;
 using WireSockUI.Properties;
@@ -13,6 +15,28 @@ namespace WireSockUI.Forms
     public partial class TaskManager : Form
     {
         private readonly List<ListViewItem> _cachedProcessListItems = new List<ListViewItem>();
+        private CancellationTokenSource _refreshCancellation;
+
+        private sealed class ProcessDisplayEntry
+        {
+            public string DisplayName { get; set; }
+            public string MatchName { get; set; }
+            public string IconKey { get; set; }
+        }
+
+        private sealed class ProcessRefreshResult : IDisposable
+        {
+            public List<ProcessDisplayEntry> Entries { get; } = new List<ProcessDisplayEntry>();
+            public Dictionary<string, Icon> Icons { get; } =
+                new Dictionary<string, Icon>(StringComparer.OrdinalIgnoreCase);
+
+            public void Dispose()
+            {
+                foreach (var icon in Icons.Values)
+                    icon.Dispose();
+                Icons.Clear();
+            }
+        }
 
         public TaskManager()
         {
@@ -35,71 +59,156 @@ namespace WireSockUI.Forms
             if (txtSearch != null && Resources.ProcessesSearchCue != null)
                 txtSearch.SetCueBanner(Resources.ProcessesSearchCue);
 
-            UpdateProcesses();
-            FilterProcesses(null);
+            Shown += OnTaskManagerShown;
         }
 
         public string ReturnValue { get; private set; }
 
-        private void UpdateProcesses()
+        private async void OnTaskManagerShown(object sender, EventArgs e)
+        {
+            await RefreshProcessesAsync();
+        }
+
+        private async Task RefreshProcessesAsync()
+        {
+            if (IsDisposed || Disposing)
+                return;
+
+            _refreshCancellation?.Cancel();
+            _refreshCancellation?.Dispose();
+            var refreshCancellation = new CancellationTokenSource();
+            _refreshCancellation = refreshCancellation;
+            btnRefresh.Enabled = false;
+            checkBoxShowUserProcesses.Enabled = false;
+
+            ProcessRefreshResult result = null;
+            try
+            {
+                string currentUser;
+                using (var identity = WindowsIdentity.GetCurrent())
+                    currentUser = identity.Name;
+                var hideOtherUsers = checkBoxShowUserProcesses.Checked;
+
+                result = await Task.Run(
+                    () => BuildProcessRefreshResult(hideOtherUsers, currentUser, refreshCancellation.Token),
+                    refreshCancellation.Token);
+
+                if (refreshCancellation.IsCancellationRequested ||
+                    !ReferenceEquals(_refreshCancellation, refreshCancellation) || IsDisposed || Disposing)
+                    return;
+
+                ApplyProcessRefreshResult(result);
+                FilterProcesses(txtSearch.Text);
+            }
+            catch (OperationCanceledException)
+            {
+                // A newer refresh or form shutdown superseded this snapshot.
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceWarning($"Failed to refresh the process list: {ex.Message}");
+            }
+            finally
+            {
+                result?.Dispose();
+                if (ReferenceEquals(_refreshCancellation, refreshCancellation))
+                {
+                    _refreshCancellation = null;
+                    refreshCancellation.Dispose();
+
+                    if (!IsDisposed && !Disposing)
+                    {
+                        btnRefresh.Enabled = true;
+                        checkBoxShowUserProcesses.Enabled = true;
+                    }
+                }
+            }
+        }
+
+        private static ProcessRefreshResult BuildProcessRefreshResult(bool hideOtherUsers, string currentUser,
+            CancellationToken cancellationToken)
+        {
+            const string defaultIconKey = "DefaultIcon";
+            var result = new ProcessRefreshResult();
+            try
+            {
+                var processes = ProcessList.GetProcessList()
+                    .Where(p => !hideOtherUsers ||
+                                string.Equals(p.User, currentUser, StringComparison.OrdinalIgnoreCase))
+                    .Distinct(ProcessEntry.Comparer);
+
+                foreach (var process in processes)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    var displayName = !string.IsNullOrWhiteSpace(process.ImageName)
+                        ? Path.GetFileNameWithoutExtension(process.ImageName)
+                        : Path.GetFileNameWithoutExtension(process.Name);
+                    if (string.IsNullOrWhiteSpace(displayName))
+                        displayName = process.Name;
+                    var matchName = GetProcessMatchName(process);
+                    if (string.IsNullOrWhiteSpace(matchName))
+                        continue;
+
+                    var iconKey = defaultIconKey;
+                    if (!string.IsNullOrWhiteSpace(process.ImageName) && File.Exists(process.ImageName))
+                    {
+                        iconKey = process.ImageName;
+                        if (!result.Icons.ContainsKey(iconKey))
+                        {
+                            try
+                            {
+                                using (var icon = Icon.ExtractAssociatedIcon(process.ImageName))
+                                {
+                                    if (icon != null)
+                                        result.Icons.Add(iconKey, (Icon)icon.Clone());
+                                    else
+                                        iconKey = defaultIconKey;
+                                }
+                            }
+                            catch (Exception ex)
+                            {
+                                System.Diagnostics.Trace.TraceWarning(
+                                    $"Failed to extract process icon for '{process.ImageName}': {ex.Message}");
+                                iconKey = defaultIconKey;
+                            }
+                        }
+                    }
+
+                    result.Entries.Add(new ProcessDisplayEntry
+                    {
+                        DisplayName = displayName,
+                        MatchName = matchName,
+                        IconKey = iconKey
+                    });
+                }
+
+                return result;
+            }
+            catch
+            {
+                result.Dispose();
+                throw;
+            }
+        }
+
+        private void ApplyProcessRefreshResult(ProcessRefreshResult result)
         {
             _cachedProcessListItems.Clear();
             lstProcesses.SmallImageList.Images.Clear();
 
-            string currentUser;
-            using (var identity = WindowsIdentity.GetCurrent())
-                currentUser = identity.Name;
-
-            // Get unique processes for the current user
-            var processes = ProcessList.GetProcessList()
-                .Where(p => !checkBoxShowUserProcesses.Checked || p.User == currentUser)
-                .Distinct(ProcessEntry.Comparer);
-
-            // Add a default icon to the list view's image list
             const string defaultIconKey = "DefaultIcon";
-            var defaultIcon = Resources.ico; // Replace with the appropriate resource for the default icon
-            if (defaultIcon != null) lstProcesses.SmallImageList.Images.Add(defaultIconKey, (Icon)defaultIcon.Clone());
+            var defaultIcon = Resources.ico;
+            if (defaultIcon != null)
+                lstProcesses.SmallImageList.Images.Add(defaultIconKey, (Icon)defaultIcon.Clone());
 
-            // Add process items to the list view
-            foreach (var process in processes)
+            foreach (var icon in result.Icons)
+                lstProcesses.SmallImageList.Images.Add(icon.Key, (Icon)icon.Value.Clone());
+
+            foreach (var process in result.Entries)
             {
-                var displayName = !string.IsNullOrWhiteSpace(process.ImageName)
-                    ? Path.GetFileNameWithoutExtension(process.ImageName)
-                    : Path.GetFileNameWithoutExtension(process.Name);
-                if (string.IsNullOrWhiteSpace(displayName))
-                    displayName = process.Name;
-                var matchName = GetProcessMatchName(process);
-                if (string.IsNullOrWhiteSpace(matchName))
-                    continue;
-                var iconKey = process.ProcessId.ToString();
-
-                // If the process's image file exists, extract its associated icon and add it to the list view's image list.
-                if (!string.IsNullOrWhiteSpace(process.ImageName) && File.Exists(process.ImageName))
-                {
-                    try
-                    {
-                        using (var icon = Icon.ExtractAssociatedIcon(process.ImageName))
-                        {
-                            if (icon != null)
-                                lstProcesses.SmallImageList.Images.Add(iconKey, (Icon)icon.Clone());
-                            else
-                                iconKey = defaultIconKey;
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        System.Diagnostics.Trace.TraceWarning(
-                            $"Failed to extract process icon for '{process.ImageName}': {ex.Message}");
-                        iconKey = defaultIconKey;
-                    }
-                }
-                else
-                {
-                    iconKey = defaultIconKey;
-                }
-
-                // Create a new list view item for the process and add it to the list view
-                var listViewItem = new ListViewItem(displayName, iconKey) { Tag = matchName };
+                var iconKey = result.Icons.ContainsKey(process.IconKey) ? process.IconKey : defaultIconKey;
+                var listViewItem = new ListViewItem(process.DisplayName, iconKey) { Tag = process.MatchName };
                 _cachedProcessListItems.Add(listViewItem);
             }
         }
@@ -148,10 +257,9 @@ namespace WireSockUI.Forms
             }
         }
 
-        private void OnRefreshClick(object sender, EventArgs e)
+        private async void OnRefreshClick(object sender, EventArgs e)
         {
-            UpdateProcesses();
-            FilterProcesses(txtSearch.Text);
+            await RefreshProcessesAsync();
         }
 
         private void OnFindProcessChanged(object sender, EventArgs e)
@@ -180,10 +288,17 @@ namespace WireSockUI.Forms
             e.Handled = true;
         }
 
-        private void OnChangeUserProcessVisibilityCheckBox(object sender, EventArgs e)
+        private async void OnChangeUserProcessVisibilityCheckBox(object sender, EventArgs e)
         {
-            UpdateProcesses();
-            FilterProcesses(txtSearch.Text);
+            await RefreshProcessesAsync();
+        }
+
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            _refreshCancellation?.Cancel();
+            _refreshCancellation?.Dispose();
+            _refreshCancellation = null;
+            base.OnFormClosed(e);
         }
     }
 }

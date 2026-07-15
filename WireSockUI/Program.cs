@@ -44,6 +44,15 @@ namespace WireSockUI
         [STAThread]
         private static void Main()
         {
+            if (!TryValidateApplicationPayload(Assembly.GetExecutingAssembly().Location, out var payloadDiagnostic))
+            {
+                MessageBox.Show(
+                    $"WireSock UI cannot run safely from its current location.{Environment.NewLine}{Environment.NewLine}{payloadDiagnostic}{Environment.NewLine}{Environment.NewLine}Install WireSock UI in an administrator-owned directory and retry.",
+                    "WireSock UI startup error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+                return;
+            }
+
             Application.EnableVisualStyles();
             Application.SetCompatibleTextRenderingDefault(false);
 
@@ -104,6 +113,56 @@ namespace WireSockUI
             }
 
             Application.Run(new FrmMain());
+        }
+
+        internal static bool TryValidateApplicationPayload(string executablePath, out string diagnostic)
+        {
+            diagnostic = null;
+            var normalizedExecutable = NormalizePathFileCore(executablePath, false);
+            if (normalizedExecutable == null)
+            {
+                diagnostic = "The WireSock UI executable path is invalid.";
+                return false;
+            }
+
+            if (!TryValidateTrustedFilePathCore(normalizedExecutable, "WireSock UI executable", out diagnostic,
+                    false))
+                return false;
+
+            var configurationPath = normalizedExecutable + ".config";
+            if (!TryValidateTrustedFilePathCore(configurationPath, "WireSock UI configuration", out diagnostic,
+                    false))
+                return false;
+
+            var applicationDirectory = Path.GetDirectoryName(normalizedExecutable);
+            string[] companionFiles;
+            try
+            {
+                companionFiles = Directory.GetFiles(applicationDirectory, "*", SearchOption.TopDirectoryOnly);
+            }
+            catch (Exception ex)
+            {
+                diagnostic =
+                    $"Unable to enumerate WireSock UI managed dependencies in '{applicationDirectory}': {ex.Message}";
+                return false;
+            }
+
+            foreach (var companionFile in companionFiles)
+            {
+                var extension = Path.GetExtension(companionFile);
+                if (!string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (string.Equals(companionFile, normalizedExecutable, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (!TryValidateTrustedFilePathCore(companionFile,
+                        $"WireSock UI companion '{Path.GetFileName(companionFile)}'", out diagnostic, false))
+                    return false;
+            }
+
+            return true;
         }
 
         private static void RegisterUnhandledExceptionHandlers()
@@ -254,7 +313,7 @@ namespace WireSockUI
             }
         }
 
-        private static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
+        internal static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
         {
             libraryDirectory = null;
 
@@ -444,7 +503,7 @@ namespace WireSockUI
             return false;
         }
 
-        private static bool TryConfigureRestrictedDllSearchPath(
+        internal static bool TryConfigureRestrictedDllSearchPath(
             string fullDirectory,
             string libraryPath,
             out string diagnostic)
@@ -577,44 +636,62 @@ namespace WireSockUI
 
         internal static bool IsPotentiallyUserWritableDirectory(string directory)
         {
-            var normalizedDirectory = NormalizePathDirectory(directory);
+            return IsPotentiallyUserWritableDirectoryCore(directory, true);
+        }
+
+        private static bool IsPotentiallyUserWritableDirectoryCore(string directory, bool traceFailures)
+        {
+            var normalizedDirectory = NormalizePathDirectoryCore(directory, traceFailures);
             if (normalizedDirectory == null)
                 return true;
 
             try
             {
                 var security = Directory.GetAccessControl(normalizedDirectory);
-                return IsPotentiallyUserWritableSecurity(security);
+                return IsPotentiallyUserWritableSecurityCore(security, traceFailures);
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
+                if (traceFailures)
+                    Trace.TraceWarning($"Unable to inspect ACL for '{normalizedDirectory}': {ex.Message}");
                 return true;
             }
         }
 
         internal static bool IsPotentiallyUserWritableFile(string file)
         {
-            var normalizedFile = NormalizePathFile(file);
+            return IsPotentiallyUserWritableFileCore(file, true);
+        }
+
+        private static bool IsPotentiallyUserWritableFileCore(string file, bool traceFailures)
+        {
+            var normalizedFile = NormalizePathFileCore(file, traceFailures);
             if (normalizedFile == null)
                 return true;
 
             try
             {
                 var security = File.GetAccessControl(normalizedFile);
-                return IsPotentiallyUserWritableSecurity(security);
+                return IsPotentiallyUserWritableSecurityCore(security, traceFailures);
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Unable to inspect ACL for '{normalizedFile}': {ex.Message}");
+                if (traceFailures)
+                    Trace.TraceWarning($"Unable to inspect ACL for '{normalizedFile}': {ex.Message}");
                 return true;
             }
         }
 
         internal static bool TryValidateTrustedFilePath(string file, string label, out string diagnostic)
         {
+            return TryValidateTrustedFilePathCore(file, label, out diagnostic, true);
+        }
+
+        private static bool TryValidateTrustedFilePathCore(string file, string label, out string diagnostic,
+            bool traceFailures)
+        {
             diagnostic = null;
-            var normalizedFile = NormalizePathFile(file);
+            var normalizedFile = NormalizePathFileCore(file, traceFailures);
             if (normalizedFile == null)
             {
                 diagnostic = $"{label} path is invalid.";
@@ -634,7 +711,7 @@ namespace WireSockUI
                 return false;
             }
 
-            if (IsPotentiallyUserWritableFile(normalizedFile))
+            if (IsPotentiallyUserWritableFileCore(normalizedFile, traceFailures))
             {
                 diagnostic =
                     $"{label} '{normalizedFile}' is writable by or owned by non-administrative users.";
@@ -659,8 +736,8 @@ namespace WireSockUI
                 }
 
                 var unsafeDirectory = isContainingDirectory
-                    ? IsPotentiallyUserWritableDirectory(directory)
-                    : IsPotentiallyUserReplaceableAncestor(directory);
+                    ? IsPotentiallyUserWritableDirectoryCore(directory, traceFailures)
+                    : IsPotentiallyUserReplaceableAncestorCore(directory, traceFailures);
                 if (unsafeDirectory)
                 {
                     diagnostic =
@@ -683,6 +760,11 @@ namespace WireSockUI
 
         private static bool IsPotentiallyUserReplaceableAncestor(string directory)
         {
+            return IsPotentiallyUserReplaceableAncestorCore(directory, true);
+        }
+
+        private static bool IsPotentiallyUserReplaceableAncestorCore(string directory, bool traceFailures)
+        {
             try
             {
                 var security = Directory.GetAccessControl(directory);
@@ -692,25 +774,36 @@ namespace WireSockUI
                     FileSystemRights.ChangePermissions |
                     FileSystemRights.TakeOwnership;
 
-                return !HasTrustedOwner(security) ||
+                return !HasTrustedOwnerCore(security, traceFailures) ||
                        ContainsPotentiallyUserWritableRule(
                            security.GetAccessRules(true, true, typeof(SecurityIdentifier)), replacementRights);
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Unable to inspect ancestor ACL for '{directory}': {ex.Message}");
+                if (traceFailures)
+                    Trace.TraceWarning($"Unable to inspect ancestor ACL for '{directory}': {ex.Message}");
                 return true;
             }
         }
 
         private static bool IsPotentiallyUserWritableSecurity(FileSystemSecurity security)
         {
-            return !HasTrustedOwner(security) ||
+            return IsPotentiallyUserWritableSecurityCore(security, true);
+        }
+
+        private static bool IsPotentiallyUserWritableSecurityCore(FileSystemSecurity security, bool traceFailures)
+        {
+            return !HasTrustedOwnerCore(security, traceFailures) ||
                    ContainsPotentiallyUserWritableRule(
                        security.GetAccessRules(true, true, typeof(SecurityIdentifier)));
         }
 
         private static bool HasTrustedOwner(FileSystemSecurity security)
+        {
+            return HasTrustedOwnerCore(security, true);
+        }
+
+        private static bool HasTrustedOwnerCore(FileSystemSecurity security, bool traceFailures)
         {
             try
             {
@@ -719,7 +812,8 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Unable to inspect owner for a WireSock library path: {ex.Message}");
+                if (traceFailures)
+                    Trace.TraceWarning($"Unable to inspect owner for a privileged application path: {ex.Message}");
                 return false;
             }
         }
@@ -793,6 +887,11 @@ namespace WireSockUI
 
         private static string NormalizePathDirectory(string directory)
         {
+            return NormalizePathDirectoryCore(directory, true);
+        }
+
+        private static string NormalizePathDirectoryCore(string directory, bool traceFailures)
+        {
             if (string.IsNullOrWhiteSpace(directory))
                 return null;
 
@@ -802,12 +901,18 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
+                if (traceFailures)
+                    Trace.TraceWarning($"Skipping invalid PATH directory '{directory}': {ex.Message}");
                 return null;
             }
         }
 
         private static string NormalizePathFile(string file)
+        {
+            return NormalizePathFileCore(file, true);
+        }
+
+        private static string NormalizePathFileCore(string file, bool traceFailures)
         {
             if (string.IsNullOrWhiteSpace(file))
                 return null;
@@ -818,7 +923,8 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Skipping invalid file path '{file}': {ex.Message}");
+                if (traceFailures)
+                    Trace.TraceWarning($"Skipping invalid file path '{file}': {ex.Message}");
                 return null;
             }
         }

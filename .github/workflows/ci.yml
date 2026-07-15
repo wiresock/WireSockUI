@@ -7,6 +7,16 @@ on:
   pull_request:
 
 jobs:
+  sdk-contract:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout WireSockUI
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Verify pinned direct SDK contract
+        shell: pwsh
+        run: ./scripts/Verify-WgboosterContract.ps1 -SdkRoot ./sdk-contract
+
   test:
     runs-on: windows-latest
     steps:
@@ -35,7 +45,9 @@ jobs:
 
   publish:
     runs-on: windows-latest
-    needs: test
+    needs:
+      - sdk-contract
+      - test
     strategy:
       fail-fast: false
       matrix:
