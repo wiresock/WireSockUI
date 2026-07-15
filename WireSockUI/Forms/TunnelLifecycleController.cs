@@ -278,10 +278,10 @@ namespace WireSockUI.Forms
             using (var timeoutCancellation = new CancellationTokenSource())
             {
                 var timeoutTask = Task.Delay(timeoutMilliseconds, timeoutCancellation.Token);
-                if (await Task.WhenAny(operationTask, timeoutTask) == operationTask)
+                if (await Task.WhenAny(operationTask, timeoutTask).ConfigureAwait(false) == operationTask)
                 {
                     timeoutCancellation.Cancel();
-                    return await operationTask;
+                    return await operationTask.ConfigureAwait(false);
                 }
             }
 

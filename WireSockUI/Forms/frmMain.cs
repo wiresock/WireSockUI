@@ -1984,9 +1984,11 @@ namespace WireSockUI.Forms
 
                     if (form.ShowDialog() == DialogResult.OK)
                     {
-                        await ApplyAndSaveLogLevelSettingAsync(form.RequestedLogLevel, previousLogLevel);
-                        await ApplyAndSaveKillSwitchSettingAsync(form.RequestedEnableKillSwitch,
-                            previousEnableKillSwitch);
+                        if (!await ApplySettingsUpdatesAsync(
+                                () => ApplyAndSaveLogLevelSettingAsync(form.RequestedLogLevel, previousLogLevel),
+                                () => ApplyAndSaveKillSwitchSettingAsync(form.RequestedEnableKillSwitch,
+                                    previousEnableKillSwitch)))
+                            return;
                     }
                 }
             }
@@ -1999,6 +2001,19 @@ namespace WireSockUI.Forms
             {
                 EndTunnelOperation();
             }
+        }
+
+        internal static async Task<bool> ApplySettingsUpdatesAsync(
+            Func<Task<bool>> applyLogLevel,
+            Func<Task<bool>> applyKillSwitch)
+        {
+            if (applyLogLevel == null) throw new ArgumentNullException(nameof(applyLogLevel));
+            if (applyKillSwitch == null) throw new ArgumentNullException(nameof(applyKillSwitch));
+
+            if (!await applyLogLevel())
+                return false;
+
+            return await applyKillSwitch();
         }
 
         private async Task<bool> ApplyAndSaveLogLevelSettingAsync(string requestedLogLevel, string previousLogLevel)

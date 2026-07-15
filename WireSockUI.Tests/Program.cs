@@ -10,6 +10,7 @@ using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using WireSockUI;
 using WireSockUI.Config;
 using WireSockUI.Diagnostics;
@@ -121,6 +122,7 @@ namespace WireSockUI.Tests
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
                 { "Settings upgrade runs exactly once", SettingsUpgradeRunsExactlyOnce },
                 { "Persisted setting transactions compensate failures", PersistedSettingTransactionsCompensateFailures },
+                { "Settings updates stop after the first failure", SettingsUpdatesStopAfterFirstFailure },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
                 { "Notification shortcut name is path seeded", NotificationShortcutNameIsPathSeeded },
@@ -131,6 +133,7 @@ namespace WireSockUI.Tests
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
                 { "Lifecycle resets a preserved lock after handle creation fails", LifecycleResetsPreservedLockAfterHandleCreationFails },
                 { "Lifecycle tracks late disconnect completion after timeout", LifecycleTracksLateDisconnectCompletionAfterTimeout },
+                { "Lifecycle shutdown avoids synchronization-context deadlocks", LifecycleShutdownAvoidsSynchronizationContextDeadlocks },
                 { "WireSock manager surfaces native query failures", WireSockManagerSurfacesNativeQueryFailures },
                 { "WireSock manager cleans up failed starts", WireSockManagerCleansUpFailedStarts },
                 { "WireSock manager retains handles when cleanup fails", WireSockManagerRetainsHandlesWhenCleanupFails },
@@ -1914,6 +1917,43 @@ namespace WireSockUI.Tests
             AssertEqual(2, saveCount);
         }
 
+        private static void SettingsUpdatesStopAfterFirstFailure()
+        {
+            var calls = new List<string>();
+            var result = FrmMain.ApplySettingsUpdatesAsync(
+                    () =>
+                    {
+                        calls.Add("log-level");
+                        return Task.FromResult(false);
+                    },
+                    () =>
+                    {
+                        calls.Add("kill-switch");
+                        return Task.FromResult(true);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(result, "Expected a failed log-level update to fail the settings workflow.");
+            AssertEqual("log-level", string.Join(",", calls));
+
+            calls.Clear();
+            result = FrmMain.ApplySettingsUpdatesAsync(
+                    () =>
+                    {
+                        calls.Add("log-level");
+                        return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("kill-switch");
+                        return Task.FromResult(false);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(result, "Expected a failed Kill Switch update to fail the settings workflow.");
+            AssertEqual("log-level,kill-switch", string.Join(",", calls));
+        }
+
         private static void EditorValidatesAmneziaOptions()
         {
             AssertTrue(ConfigValueValidator.IsUIntOrRange("1-4", 0, uint.MaxValue),
@@ -2303,6 +2343,83 @@ namespace WireSockUI.Tests
                         AssertTrue(lateResult.Succeeded, "Expected late native disconnect cleanup to succeed.");
                         AssertFalse(manager.HasTunnelHandle,
                             "Expected late disconnect completion to release the native handle.");
+                    }
+                    finally
+                    {
+                        nativeApi.ContinueDrop.Set();
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void LifecycleShutdownAvoidsSynchronizationContextDeadlocks()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    DropEntered = new ManualResetEventSlim(false),
+                    ContinueDrop = new ManualResetEventSlim(false)
+                };
+                using (nativeApi.DropEntered)
+                using (nativeApi.ContinueDrop)
+                using (var completion = new ManualResetEventSlim(false))
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
+                        AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+
+                        NativeOperationResult<bool> shutdownResult = null;
+                        Exception shutdownException = null;
+                        var shutdownThread = new Thread(() =>
+                        {
+                            SynchronizationContext.SetSynchronizationContext(
+                                new NonPumpingSynchronizationContext());
+                            try
+                            {
+                                shutdownResult = controller.ShutdownAsync(100).GetAwaiter().GetResult();
+                            }
+                            catch (Exception ex)
+                            {
+                                shutdownException = ex;
+                            }
+                            finally
+                            {
+                                SynchronizationContext.SetSynchronizationContext(null);
+                                completion.Set();
+                            }
+                        })
+                        {
+                            IsBackground = true
+                        };
+
+                        shutdownThread.Start();
+                        AssertTrue(nativeApi.DropEntered.Wait(1000),
+                            "Expected the fake native shutdown cleanup to start.");
+
+                        var completedWithoutPumping = completion.Wait(2000);
+                        nativeApi.ContinueDrop.Set();
+
+                        AssertTrue(completedWithoutPumping,
+                            "Expected shutdown timeout handling not to require a synchronization-context pump.");
+                        if (shutdownException != null)
+                            throw new InvalidOperationException("The shutdown workflow failed unexpectedly.",
+                                shutdownException);
+
+                        AssertTrue(shutdownResult != null && shutdownResult.TimedOut,
+                            "Expected the blocked native shutdown cleanup to return a timeout result.");
+                        AssertTrue(shutdownResult.PendingCompletion != null,
+                            "Expected the timed-out shutdown to retain its late completion task.");
+                        AssertTrue(shutdownResult.PendingCompletion.GetAwaiter().GetResult().Succeeded,
+                            "Expected the released native shutdown cleanup to complete successfully.");
+                        AssertTrue(shutdownThread.Join(1000),
+                            "Expected the synchronous shutdown caller to exit after receiving the timeout result.");
                     }
                     finally
                     {
@@ -2788,6 +2905,14 @@ namespace WireSockUI.Tests
                 if (ResetResult)
                     Active = false;
                 return ResetResult;
+            }
+        }
+
+        private sealed class NonPumpingSynchronizationContext : SynchronizationContext
+        {
+            public override void Post(SendOrPostCallback callback, object state)
+            {
+                // Intentionally do not dispatch posted work. The timeout helper must not post here.
             }
         }
 
