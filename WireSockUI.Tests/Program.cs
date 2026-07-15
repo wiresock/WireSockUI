@@ -105,6 +105,7 @@ namespace WireSockUI.Tests
                 { "Legacy migration completion removes staged sources", LegacyMigrationCompletionRemovesStagedSources },
                 { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
                 { "Native recovery marker replacement does not follow hard links", NativeRecoveryMarkerReplacementDoesNotFollowHardLinks },
+                { "Secure filesystem reads text through validated handles", SecureFileSystemReadsTextThroughValidatedHandles },
                 { "Secure filesystem rejects writable hard links", SecureFileSystemRejectsWritableHardLinks },
                 { "Tunnel session coordinator enforces recovery invariants", TunnelSessionCoordinatorEnforcesRecoveryInvariants },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
@@ -1540,6 +1541,31 @@ namespace WireSockUI.Tests
             finally
             {
                 SecureFileSystem.AllowOwnerWriteFailureForTests = originalOwnerWriteFailure;
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void SecureFileSystemReadsTextThroughValidatedHandles()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var path = Path.Combine(directory, "profile.conf");
+            var hardLinkPath = Path.Combine(directory, "profile-hard-link.conf");
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(path, "[Interface]\r\nPrivateKey = test", new UTF8Encoding(true));
+
+                AssertEqual("[Interface]\r\nPrivateKey = test", SecureFileSystem.ReadAllText(path));
+                if (!CreateHardLink(hardLinkPath, path, IntPtr.Zero))
+                {
+                    Console.WriteLine("SKIP hard-link creation unavailable; validated content-read rejection not exercised.");
+                    return;
+                }
+
+                AssertThrows<IOException>(() => SecureFileSystem.ReadAllText(hardLinkPath), "hard-linked");
+            }
+            finally
+            {
                 TryDeleteDirectory(directory, true);
             }
         }

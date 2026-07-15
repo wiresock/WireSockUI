@@ -12,6 +12,7 @@ namespace WireSockUI.Native
     internal static class SecureFileSystem
     {
         private const uint ReadControl = 0x00020000;
+        private const uint GenericRead = 0x80000000;
         private const uint Delete = 0x00010000;
         private const uint WriteDac = 0x00040000;
         private const uint WriteOwner = 0x00080000;
@@ -32,6 +33,12 @@ namespace WireSockUI.Native
         internal static ValidatedHandle OpenFile(string path, bool writableSecurity)
         {
             return Open(path, false, writableSecurity, false, false);
+        }
+
+        internal static string ReadAllText(string path)
+        {
+            using (var file = Open(path, false, false, false, false, true))
+                return file.ReadAllText();
         }
 
         internal static ValidatedHandle OpenFileForDelete(string path)
@@ -78,10 +85,13 @@ namespace WireSockUI.Native
             bool expectDirectory,
             bool writableSecurity,
             bool allowDelete,
-            bool expectReparsePoint)
+            bool expectReparsePoint,
+            bool readContent = false)
         {
             var expectedPath = Path.GetFullPath(path);
             var desiredAccess = ReadControl;
+            if (readContent)
+                desiredAccess |= GenericRead;
             if (writableSecurity && !AllowOwnerWriteFailureForTests)
                 desiredAccess |= WriteDac | WriteOwner;
             if (allowDelete)
@@ -90,7 +100,7 @@ namespace WireSockUI.Native
             var handle = CreateFile(
                 expectedPath,
                 desiredAccess,
-                FileShare.Read | FileShare.Write,
+                readContent ? FileShare.Read : FileShare.Read | FileShare.Write,
                 IntPtr.Zero,
                 OpenExisting,
                 FileFlagBackupSemantics | FileFlagOpenReparsePoint,
@@ -119,9 +129,9 @@ namespace WireSockUI.Native
                 if (isDirectory != expectDirectory)
                     throw new IOException($"'{expectedPath}' is not a regular {(expectDirectory ? "directory" : "file")}.");
 
-                if (writableSecurity && !expectDirectory && information.NumberOfLinks != 1)
+                if ((writableSecurity || readContent) && !expectDirectory && information.NumberOfLinks != 1)
                     throw new IOException(
-                        $"Refusing to modify hard-linked file '{expectedPath}' ({information.NumberOfLinks} links).");
+                        $"Refusing to use hard-linked file '{expectedPath}' ({information.NumberOfLinks} links).");
 
                 var finalPath = GetFinalPath(handle);
                 if (!PathsEqual(expectedPath, finalPath))
@@ -197,6 +207,24 @@ namespace WireSockUI.Native
 
             internal string Path { get; }
             internal FileAttributes Attributes { get; }
+
+            internal string ReadAllText()
+            {
+                var handleReferenceAdded = false;
+                try
+                {
+                    _handle.DangerousAddRef(ref handleReferenceAdded);
+                    using (var borrowedHandle = new SafeFileHandle(_handle.DangerousGetHandle(), false))
+                    using (var stream = new FileStream(borrowedHandle, FileAccess.Read, 4096, false))
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                        return reader.ReadToEnd();
+                }
+                finally
+                {
+                    if (handleReferenceAdded)
+                        _handle.DangerousRelease();
+                }
+            }
 
             internal void SetSecurity(FileSystemSecurity security)
             {

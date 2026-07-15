@@ -389,20 +389,7 @@ namespace WireSockUI.Native
 
         #endregion
 
-        #region Destructor
-
-        ~ShellLink()
-        {
-            Dispose(false);
-        }
-
         public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        private void Dispose(bool disposing)
         {
             var shellLink = _shellLinkW;
             _shellLinkW = null;
@@ -413,13 +400,11 @@ namespace WireSockUI.Native
             {
                 Marshal.FinalReleaseComObject(shellLink);
             }
-            catch when (!disposing)
+            catch
             {
-                // Finalizers must never allow COM cleanup failures to escape.
+                // COM cleanup is best effort during explicit disposal.
             }
         }
-
-        #endregion
 
         #region Methods
 

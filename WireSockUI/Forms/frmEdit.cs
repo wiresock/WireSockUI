@@ -59,12 +59,11 @@ namespace WireSockUI.Forms
                 if (sourcePath == null)
                 {
                     Profile.EnsureRegularProfileFile(profilePath);
-                    txtEditor.Text = File.ReadAllText(profilePath);
+                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath);
                 }
                 else
                 {
-                    using (SecureFileSystem.OpenFile(profilePath, false))
-                        txtEditor.Text = File.ReadAllText(profilePath);
+                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath);
                 }
             }
         }

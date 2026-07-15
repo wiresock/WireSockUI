@@ -1,4 +1,5 @@
 ﻿using System;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -10,10 +11,11 @@ namespace WireSockUI.Native
 {
     internal class WindowsApplicationContext : ApplicationContext
     {
-        private WindowsApplicationContext(string name, string appUserModelId)
+        private WindowsApplicationContext(string name, string appUserModelId, bool notificationShortcutReady)
         {
             Name = name;
             AppUserModelId = appUserModelId;
+            NotificationShortcutReady = notificationShortcutReady;
         }
 
         /// <summary>
@@ -21,6 +23,8 @@ namespace WireSockUI.Native
         public string Name { get; }
 
         public string AppUserModelId { get; }
+
+        internal bool NotificationShortcutReady { get; }
 
         [DllImport("shell32.dll")]
         private static extern int SetCurrentProcessExplicitAppUserModelID(
@@ -43,68 +47,82 @@ namespace WireSockUI.Native
             if (result < 0)
                 Marshal.ThrowExceptionForHR(result);
 
-            EnsureNotificationShortcut(appName, aumid, executablePath);
+            var notificationShortcutReady = EnsureNotificationShortcut(appName, aumid, executablePath);
 
-            return new WindowsApplicationContext(appName, aumid);
+            return new WindowsApplicationContext(appName, aumid, notificationShortcutReady);
         }
 
-        private static void EnsureNotificationShortcut(string appName, string appUserModelId, string executablePath)
+        private static bool EnsureNotificationShortcut(string appName, string appUserModelId, string executablePath)
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            var startMenuPath = Path.Combine(appData, @"Microsoft\Windows\Start Menu\Programs");
-            using (SecureFileSystem.OpenDirectoryChain(startMenuPath))
+            try
             {
-                var shortcutFile = Path.Combine(startMenuPath, BuildShortcutFileName(appName, executablePath));
-                if (TryGetAttributes(shortcutFile, out var shortcutAttributes))
+                var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                var startMenuPath = Path.Combine(appData, @"Microsoft\Windows\Start Menu\Programs");
+                using (SecureFileSystem.OpenDirectoryChain(startMenuPath))
                 {
-                    if ((shortcutAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
-                        throw new IOException($"Notification shortcut '{shortcutFile}' is not a regular file.");
-
-                    EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
-                    return;
-                }
-
-                var stagingFile = Path.Combine(Global.SecureMainFolder,
-                    $"notification-shortcut-{Guid.NewGuid():N}.lnk");
-                try
-                {
-                    using (var shortcut = new ShellLink
+                    var shortcutFile = Path.Combine(startMenuPath, BuildShortcutFileName(appName, executablePath));
+                    if (TryGetAttributes(shortcutFile, out var shortcutAttributes))
                     {
-                        TargetPath = executablePath,
-                        Arguments = string.Empty,
-                        AppUserModelId = appUserModelId
-                    })
-                    {
-                        shortcut.Save(stagingFile);
+                        if ((shortcutAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                            throw new IOException($"Notification shortcut '{shortcutFile}' is not a regular file.");
+
+                        EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
+                        return true;
                     }
 
+                    var stagingFile = Path.Combine(Global.SecureMainFolder,
+                        $"notification-shortcut-{Guid.NewGuid():N}.lnk");
                     try
                     {
-                        File.Copy(stagingFile, shortcutFile, false);
+                        using (var shortcut = new ShellLink
+                        {
+                            TargetPath = executablePath,
+                            Arguments = string.Empty,
+                            AppUserModelId = appUserModelId
+                        })
+                        {
+                            shortcut.Save(stagingFile);
+                        }
+
+                        try
+                        {
+                            File.Copy(stagingFile, shortcutFile, false);
+                        }
+                        catch (IOException) when (File.Exists(shortcutFile))
+                        {
+                            // Another process won the create race. Reuse it only if it is exactly ours.
+                        }
+
+                        EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
                     }
-                    catch (IOException) when (File.Exists(shortcutFile))
+                    finally
                     {
-                        // Another process won the create race. Reuse it only if it is exactly ours.
+                        try
+                        {
+                            using (var stagedShortcut = SecureFileSystem.OpenFileForDelete(stagingFile))
+                                stagedShortcut.Delete();
+                        }
+                        catch (FileNotFoundException)
+                        {
+                        }
+                        catch (Exception ex)
+                        {
+                            Trace.TraceWarning(
+                                $"Unable to delete staged notification shortcut '{stagingFile}': {ex.Message}");
+                        }
                     }
 
-                    EnsureShortcutMatches(shortcutFile, executablePath, appUserModelId);
+                    return true;
                 }
-                finally
-                {
-                    try
-                    {
-                        using (var stagedShortcut = SecureFileSystem.OpenFileForDelete(stagingFile))
-                            stagedShortcut.Delete();
-                    }
-                    catch (FileNotFoundException)
-                    {
-                    }
-                    catch (Exception ex)
-                    {
-                        Trace.TraceWarning(
-                            $"Unable to delete staged notification shortcut '{stagingFile}': {ex.Message}");
-                    }
-                }
+            }
+            catch (Exception ex) when (ex is IOException ||
+                                       ex is UnauthorizedAccessException ||
+                                       ex is Win32Exception ||
+                                       ex is COMException ||
+                                       ex is CryptographicException)
+            {
+                Trace.TraceWarning($"Unable to ensure the WireSock UI notification shortcut: {ex.Message}");
+                return false;
             }
         }
 

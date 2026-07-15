@@ -247,8 +247,11 @@ namespace WireSockUI.Notifications
             lock (ActivationSyncRoot)
                 _activationForm = new WeakReference(activationForm);
 
-            var icon = EnsureNotificationIcon();
             var context = ApplicationContext.Value;
+            if (!context.NotificationShortcutReady)
+                return;
+
+            var icon = EnsureNotificationIcon();
             var notifier = ToastNotificationManager.CreateToastNotifier(context.AppUserModelId);
 
             var notification = new ToastNotification(GetXml(title, body, icon));

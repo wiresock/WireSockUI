@@ -80,11 +80,11 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                Trace.TraceError($"Unable to stage legacy WireSock UI profiles: {ex}");
+                Trace.TraceWarning($"Unable to stage legacy WireSock UI profiles: {ex}");
                 MessageBox.Show(
-                    $"Unable to inspect legacy WireSock UI profiles.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
-                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(1);
+                    $"WireSock UI could not inspect profiles from an earlier installation. " +
+                    $"Those profiles will remain untouched, and startup will continue.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
             if (!IsWireSockArchitectureSupported())
