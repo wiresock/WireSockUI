@@ -105,6 +105,8 @@ namespace WireSockUI.Tests
                 { "Legacy migration completion removes staged sources", LegacyMigrationCompletionRemovesStagedSources },
                 { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
                 { "Native recovery marker replacement does not follow hard links", NativeRecoveryMarkerReplacementDoesNotFollowHardLinks },
+                { "Secure filesystem delete handles block concurrent writes", SecureFileSystemDeleteHandlesBlockConcurrentWrites },
+                { "Secure filesystem snapshots permit shell-link inspection", SecureFileSystemSnapshotsPermitShellLinkInspection },
                 { "Secure filesystem reads text through validated handles", SecureFileSystemReadsTextThroughValidatedHandles },
                 { "Secure filesystem rejects writable hard links", SecureFileSystemRejectsWritableHardLinks },
                 { "Tunnel session coordinator enforces recovery invariants", TunnelSessionCoordinatorEnforcesRecoveryInvariants },
@@ -1563,6 +1565,66 @@ namespace WireSockUI.Tests
                 }
 
                 AssertThrows<IOException>(() => SecureFileSystem.ReadAllText(hardLinkPath), "hard-linked");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void SecureFileSystemDeleteHandlesBlockConcurrentWrites()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var path = Path.Combine(directory, "delete-target.txt");
+            try
+            {
+                Directory.CreateDirectory(directory);
+                File.WriteAllText(path, "contents");
+
+                using (SecureFileSystem.OpenFileForDelete(path))
+                {
+                    using (var reader = new FileStream(path, FileMode.Open, FileAccess.Read,
+                               FileShare.Read | FileShare.Write | FileShare.Delete))
+                        AssertEqual((int)'c', reader.ReadByte());
+
+                    AssertThrows<IOException>(() =>
+                    {
+                        using (new FileStream(path, FileMode.Open, FileAccess.Write,
+                                   FileShare.Read | FileShare.Write | FileShare.Delete))
+                        {
+                        }
+                    }, null);
+                }
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void SecureFileSystemSnapshotsPermitShellLinkInspection()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var shortcutPath = Path.Combine(directory, "startup.lnk");
+            var snapshotPath = Path.Combine(directory, "startup-snapshot.lnk");
+            var targetPath = Assembly.GetExecutingAssembly().Location;
+            try
+            {
+                Directory.CreateDirectory(directory);
+                using (var shortcut = new ShellLink { TargetPath = targetPath })
+                    shortcut.Save(shortcutPath);
+
+                using (var shortcutFile = SecureFileSystem.OpenFileForReadAndDelete(shortcutPath))
+                {
+                    shortcutFile.CopyToNewFile(snapshotPath, 1024 * 1024);
+                    using (var shortcut = new ShellLink(snapshotPath))
+                        AssertTrue(string.Equals(Path.GetFullPath(targetPath), Path.GetFullPath(shortcut.TargetPath),
+                                StringComparison.OrdinalIgnoreCase),
+                            "Expected the validated shortcut snapshot to preserve its target.");
+                    shortcutFile.Delete();
+                }
+
+                AssertFalse(File.Exists(shortcutPath), "Expected the validated source shortcut to be deleted.");
             }
             finally
             {

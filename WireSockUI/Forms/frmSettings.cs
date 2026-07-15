@@ -11,6 +11,7 @@ namespace WireSockUI.Forms
 {
     public partial class FrmSettings : Form
     {
+        private const long MaxLegacyStartupShortcutSizeBytes = 1024 * 1024;
         private readonly bool _initialAutoRun;
         private readonly bool _initialAutoRunUsesPathScopedTask;
 
@@ -81,24 +82,50 @@ namespace WireSockUI.Forms
                 if (!File.Exists(shortcutPath))
                     return;
 
-                using (var shortcutFile = SecureFileSystem.OpenFileForDelete(shortcutPath))
+                var snapshotPath = Path.Combine(Global.SecureMainFolder,
+                    $"legacy-startup-shortcut-{Guid.NewGuid():N}.lnk");
+                try
                 {
-                    using (var shortcut = new ShellLink(shortcutPath))
+                    using (var shortcutFile = SecureFileSystem.OpenFileForReadAndDelete(shortcutPath))
                     {
-                        if (!IsSameExecutablePath(shortcut.TargetPath, Application.ExecutablePath))
+                        shortcutFile.CopyToNewFile(snapshotPath, MaxLegacyStartupShortcutSizeBytes);
+                        using (var shortcut = new ShellLink(snapshotPath))
                         {
-                            Trace.TraceWarning(
-                                $"Skipping legacy Startup shortcut '{shortcutPath}' because it points to a different executable.");
-                            return;
+                            if (!IsSameExecutablePath(shortcut.TargetPath, Application.ExecutablePath))
+                            {
+                                Trace.TraceWarning(
+                                    $"Skipping legacy Startup shortcut '{shortcutPath}' because it points to a different executable.");
+                                return;
+                            }
                         }
-                    }
 
-                    shortcutFile.Delete();
+                        shortcutFile.Delete();
+                    }
+                }
+                finally
+                {
+                    TryDeleteShortcutSnapshot(snapshotPath);
                 }
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to delete legacy Startup shortcut: {ex.Message}");
+            }
+        }
+
+        private static void TryDeleteShortcutSnapshot(string snapshotPath)
+        {
+            try
+            {
+                if (!File.Exists(snapshotPath))
+                    return;
+
+                using (var snapshot = SecureFileSystem.OpenFileForDelete(snapshotPath))
+                    snapshot.Delete();
+            }
+            catch (Exception ex)
+            {
+                Trace.TraceWarning($"Failed to delete temporary legacy Startup shortcut snapshot: {ex.Message}");
             }
         }
 

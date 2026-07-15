@@ -46,6 +46,11 @@ namespace WireSockUI.Native
             return Open(path, false, false, true, false);
         }
 
+        internal static ValidatedHandle OpenFileForReadAndDelete(string path)
+        {
+            return Open(path, false, false, true, false, true);
+        }
+
         internal static ValidatedHandle OpenReparsePointForDelete(string path, bool expectDirectory)
         {
             return Open(path, expectDirectory, false, true, true);
@@ -100,7 +105,7 @@ namespace WireSockUI.Native
             var handle = CreateFile(
                 expectedPath,
                 desiredAccess,
-                readContent ? FileShare.Read : FileShare.Read | FileShare.Write,
+                readContent || allowDelete ? FileShare.Read : FileShare.Read | FileShare.Write,
                 IntPtr.Zero,
                 OpenExisting,
                 FileFlagBackupSemantics | FileFlagOpenReparsePoint,
@@ -138,7 +143,7 @@ namespace WireSockUI.Native
                     throw new IOException(
                         $"Opened path '{expectedPath}' resolved to unexpected object '{finalPath}'.");
 
-                return new ValidatedHandle(handle, expectedPath, attributes);
+                return new ValidatedHandle(handle, expectedPath, attributes, readContent);
             }
             catch
             {
@@ -197,10 +202,16 @@ namespace WireSockUI.Native
         internal sealed class ValidatedHandle : IDisposable
         {
             private readonly SafeFileHandle _handle;
+            private readonly bool _canReadContent;
 
-            internal ValidatedHandle(SafeFileHandle handle, string path, FileAttributes attributes)
+            internal ValidatedHandle(
+                SafeFileHandle handle,
+                string path,
+                FileAttributes attributes,
+                bool canReadContent)
             {
                 _handle = handle;
+                _canReadContent = canReadContent;
                 Path = path;
                 Attributes = attributes;
             }
@@ -210,14 +221,61 @@ namespace WireSockUI.Native
 
             internal string ReadAllText()
             {
+                string contents = null;
+                UseReadStream(stream =>
+                {
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                        contents = reader.ReadToEnd();
+                });
+                return contents;
+            }
+
+            internal void CopyToNewFile(string destinationPath, long maxBytes)
+            {
+                if (maxBytes <= 0)
+                    throw new ArgumentOutOfRangeException(nameof(maxBytes));
+
+                UseReadStream(source =>
+                {
+                    if (source.Length > maxBytes)
+                        throw new IOException($"'{Path}' exceeds the maximum supported size of {maxBytes} bytes.");
+
+                    using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
+                               FileShare.None))
+                    {
+                        var buffer = new byte[81920];
+                        long bytesCopied = 0;
+                        int bytesRead;
+                        while ((bytesRead = source.Read(buffer, 0, buffer.Length)) > 0)
+                        {
+                            if (bytesRead > maxBytes - bytesCopied)
+                                throw new IOException(
+                                    $"'{Path}' exceeds the maximum supported size of {maxBytes} bytes.");
+
+                            destination.Write(buffer, 0, bytesRead);
+                            bytesCopied += bytesRead;
+                        }
+                    }
+                });
+            }
+
+            private void UseReadStream(Action<FileStream> action)
+            {
+                if (action == null)
+                    throw new ArgumentNullException(nameof(action));
+                if (!_canReadContent)
+                    throw new InvalidOperationException($"The validated handle for '{Path}' was not opened for reading.");
+
                 var handleReferenceAdded = false;
                 try
                 {
                     _handle.DangerousAddRef(ref handleReferenceAdded);
                     using (var borrowedHandle = new SafeFileHandle(_handle.DangerousGetHandle(), false))
                     using (var stream = new FileStream(borrowedHandle, FileAccess.Read, 4096, false))
-                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
-                        return reader.ReadToEnd();
+                    {
+                        stream.Position = 0;
+                        action(stream);
+                    }
                 }
                 finally
                 {
