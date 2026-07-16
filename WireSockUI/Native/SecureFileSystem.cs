@@ -41,6 +41,22 @@ namespace WireSockUI.Native
                 return file.ReadAllText();
         }
 
+        internal static ValidatedHandle OpenFileForBoundedRead(string path, long maxBytes)
+        {
+            if (maxBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+            var file = Open(path, false, false, false, false, true);
+            try
+            {
+                file.EnsureMaximumLength(maxBytes);
+                return file;
+            }
+            catch
+            {
+                file.Dispose();
+                throw;
+            }
+        }
+
         internal static ValidatedHandle OpenFileForDelete(string path)
         {
             return Open(path, false, false, true, false);
@@ -221,13 +237,30 @@ namespace WireSockUI.Native
 
             internal string ReadAllText()
             {
+                return ReadAllText(Encoding.UTF8);
+            }
+
+            internal string ReadAllText(Encoding encoding)
+            {
+                if (encoding == null) throw new ArgumentNullException(nameof(encoding));
                 string contents = null;
                 UseReadStream(stream =>
                 {
-                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    using (var reader = new StreamReader(stream, encoding, true))
                         contents = reader.ReadToEnd();
                 });
                 return contents;
+            }
+
+            internal void EnsureMaximumLength(long maxBytes)
+            {
+                if (maxBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+                UseReadStream(stream =>
+                {
+                    if (stream.Length > maxBytes)
+                        throw new InvalidDataException(
+                            $"'{Path}' exceeds the maximum supported size of {maxBytes} bytes.");
+                });
             }
 
             internal void CopyToNewFile(string destinationPath, long maxBytes)

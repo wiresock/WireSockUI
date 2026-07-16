@@ -511,9 +511,12 @@ namespace WireSockUI.Forms
             var isExistingProfile = !string.IsNullOrEmpty(_originalProfileName);
             var isRename = isExistingProfile &&
                            !string.Equals(_originalProfileName, requestedProfileName,
-                               StringComparison.OrdinalIgnoreCase);
+                               StringComparison.Ordinal);
+            var destinationIsOriginal = isExistingProfile &&
+                                        string.Equals(Profile.GetProfilePath(_originalProfileName), profilePath,
+                                            StringComparison.OrdinalIgnoreCase);
 
-            if (Profile.ProfilePathExists(profilePath) && (!isExistingProfile || isRename))
+            if (Profile.ProfilePathExists(profilePath) && (!isExistingProfile || !destinationIsOriginal))
             {
                 var message = Profile.IsRegularProfileFile(profilePath, out var diagnostic)
                     ? string.Format(Resources.AddProfileExistsMsg, requestedProfileName)

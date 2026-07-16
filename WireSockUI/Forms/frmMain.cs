@@ -59,27 +59,6 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
-            bool alreadyRunning;
-            try
-            {
-                alreadyRunning = IsApplicationAlreadyRunning();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(
-                    $"WireSock UI could not establish exclusive access to the driver interface.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
-                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(1);
-                return;
-            }
-
-            if (alreadyRunning)
-            {
-                MessageBox.Show(Resources.AlreadyRunningMessage, Resources.AlreadyRunningTitle, MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-                Environment.Exit(1);
-            }
-
             _tunnelLifecycle = new TunnelLifecycleController(OnWireSockLogMessage);
             _tunnelMonitor = new TunnelMonitor(
                 _tunnelLifecycle.GetConnectedAsync,
@@ -760,7 +739,7 @@ namespace WireSockUI.Forms
         ///     This function uses the same named event as the direct WireSock C++ CLI/service so only one
         ///     direct SDK tunnel owner is active at a time.
         /// </remarks>
-        private static bool IsApplicationAlreadyRunning()
+        internal static bool IsApplicationAlreadyRunning()
         {
             const string eventName = "Global\\WiresockClientService";
 
@@ -1413,8 +1392,7 @@ namespace WireSockUI.Forms
                     {
                         try
                         {
-                            Settings.Default.LastProfile = activeProfileName;
-                            Settings.Default.Save();
+                            PersistLastActiveProfile(activeProfileName);
                         }
                         catch (Exception ex)
                         {
@@ -1504,6 +1482,28 @@ namespace WireSockUI.Forms
 
         }
 
+        private static void PersistLastActiveProfile(string profileName)
+        {
+            var previousSettings = PrivilegedSettingsStore.Capture();
+            if (string.Equals(previousSettings.LastProfile, profileName, StringComparison.Ordinal))
+                return;
+
+            PrivilegedSettingsStore.Apply(new PrivilegedSettingsSnapshot(
+                previousSettings.AutoConnect,
+                profileName,
+                previousSettings.UseAdapter,
+                previousSettings.EnableKillSwitch));
+            try
+            {
+                PrivilegedSettingsStore.Save();
+            }
+            catch
+            {
+                PrivilegedSettingsStore.Apply(previousSettings);
+                throw;
+            }
+        }
+
         protected override async void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
@@ -1534,14 +1534,14 @@ namespace WireSockUI.Forms
                 Hide();
             }
 
-            if (lstProfiles.Items.ContainsKey(Settings.Default.LastProfile))
-                lstProfiles.Items[Settings.Default.LastProfile].Selected = true;
+            if (lstProfiles.Items.ContainsKey(PrivilegedSettingsStore.LastProfile))
+                lstProfiles.Items[PrivilegedSettingsStore.LastProfile].Selected = true;
 
             // Connect to the last used configuration, if required.
-            if (!Settings.Default.AutoConnect || recoveryBlocksTunnelOperations || approvedLegacyProfileThisLaunch)
+            if (!PrivilegedSettingsStore.AutoConnect || recoveryBlocksTunnelOperations || approvedLegacyProfileThisLaunch)
                 return;
 
-            if (lstProfiles.Items.ContainsKey(Settings.Default.LastProfile))
+            if (lstProfiles.Items.ContainsKey(PrivilegedSettingsStore.LastProfile))
                 OnProfileClick(lstProfiles, EventArgs.Empty);
             else
                 MessageBox.Show(Resources.LastProfileNotFound, Resources.DialogAutoConnect, MessageBoxButtons.OK,
@@ -1951,12 +1951,11 @@ namespace WireSockUI.Forms
 
         private static Task<bool> PersistSettingsAsync(ApplicationSettingsSnapshot settings)
         {
-            settings.Apply();
-            Settings.Default.Save();
+            settings.Persist();
             return Task.FromResult(true);
         }
 
-        private static void ShowSettingsTransactionFailure(CompensatingTransactionResult result)
+        private void ShowSettingsTransactionFailure(CompensatingTransactionResult result)
         {
             var diagnostic = result.Exception?.Message ??
                              $"The {result.FailedStep} step did not complete.";
@@ -1967,7 +1966,20 @@ namespace WireSockUI.Forms
                                string.Join(", ", result.RollbackFailures));
 
             Trace.TraceError(message);
+            if (SettingsFailureRequiresNativeRecovery(result))
+            {
+                Global.WriteNativeRecoveryMarker("settings rollback failure", message);
+                _tunnelSession.RequireRecovery();
+                SetNativeRecoveryUi(_tunnelLifecycle.ProfileName);
+            }
+
             MessageBox.Show(message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+
+        internal static bool SettingsFailureRequiresNativeRecovery(CompensatingTransactionResult result)
+        {
+            if (result == null) throw new ArgumentNullException(nameof(result));
+            return result.RollbackFailed("native Kill Switch");
         }
 
         private async Task<NativeOperationResult<T>> AwaitTimedOutNativeOperationAsync<T>(
@@ -1994,9 +2006,20 @@ namespace WireSockUI.Forms
 
             try
             {
-                Global.TryDeleteNativeRecoveryMarker();
-                if (!_shutdownComplete && !IsDisposed && !Disposing)
-                    UpdateState(previousState, false, profile);
+                if (NativeOperationRecoveryPolicy.CanRestorePreviousState(completedResult))
+                {
+                    Global.TryDeleteNativeRecoveryMarker();
+                    if (!_shutdownComplete && !IsDisposed && !Disposing)
+                        UpdateState(previousState, false, profile);
+                }
+                else
+                {
+                    var diagnostic = completedResult.Diagnostic ??
+                                     "The timed-out native operation completed without a verified result.";
+                    Global.WriteNativeRecoveryMarker(context, diagnostic);
+                    _tunnelSession.RequireRecovery();
+                    SetNativeRecoveryUi(profile);
+                }
             }
             finally
             {
@@ -2095,14 +2118,17 @@ namespace WireSockUI.Forms
                     resetResult.Diagnostic ?? "preserved network-lock rollback failure");
         }
 
-        /// <summary>
-        ///     Handles the profile click event for a given sender and event arguments.
-        ///     This function is responsible for updating the connection state and tunnel mode,
-        ///     connecting or reconnecting to a profile depending on the button's text and the current state.
-        /// </summary>
-        /// <param name="sender">The source of the event. In this case, a Button control.</param>
-        /// <param name="e">The event arguments containing information about the event.</param>
         private async void OnProfileClick(object sender, EventArgs e)
+        {
+            await ExecuteSelectedProfileCommandAsync(TunnelCommand.ActivateSelectedProfile);
+        }
+
+        private async void OnActivateButtonClick(object sender, EventArgs e)
+        {
+            await ExecuteSelectedProfileCommandAsync(TunnelCommand.ToggleSelectedProfile);
+        }
+
+        private async Task ExecuteSelectedProfileCommandAsync(TunnelCommand command)
         {
             if (!TryBeginTunnelOperation())
                 return;
@@ -2117,17 +2143,10 @@ namespace WireSockUI.Forms
                 // Get the selected profile.
                 var profile = lstProfiles.SelectedItems[0].Text;
                 operationProfile = profile;
-                var disconnectOnly = false;
-
-                if (e != EventArgs.Empty &&
-                    (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting))
-                {
-                    var reconnect = sender is Button senderButton && senderButton.Text == Resources.ButtonInactive;
-                    disconnectOnly = !reconnect;
-                }
+                var disconnectOnly = TunnelCommandPolicy.IsDisconnectOnly(_currentState, command);
 
                 Profile profileSettings = null;
-                var useAdapter = Settings.Default.UseAdapter;
+                var useAdapter = PrivilegedSettingsStore.UseAdapter;
 
                 if (!disconnectOnly)
                 {
@@ -2148,11 +2167,13 @@ namespace WireSockUI.Forms
                         useAdapter = profileUseAdapter;
                 }
 
-                var preserveNetworkLockForReconnect = Settings.Default.EnableKillSwitch && !disconnectOnly;
+                var preserveNetworkLockForReconnect = PrivilegedSettingsStore.EnableKillSwitch && !disconnectOnly;
 
                 if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
                 {
-                    if (!await DisconnectCurrentTunnelAsync(e != EventArgs.Empty, preserveNetworkLockForReconnect))
+                    if (!await DisconnectCurrentTunnelAsync(
+                            command == TunnelCommand.ToggleSelectedProfile,
+                            preserveNetworkLockForReconnect))
                         return;
 
                     preservedNetworkLockPending = preserveNetworkLockForReconnect;
@@ -2160,7 +2181,7 @@ namespace WireSockUI.Forms
                     if (disconnectOnly)
                         return;
                 }
-                else if (e == EventArgs.Empty && _tunnelLifecycle.HasTunnelHandle)
+                else if (_tunnelLifecycle.HasTunnelHandle)
                 {
                     if (!await DisconnectCurrentTunnelAsync(false, preserveNetworkLockForReconnect))
                         return;
@@ -2253,7 +2274,16 @@ namespace WireSockUI.Forms
                             var queryDiagnostic = queryResult.Diagnostic ??
                                                   "Unable to query the native tunnel state.";
                             Trace.TraceWarning($"Native tunnel state query failed after connect: {queryDiagnostic}");
-                            if (!await DisconnectNativeTunnelAsync(connectionSequence, false))
+                            if (NativeOperationRecoveryPolicy.MustDeferCleanup(queryResult))
+                            {
+                                TrackTimedOutNativeOperation(queryResult, "post-connect tunnel-state query");
+                                MarkNativeRecoveryRequired(profile,
+                                    $"post-connect tunnel-state query: {queryDiagnostic}");
+                                MessageBox.Show(
+                                    $"WireSock UI could not verify the native tunnel state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
+                                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                            }
+                            else if (!await DisconnectNativeTunnelAsync(connectionSequence, false))
                             {
                                 if (!IsNativeCleanupInProgress())
                                     await HandleNativeCleanupFailureAsync(profile,
@@ -2407,7 +2437,7 @@ namespace WireSockUI.Forms
                         Text = Resources.ButtonInactive
                     };
 
-                    btnActivate.Click += OnProfileClick;
+                    btnActivate.Click += OnActivateButtonClick;
 
                     layoutInterface.Controls.Add(btnActivate, 1, layoutInterface.RowCount - 1);
                     SetActivateButtonEnabled(true);

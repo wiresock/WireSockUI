@@ -107,7 +107,8 @@ namespace WireSockUI.Config
         public static byte[] CreateRandomPrivateKey()
         {
             var privateKey = new byte[32];
-            RandomNumberGenerator.Create().GetBytes(privateKey);
+            using (var random = RandomNumberGenerator.Create())
+                random.GetBytes(privateKey);
             ClampPrivateKeyInline(privateKey);
 
             return privateKey;
@@ -140,7 +141,8 @@ namespace WireSockUI.Config
                     $@"privateKey must be 32 bytes long (but was {privateKey.Length} bytes long)",
                     nameof(privateKey));
 
-            RandomNumberGenerator.Create().GetBytes(privateKey);
+            using (var random = RandomNumberGenerator.Create())
+                random.GetBytes(privateKey);
             ClampPrivateKeyInline(privateKey);
 
             Core(publicKey, signingKey, privateKey, null);

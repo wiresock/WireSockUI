@@ -30,25 +30,34 @@ namespace WireSockUI.Config
         {
             return new ApplicationSettingsSnapshot(
                 Settings.Default.AutoRun,
-                Settings.Default.AutoConnect,
+                PrivilegedSettingsStore.AutoConnect,
                 Settings.Default.AutoMinimize,
                 Settings.Default.AutoUpdate,
-                Settings.Default.UseAdapter,
+                PrivilegedSettingsStore.UseAdapter,
                 Settings.Default.EnableNotifications,
-                Settings.Default.EnableKillSwitch,
+                PrivilegedSettingsStore.EnableKillSwitch,
                 Settings.Default.LogLevel);
         }
 
         internal void Apply()
         {
             Settings.Default.AutoRun = AutoRun;
-            Settings.Default.AutoConnect = AutoConnect;
             Settings.Default.AutoMinimize = AutoMinimize;
             Settings.Default.AutoUpdate = AutoUpdate;
-            Settings.Default.UseAdapter = UseAdapter;
             Settings.Default.EnableNotifications = EnableNotifications;
-            Settings.Default.EnableKillSwitch = EnableKillSwitch;
             Settings.Default.LogLevel = LogLevel;
+            PrivilegedSettingsStore.Apply(new PrivilegedSettingsSnapshot(
+                AutoConnect,
+                PrivilegedSettingsStore.LastProfile,
+                UseAdapter,
+                EnableKillSwitch));
+        }
+
+        internal void Persist()
+        {
+            Apply();
+            PrivilegedSettingsStore.Save();
+            Settings.Default.Save();
         }
     }
 }
