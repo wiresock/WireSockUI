@@ -1,5 +1,4 @@
 ﻿using System;
-using System.IO;
 using System.Net;
 using Windows.Data.Json;
 
@@ -8,6 +7,7 @@ namespace WireSockUI.Extensions
     internal static class GitHubExtensions
     {
         private const int ReleaseRequestTimeoutMilliseconds = 5000;
+        private const int MaxReleaseResponseBytes = 1024 * 1024;
 
         /// <summary>
         ///     Retrieve latest published release version from GitHub
@@ -26,9 +26,13 @@ namespace WireSockUI.Extensions
 
             using (var response = request.GetResponse())
             {
-                using (var reader = new StreamReader(response.GetResponseStream()))
+                if (response.ContentLength > MaxReleaseResponseBytes)
+                    throw new InvalidOperationException(
+                        $"The GitHub release response exceeds {MaxReleaseResponseBytes} bytes.");
+
+                using (var responseStream = response.GetResponseStream())
                 {
-                    var data = reader.ReadToEnd();
+                    var data = BoundedStreamReader.ReadUtf8ToEnd(responseStream, MaxReleaseResponseBytes);
 
                     if (!JsonObject.TryParse(data, out var json)) return null;
                     if (!ReleaseVersionParser.TryParseReleaseTag(json.GetNamedString("tag_name"), out var version))

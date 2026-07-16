@@ -2,6 +2,7 @@ using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using WireSockUI.Native;
 
 namespace WireSockUI.Config
 {
@@ -73,7 +74,8 @@ namespace WireSockUI.Config
         private static void CommitCaseOnlyRename(string temporaryPath, string destinationPath, string originalPath)
         {
             Profile.EnsureRegularProfileFile(originalPath);
-            MoveFileReplacingExisting(originalPath, destinationPath,
+            ValidateCaseOnlyRenameDestination(originalPath, destinationPath);
+            MoveFileWithoutReplacingExisting(originalPath, destinationPath,
                 $"Unable to rename profile '{originalPath}' to '{destinationPath}'.");
             try
             {
@@ -83,7 +85,7 @@ namespace WireSockUI.Config
             {
                 try
                 {
-                    MoveFileReplacingExisting(destinationPath, originalPath,
+                    MoveFileWithoutReplacingExisting(destinationPath, originalPath,
                         $"Unable to restore profile '{originalPath}'.");
                 }
                 catch (Exception rollbackException)
@@ -96,6 +98,16 @@ namespace WireSockUI.Config
 
                 throw;
             }
+        }
+
+        internal static void ValidateCaseOnlyRenameDestination(string originalPath, string destinationPath)
+        {
+            if (!Profile.ProfilePathExists(destinationPath))
+                return;
+
+            Profile.EnsureRegularProfileFile(destinationPath);
+            if (!SecureFileSystem.ReferToSameFile(originalPath, destinationPath))
+                throw new IOException($"The destination profile '{destinationPath}' already exists as a different file.");
         }
 
         private static void CommitWithoutRename(string temporaryPath, string destinationPath)
@@ -114,7 +126,18 @@ namespace WireSockUI.Config
         private static void MoveFileReplacingExisting(string existingPath, string destinationPath,
             string failureMessage)
         {
-            if (MoveFileEx(existingPath, destinationPath, MoveFileReplaceExisting | MoveFileWriteThrough))
+            MoveFile(existingPath, destinationPath, MoveFileReplaceExisting | MoveFileWriteThrough, failureMessage);
+        }
+
+        private static void MoveFileWithoutReplacingExisting(string existingPath, string destinationPath,
+            string failureMessage)
+        {
+            MoveFile(existingPath, destinationPath, MoveFileWriteThrough, failureMessage);
+        }
+
+        private static void MoveFile(string existingPath, string destinationPath, int flags, string failureMessage)
+        {
+            if (MoveFileEx(existingPath, destinationPath, flags))
                 return;
 
             var error = Marshal.GetLastWin32Error();

@@ -35,6 +35,7 @@ namespace WireSockUI.Forms
         private const int TunnelDisconnectTimeoutMilliseconds = 10000;
         private const int NativeQueryTimeoutMilliseconds = 5000;
         private const int MaxVisibleLogMessages = 2000;
+        private const int LogUiBatchSize = 256;
         private const int ShutdownDisconnectTimeoutMilliseconds = 5000;
 
         /**
@@ -44,6 +45,7 @@ namespace WireSockUI.Forms
         private readonly TunnelMonitor _tunnelMonitor;
         private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
         private readonly ProfileCatalog _profileCatalog = new ProfileCatalog();
+        private readonly UiLogMessageBuffer _uiLogBuffer;
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
         private bool _exitRequested;
@@ -59,6 +61,11 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
+            _uiLogBuffer = new UiLogMessageBuffer(
+                MaxVisibleLogMessages,
+                LogUiBatchSize,
+                TryScheduleLogDrain,
+                AppendWireSockLogMessages);
             _tunnelLifecycle = new TunnelLifecycleController(OnWireSockLogMessage);
             _tunnelMonitor = new TunnelMonitor(
                 _tunnelLifecycle.GetConnectedAsync,
@@ -249,11 +256,12 @@ namespace WireSockUI.Forms
             });
         }
 
-        private void MarkNativeRecoveryRequired(string profile, string context)
+        private void MarkNativeRecoveryRequired(string profile, string context,
+            NativeRecoveryMarkerLease markerLease = null)
         {
-            Global.WriteNativeRecoveryMarker(
-                context,
-                "Native WireSock cleanup did not finish safely. New tunnel operations are disabled until recovery succeeds or WireSock UI is restarted.");
+            const string diagnostic =
+                "Native WireSock cleanup did not finish safely. New tunnel operations are disabled until recovery succeeds or WireSock UI is restarted.";
+            WriteOrUpdateNativeRecoveryMarker(markerLease, context, diagnostic);
 
             var wasAlreadyMarked = !_tunnelSession.RequireRecovery();
             Trace.TraceWarning(
@@ -272,15 +280,29 @@ namespace WireSockUI.Forms
             });
         }
 
-        private async Task HandleNativeCleanupFailureAsync(string profile, string context, string diagnostic = null)
+        private static NativeRecoveryMarkerLease WriteOrUpdateNativeRecoveryMarker(
+            NativeRecoveryMarkerLease markerLease,
+            string context,
+            string diagnostic)
+        {
+            if (markerLease == null)
+                return Global.NativeRecoveryMarkers.Write(context, diagnostic);
+
+            Global.NativeRecoveryMarkers.TryUpdate(markerLease, context, diagnostic);
+            return markerLease;
+        }
+
+        private async Task HandleNativeCleanupFailureAsync(string profile, string context, string diagnostic = null,
+            NativeRecoveryMarkerLease markerLease = null)
         {
             if (!string.IsNullOrWhiteSpace(diagnostic))
                 Trace.TraceWarning($"Native cleanup failure after {context}: {diagnostic}");
 
             await TryResetNetworkLockAfterNativeCleanupFailureAsync(context);
             MarkNativeRecoveryRequired(profile, string.IsNullOrWhiteSpace(diagnostic)
-                ? context
-                : $"{context}: {diagnostic}");
+                    ? context
+                    : $"{context}: {diagnostic}",
+                markerLease);
         }
 
         private void SetNativeRecoveryUi(string profile)
@@ -371,10 +393,10 @@ namespace WireSockUI.Forms
             if (result.TimedOut)
             {
                 BeginNativeCleanup();
-                Global.WriteNativeRecoveryMarker("tunnel disconnect timeout",
+                var markerLease = Global.NativeRecoveryMarkers.Write("tunnel disconnect timeout",
                     $"The native disconnect call for profile '{profile}' did not return within {TunnelDisconnectTimeoutMilliseconds} ms.");
                 SetNativeRecoveryUi(profile);
-                ScheduleTimedOutDisconnectCleanup(result.PendingCompletion, profile, preserveNetworkLock);
+                ScheduleTimedOutDisconnectCleanup(result.PendingCompletion, profile, preserveNetworkLock, markerLease);
 
                 if (showWarning)
                     MessageBox.Show(Resources.TunnelDisconnectTimeout, Resources.TunnelErrorTitle,
@@ -390,10 +412,10 @@ namespace WireSockUI.Forms
         }
 
         private void ScheduleTimedOutDisconnectCleanup(Task<NativeOperationResult<bool>> pendingCompletion,
-            string profile, bool preservedNetworkLock)
+            string profile, bool preservedNetworkLock, NativeRecoveryMarkerLease markerLease)
         {
             var cleanupTask = CompleteTimedOutDisconnectCleanupAsync(pendingCompletion, profile,
-                preservedNetworkLock);
+                preservedNetworkLock, markerLease);
             cleanupTask.ContinueWith(task =>
                     Trace.TraceWarning(
                         $"Unhandled timed-out disconnect cleanup error: {task.Exception?.GetBaseException().Message}"),
@@ -403,7 +425,8 @@ namespace WireSockUI.Forms
         }
 
         private async Task CompleteTimedOutDisconnectCleanupAsync(
-            Task<NativeOperationResult<bool>> pendingCompletion, string profile, bool preservedNetworkLock)
+            Task<NativeOperationResult<bool>> pendingCompletion, string profile, bool preservedNetworkLock,
+            NativeRecoveryMarkerLease markerLease)
         {
             var cleanupFailed = false;
             string diagnostic = null;
@@ -433,12 +456,13 @@ namespace WireSockUI.Forms
 
                 if (cleanupFailed)
                 {
-                    await HandleNativeCleanupFailureAsync(profile, "timed-out disconnect cleanup", diagnostic)
+                    await HandleNativeCleanupFailureAsync(profile, "timed-out disconnect cleanup", diagnostic,
+                            markerLease)
                         .ConfigureAwait(false);
                 }
                 else
                 {
-                    Global.TryDeleteNativeRecoveryMarker();
+                    Global.NativeRecoveryMarkers.TryDelete(markerLease);
                     TryRunOnUiThread(() => UpdateState(ConnectionState.Disconnected, false, profile));
                 }
             }
@@ -456,6 +480,7 @@ namespace WireSockUI.Forms
             _shutdownComplete = true;
             _currentState = ConnectionState.Disconnected;
 
+            _uiLogBuffer.Dispose();
             _tunnelMonitor.Dispose();
 
             DisposeTunnelLifecycleWithTimeout();
@@ -481,7 +506,7 @@ namespace WireSockUI.Forms
                 {
                     Trace.TraceWarning(
                         $"WireSock manager shutdown exceeded {ShutdownDisconnectTimeoutMilliseconds} ms; continuing application exit.");
-                    Global.WriteNativeRecoveryMarker("shutdown timeout",
+                    var markerLease = Global.NativeRecoveryMarkers.Write("shutdown timeout",
                         "The native cleanup call was still running when WireSock UI exited. No concurrent global reset was attempted.");
 
                     cleanupResult.PendingCompletion.ContinueWith(task =>
@@ -490,14 +515,14 @@ namespace WireSockUI.Forms
                             {
                                 Trace.TraceWarning(
                                     $"WireSock manager shutdown completed with an error after exit continued: {task.Exception?.GetBaseException().Message}");
-                                Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                                WriteOrUpdateNativeRecoveryMarker(markerLease, "shutdown cleanup failure",
                                     task.Exception?.GetBaseException().Message);
                                 return;
                             }
 
                             if (task.IsCanceled)
                             {
-                                Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                                WriteOrUpdateNativeRecoveryMarker(markerLease, "shutdown cleanup failure",
                                     "The native shutdown cleanup was canceled.");
                                 return;
                             }
@@ -506,12 +531,12 @@ namespace WireSockUI.Forms
                                 task.Result, "native shutdown cleanup");
                             if (!completedResult.Succeeded)
                             {
-                                Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                                WriteOrUpdateNativeRecoveryMarker(markerLease, "shutdown cleanup failure",
                                     completedResult.Diagnostic);
                                 return;
                             }
 
-                            Global.TryDeleteNativeRecoveryMarker();
+                            Global.NativeRecoveryMarkers.TryDelete(markerLease);
                         },
                         CancellationToken.None,
                         TaskContinuationOptions.None,
@@ -519,19 +544,19 @@ namespace WireSockUI.Forms
                 }
                 else if (!cleanupResult.Succeeded)
                 {
-                    Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                    Global.NativeRecoveryMarkers.Write("shutdown cleanup failure",
                         cleanupResult.Diagnostic);
                 }
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to cleanly shut down WireSock manager: {ex.Message}");
-                Global.WriteNativeRecoveryMarker("shutdown cleanup failure", ex.Message);
+                Global.NativeRecoveryMarkers.Write("shutdown cleanup failure", ex.Message);
             }
         }
 
         private async Task<bool> TryResetNetworkLockAfterNativeCleanupFailureAsync(string context,
-            bool recordRecoveryMarkerOnFailure = false)
+            NativeRecoveryMarkerSnapshot markerToClear = null, bool recordRecoveryMarkerOnFailure = false)
         {
             try
             {
@@ -543,14 +568,14 @@ namespace WireSockUI.Forms
                     Trace.TraceWarning(
                         $"Unable to query WireSock network lock after {context}: {diagnostic}");
                     if (recordRecoveryMarkerOnFailure)
-                        Global.WriteNativeRecoveryMarker(context, diagnostic);
+                        Global.NativeRecoveryMarkers.Write(context, diagnostic);
                     return false;
                 }
 
                 if (!queryResult.Value)
                 {
                     if (recordRecoveryMarkerOnFailure)
-                        Global.TryDeleteNativeRecoveryMarker();
+                        Global.NativeRecoveryMarkers.TryDelete(markerToClear);
                     return true;
                 }
 
@@ -562,19 +587,19 @@ namespace WireSockUI.Forms
                     Trace.TraceWarning(
                         $"Unable to reset WireSock network lock after {context}: {diagnostic}");
                     if (recordRecoveryMarkerOnFailure)
-                        Global.WriteNativeRecoveryMarker(context, diagnostic);
+                        Global.NativeRecoveryMarkers.Write(context, diagnostic);
                     return false;
                 }
 
                 if (recordRecoveryMarkerOnFailure)
-                    Global.TryDeleteNativeRecoveryMarker();
+                    Global.NativeRecoveryMarkers.TryDelete(markerToClear);
                 return true;
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to reset WireSock network lock after {context}: {ex.Message}");
                 if (recordRecoveryMarkerOnFailure)
-                    Global.WriteNativeRecoveryMarker(context, ex.Message);
+                    Global.NativeRecoveryMarkers.Write(context, ex.Message);
                 return false;
             }
         }
@@ -616,14 +641,15 @@ namespace WireSockUI.Forms
 
         private async Task ShowPendingNativeRecoveryWarningAsync()
         {
-            var marker = Global.ReadNativeRecoveryMarker();
+            var markerSnapshot = Global.NativeRecoveryMarkers.Capture();
+            var marker = markerSnapshot?.Contents;
 
             var queryResult = await _tunnelLifecycle.QueryNetworkLockAsync(NativeQueryTimeoutMilliseconds);
             if (!queryResult.Succeeded)
             {
                 TrackTimedOutNativeOperation(queryResult, "startup network-lock query");
                 var diagnostic = queryResult.Diagnostic ?? "Unable to query WireSock network lock state.";
-                Global.WriteNativeRecoveryMarker("startup network-lock query", diagnostic);
+                Global.NativeRecoveryMarkers.Write("startup network-lock query", diagnostic);
                 _tunnelSession.RequireRecovery();
                 SetNativeRecoveryUi(null);
                 MessageBox.Show(
@@ -634,11 +660,12 @@ namespace WireSockUI.Forms
 
             if (!queryResult.Value)
             {
-                Global.TryDeleteNativeRecoveryMarker();
+                Global.NativeRecoveryMarkers.TryDelete(markerSnapshot);
                 return;
             }
 
-            var recovered = await TryResetNetworkLockAfterNativeCleanupFailureAsync("startup recovery", true);
+            var recovered = await TryResetNetworkLockAfterNativeCleanupFailureAsync(
+                "startup recovery", markerSnapshot, true);
             if (!recovered)
             {
                 _tunnelSession.RequireRecovery();
@@ -1123,7 +1150,7 @@ namespace WireSockUI.Forms
             }
 
             BeginNativeCleanup();
-            Global.WriteNativeRecoveryMarker("tunnel connect timeout",
+            var markerLease = Global.NativeRecoveryMarkers.Write("tunnel connect timeout",
                 $"The native connect call for profile '{profile}' did not return within {TunnelConnectionTimeoutMilliseconds} ms.");
             var cleanupUiGeneration = generation;
 
@@ -1138,15 +1165,17 @@ namespace WireSockUI.Forms
                     MessageBoxIcon.Warning);
             }
 
-            ScheduleTimedOutConnectCleanup(connectResult.PendingCompletion, cleanupUiGeneration, profile);
+            ScheduleTimedOutConnectCleanup(connectResult.PendingCompletion, cleanupUiGeneration, profile,
+                markerLease);
 
             return null;
         }
 
         private void ScheduleTimedOutConnectCleanup(
-            Task<NativeOperationResult<TunnelConnectionResult>> pendingCompletion, int generation, string profile)
+            Task<NativeOperationResult<TunnelConnectionResult>> pendingCompletion, int generation, string profile,
+            NativeRecoveryMarkerLease markerLease)
         {
-            var cleanupTask = CompleteTimedOutConnectCleanupAsync(pendingCompletion, generation, profile);
+            var cleanupTask = CompleteTimedOutConnectCleanupAsync(pendingCompletion, generation, profile, markerLease);
             cleanupTask.ContinueWith(faultedTask =>
                     Trace.TraceWarning(
                         $"Unhandled timed-out tunnel cleanup error: {faultedTask.Exception?.GetBaseException().Message}"),
@@ -1156,7 +1185,8 @@ namespace WireSockUI.Forms
         }
 
         private async Task CompleteTimedOutConnectCleanupAsync(
-            Task<NativeOperationResult<TunnelConnectionResult>> pendingCompletion, int generation, string profile)
+            Task<NativeOperationResult<TunnelConnectionResult>> pendingCompletion, int generation, string profile,
+            NativeRecoveryMarkerLease markerLease)
         {
             var cleanupFailed = false;
             var cleanupDelegated = false;
@@ -1176,7 +1206,10 @@ namespace WireSockUI.Forms
                     if (disconnectResult.TimedOut)
                     {
                         cleanupDelegated = true;
-                        ScheduleTimedOutDisconnectCleanup(disconnectResult.PendingCompletion, profile, false);
+                        markerLease = WriteOrUpdateNativeRecoveryMarker(markerLease, "tunnel disconnect timeout",
+                            $"The native disconnect cleanup for profile '{profile}' did not return within {TunnelDisconnectTimeoutMilliseconds} ms.");
+                        ScheduleTimedOutDisconnectCleanup(disconnectResult.PendingCompletion, profile, false,
+                            markerLease);
                         return;
                     }
 
@@ -1190,7 +1223,10 @@ namespace WireSockUI.Forms
                     if (disconnectResult.TimedOut)
                     {
                         cleanupDelegated = true;
-                        ScheduleTimedOutDisconnectCleanup(disconnectResult.PendingCompletion, profile, false);
+                        markerLease = WriteOrUpdateNativeRecoveryMarker(markerLease, "tunnel disconnect timeout",
+                            $"The native disconnect cleanup for profile '{profile}' did not return within {TunnelDisconnectTimeoutMilliseconds} ms.");
+                        ScheduleTimedOutDisconnectCleanup(disconnectResult.PendingCompletion, profile, false,
+                            markerLease);
                         return;
                     }
 
@@ -1211,12 +1247,13 @@ namespace WireSockUI.Forms
             {
                 if (!cleanupDelegated && cleanupFailed)
                 {
-                    await HandleNativeCleanupFailureAsync(profile, "timed-out connect cleanup", diagnostic)
+                    await HandleNativeCleanupFailureAsync(profile, "timed-out connect cleanup", diagnostic,
+                            markerLease)
                         .ConfigureAwait(false);
                 }
                 else if (!cleanupDelegated)
                 {
-                    Global.TryDeleteNativeRecoveryMarker();
+                    Global.NativeRecoveryMarkers.TryDelete(markerLease);
                 }
 
                 if (!cleanupDelegated)
@@ -1982,7 +2019,7 @@ namespace WireSockUI.Forms
             Trace.TraceError(message);
             if (SettingsFailureRequiresNativeRecovery(result))
             {
-                Global.WriteNativeRecoveryMarker("settings rollback failure", message);
+                Global.NativeRecoveryMarkers.Write("settings rollback failure", message);
                 _tunnelSession.RequireRecovery();
                 SetNativeRecoveryUi(_tunnelLifecycle.ProfileName);
             }
@@ -2003,7 +2040,7 @@ namespace WireSockUI.Forms
                 return result;
 
             BeginNativeCleanup();
-            Global.WriteNativeRecoveryMarker(context, result.Diagnostic);
+            var markerLease = Global.NativeRecoveryMarkers.Write(context, result.Diagnostic);
             SetNativeRecoveryUi(profile);
             MessageBox.Show(result.Diagnostic, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
@@ -2024,7 +2061,7 @@ namespace WireSockUI.Forms
             {
                 if (NativeOperationRecoveryPolicy.CanRestorePreviousState(completedResult))
                 {
-                    Global.TryDeleteNativeRecoveryMarker();
+                    Global.NativeRecoveryMarkers.TryDelete(markerLease);
                     if (!_shutdownComplete && !IsDisposed && !Disposing)
                         UpdateState(previousState, false, profile);
                 }
@@ -2032,7 +2069,7 @@ namespace WireSockUI.Forms
                 {
                     var diagnostic = completedResult.Diagnostic ??
                                      "The timed-out native operation completed without a verified result.";
-                    Global.WriteNativeRecoveryMarker(context, diagnostic);
+                    WriteOrUpdateNativeRecoveryMarker(markerLease, context, diagnostic);
                     _tunnelSession.RequireRecovery();
                     SetNativeRecoveryUi(profile);
                 }
@@ -2062,6 +2099,7 @@ namespace WireSockUI.Forms
 
             cmiResetKillSwitch.Enabled = false;
             var profile = _tunnelLifecycle.ProfileName;
+            var markerSnapshot = Global.NativeRecoveryMarkers.Capture();
 
             try
             {
@@ -2081,7 +2119,7 @@ namespace WireSockUI.Forms
                     var failureDiagnostic = !networkLockReset
                         ? resetResult.Diagnostic
                         : _tunnelLifecycle.LastError ?? Resources.TunnelHandleReleaseWarning;
-                    Global.WriteNativeRecoveryMarker("manual Kill Switch recovery", failureDiagnostic);
+                    Global.NativeRecoveryMarkers.Write("manual Kill Switch recovery", failureDiagnostic);
                     _tunnelSession.RequireRecovery();
                     SetNativeRecoveryUi(profile);
 
@@ -2093,7 +2131,7 @@ namespace WireSockUI.Forms
                     return;
                 }
 
-                Global.TryDeleteNativeRecoveryMarker();
+                Global.NativeRecoveryMarkers.TryDelete(markerSnapshot);
                 _tunnelSession.ClearRecovery();
                 UpdateState(ConnectionState.Disconnected, false, profile);
 
@@ -2103,6 +2141,7 @@ namespace WireSockUI.Forms
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Manual Kill Switch recovery failed unexpectedly: {ex.Message}");
+                Global.NativeRecoveryMarkers.Write("manual Kill Switch recovery", ex.Message);
                 _tunnelSession.RequireRecovery();
                 SetNativeRecoveryUi(profile);
                 MessageBox.Show(
@@ -2127,8 +2166,9 @@ namespace WireSockUI.Forms
             if (resetResult.Succeeded)
                 return;
 
+            var markerSnapshot = Global.NativeRecoveryMarkers.Capture();
             var recovered = await TryResetNetworkLockAfterNativeCleanupFailureAsync(
-                "preserved network-lock rollback", true);
+                "preserved network-lock rollback", markerSnapshot, true);
             if (!recovered)
                 MarkNativeRecoveryRequired(profile,
                     resetResult.Diagnostic ?? "preserved network-lock rollback failure");
@@ -2364,22 +2404,51 @@ namespace WireSockUI.Forms
 
         private void OnWireSockLogMessage(WireSockManager.LogMessage logMessage)
         {
+            _uiLogBuffer.Enqueue(logMessage);
+        }
+
+        private bool TryScheduleLogDrain(Action drain)
+        {
             if (_shutdownComplete || IsDisposed || Disposing || !IsHandleCreated)
+                return false;
+
+            try
+            {
+                BeginInvoke(drain);
+                return true;
+            }
+            catch (ObjectDisposedException)
+            {
+                return false;
+            }
+            catch (InvalidOperationException)
+            {
+                return false;
+            }
+        }
+
+        private void AppendWireSockLogMessages(IReadOnlyList<WireSockManager.LogMessage> logMessages)
+        {
+            if (_shutdownComplete || IsDisposed || Disposing || logMessages == null || logMessages.Count == 0)
                 return;
 
             var updating = false;
-
             try
             {
                 lstLog.BeginUpdate();
                 updating = true;
-                ListViewItem item = new ListViewItem(new[]
-                    { logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message });
-                lstLog.Items.Add(item);
-                while (lstLog.Items.Count > MaxVisibleLogMessages)
+                var items = logMessages.Select(logMessage => new ListViewItem(new[]
+                {
+                    logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message
+                })).ToArray();
+                lstLog.Items.AddRange(items);
+
+                var overflow = lstLog.Items.Count - MaxVisibleLogMessages;
+                while (overflow-- > 0)
                     lstLog.Items.RemoveAt(0);
 
-                lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
+                if (lstLog.Items.Count > 0)
+                    lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
             }
             catch (ObjectDisposedException)
             {

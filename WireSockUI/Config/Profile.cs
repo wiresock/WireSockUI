@@ -15,6 +15,7 @@ namespace WireSockUI.Config
     internal class Profile
     {
         internal const int MaxProfileNameLength = 250;
+        internal const long MaxProfileSizeBytes = 1024 * 1024;
 
         private static readonly HashSet<string> ReservedDeviceNames = new HashSet<string>(
             new[]
@@ -82,7 +83,9 @@ namespace WireSockUI.Config
 
             EnsureRegularProfileFile(profilePath);
 
-            var parser = new ConfigParser(profilePath);
+            ConfigParser parser = null;
+            using (var profileFile = SecureFileSystem.OpenFileForBoundedRead(profilePath, MaxProfileSizeBytes))
+                profileFile.UseReadStream(stream => parser = new ConfigParser(stream));
             var sections = parser.GetSectionNames();
 
             var configESections = sections as string[] ?? sections.ToArray();
@@ -645,7 +648,7 @@ namespace WireSockUI.Config
             {
                 if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase)) continue;
 
-                if (!IsRegularProfileFile(file, out var diagnostic))
+                if (!IsLoadableProfileFile(file, out var diagnostic))
                 {
                     Trace.TraceWarning(diagnostic);
                     continue;
@@ -721,6 +724,27 @@ namespace WireSockUI.Config
         {
             if (!IsRegularProfileFile(profilePath, out var diagnostic))
                 throw new IOException(diagnostic);
+        }
+
+        internal static bool IsLoadableProfileFile(string profilePath, out string diagnostic)
+        {
+            if (!IsRegularProfileFile(profilePath, out diagnostic))
+                return false;
+
+            try
+            {
+                using (SecureFileSystem.OpenFileForBoundedRead(profilePath, MaxProfileSizeBytes))
+                {
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                diagnostic =
+                    $"Profile file '{GetProfileDisplayName(profilePath)}' cannot be loaded: {ex.Message}";
+                return false;
+            }
         }
 
         internal static bool ProfilePathExists(string profilePath)

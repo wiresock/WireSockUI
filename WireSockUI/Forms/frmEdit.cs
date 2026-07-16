@@ -62,11 +62,11 @@ namespace WireSockUI.Forms
                 if (sourcePath == null)
                 {
                     Profile.EnsureRegularProfileFile(profilePath);
-                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath);
+                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath, Profile.MaxProfileSizeBytes);
                 }
                 else
                 {
-                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath);
+                    txtEditor.Text = SecureFileSystem.ReadAllText(profilePath, Profile.MaxProfileSizeBytes);
                 }
             }
         }
@@ -512,11 +512,24 @@ namespace WireSockUI.Forms
             var isRename = isExistingProfile &&
                            !string.Equals(_originalProfileName, requestedProfileName,
                                StringComparison.Ordinal);
-            var destinationIsOriginal = isExistingProfile &&
-                                        string.Equals(Profile.GetProfilePath(_originalProfileName), profilePath,
-                                            StringComparison.OrdinalIgnoreCase);
+            var destinationExists = Profile.ProfilePathExists(profilePath);
+            var destinationIsOriginal = false;
+            try
+            {
+                destinationIsOriginal = isExistingProfile && destinationExists &&
+                                        SecureFileSystem.ReferToSameFile(
+                                            Profile.GetProfilePath(_originalProfileName), profilePath);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.EditProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                TryDeleteTemporaryProfile(tmpProfile);
 
-            if (Profile.ProfilePathExists(profilePath) && (!isExistingProfile || !destinationIsOriginal))
+                DialogResult = DialogResult.None;
+                return;
+            }
+
+            if (destinationExists && (!isExistingProfile || !destinationIsOriginal))
             {
                 var message = Profile.IsRegularProfileFile(profilePath, out var diagnostic)
                     ? string.Format(Resources.AddProfileExistsMsg, requestedProfileName)

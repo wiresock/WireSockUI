@@ -37,24 +37,26 @@ namespace WireSockUI.Native
             public Dictionary<string, Section> Sections { get; } =
                 new Dictionary<string, Section>(StringComparer.Ordinal);
 
-            public ConfigParser(string filePath)
+            public ConfigParser(Stream stream)
             {
-                ParseConfig(filePath);
+                ParseConfig(stream);
             }
 
-            public void ParseConfig(string filePath)
+            private void ParseConfig(Stream stream)
             {
-                using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read))
+                if (stream == null) throw new ArgumentNullException(nameof(stream));
+                if (!stream.CanRead || !stream.CanSeek)
+                    throw new ArgumentException("The configuration stream must be readable and seekable.",
+                        nameof(stream));
+
+                RejectUnsupportedByteOrderMark(stream);
+                using (var reader = new StreamReader(stream, new UTF8Encoding(false, true), false, 1024, true))
                 {
-                    RejectUnsupportedByteOrderMark(fileStream);
-                    using (var reader = new StreamReader(fileStream, new UTF8Encoding(false, true), false))
-                    {
-                        Parse(reader);
-                    }
+                    Parse(reader);
                 }
             }
 
-            private static void RejectUnsupportedByteOrderMark(FileStream stream)
+            private static void RejectUnsupportedByteOrderMark(Stream stream)
             {
                 var prefix = new byte[4];
                 var bytesRead = stream.Read(prefix, 0, prefix.Length);

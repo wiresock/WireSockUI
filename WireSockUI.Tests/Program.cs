@@ -76,6 +76,8 @@ namespace WireSockUI.Tests
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
                 { "Profile enumeration creates missing overridden config folder", ProfileEnumerationCreatesMissingOverriddenConfigFolder },
                 { "Profile catalog reports enumeration failures without replacing data", ProfileCatalogReportsEnumerationFailures },
+                { "Profile catalog rejects case-insensitive duplicates", ProfileCatalogRejectsCaseInsensitiveDuplicates },
+                { "Profile rejects oversized installed files", ProfileRejectsOversizedInstalledFiles },
                 { "Profile rejects directory profile paths", ProfileRejectsDirectoryProfilePaths },
                 { "Profile rejects reparse point profile files", ProfileRejectsReparsePointProfileFiles },
                 { "Profile reports missing profile paths clearly", ProfileReportsMissingProfilePathsClearly },
@@ -109,6 +111,7 @@ namespace WireSockUI.Tests
                 { "Global removes configuration file reparse points by handle", GlobalRemovesConfigurationFileReparsePointsByHandle },
                 { "Profile rejects user-writable secured files", ProfileRejectsUserWritableSecuredFiles },
                 { "Release version parser handles SemVer tags", ReleaseVersionParserHandlesSemVerTags },
+                { "Bounded response reader rejects declared and streamed overflow", BoundedResponseReaderRejectsDeclaredAndStreamedOverflow },
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects untrusted application payloads", ProgramRejectsUntrustedApplicationPayloads },
                 { "Program enumerates nested application payloads", ProgramEnumeratesNestedApplicationPayloads },
@@ -135,6 +138,9 @@ namespace WireSockUI.Tests
                 { "Legacy migration completion removes staged sources", LegacyMigrationCompletionRemovesStagedSources },
                 { "Native recovery marker cleanup removes directory markers", NativeRecoveryMarkerCleanupRemovesDirectoryMarkers },
                 { "Native recovery marker replacement does not follow hard links", NativeRecoveryMarkerReplacementDoesNotFollowHardLinks },
+                { "Native recovery marker leases preserve newer failures", NativeRecoveryMarkerLeasesPreserveNewerFailures },
+                { "Native recovery markers bound diagnostics", NativeRecoveryMarkersBoundDiagnostics },
+                { "Native recovery marker replacement preserves the previous record on failure", NativeRecoveryMarkerReplacementPreservesPreviousRecordOnFailure },
                 { "Secure filesystem delete handles block concurrent writes", SecureFileSystemDeleteHandlesBlockConcurrentWrites },
                 { "Secure filesystem snapshots permit shell-link inspection", SecureFileSystemSnapshotsPermitShellLinkInspection },
                 { "Secure filesystem reads text through validated handles", SecureFileSystemReadsTextThroughValidatedHandles },
@@ -145,6 +151,8 @@ namespace WireSockUI.Tests
                 { "Tunnel monitor suppresses canceled query updates", TunnelMonitorSuppressesCanceledQueryUpdates },
                 { "Tunnel monitor classifies unexpected statistics failures", TunnelMonitorClassifiesUnexpectedStatisticsFailures },
                 { "Tunnel monitor UI dispatch awaits marshaled updates", TunnelMonitorUiDispatchAwaitsMarshaledUpdates },
+                { "WireSock manager bounds native log backpressure", WireSockManagerBoundsNativeLogBackpressure },
+                { "UI log buffering coalesces and bounds dispatch", UiLogBufferingCoalescesAndBoundsDispatch },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
@@ -369,7 +377,7 @@ namespace WireSockUI.Tests
 
         private static void ValidateAmneziaSdkIntegrationProfile(string profilePath)
         {
-            var parser = new WireguardConfigParser.ConfigParser(profilePath);
+            var parser = ParseConfig(profilePath);
             if (!parser.Sections.TryGetValue("Interface", out var interfaceSection))
                 throw new InvalidOperationException("The Amnezia SDK profile has no Interface section.");
 
@@ -668,6 +676,43 @@ namespace WireSockUI.Tests
             AssertEqual("Alpha,zeta", string.Join(",", result.Profiles));
         }
 
+        private static void ProfileCatalogRejectsCaseInsensitiveDuplicates()
+        {
+            var catalog = new ProfileCatalog(() => new[] { "Office", "office" });
+            var result = catalog.Load();
+
+            AssertFalse(result.Succeeded,
+                "Expected profile names that differ only by case to make the catalog ambiguous.");
+            AssertTrue(result.Exception is InvalidDataException,
+                "Expected a clear data-integrity error for case-insensitive duplicate profile names.");
+            AssertTrue(result.Exception.Message.Contains("Office") && result.Exception.Message.Contains("office"),
+                "Expected the duplicate-profile diagnostic to identify both files.");
+        }
+
+        private static void ProfileRejectsOversizedInstalledFiles()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var path = Profile.GetProfilePath("oversized");
+                using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    stream.SetLength(Profile.MaxProfileSizeBytes + 1);
+
+                AssertThrows<InvalidDataException>(() => new Profile(path), "maximum supported size");
+                AssertFalse(Profile.GetProfiles().Contains("oversized", StringComparer.OrdinalIgnoreCase),
+                    "Expected oversized installed profiles not to enter the selectable catalog.");
+
+                var nativeApi = new FakeWireSockNativeApi();
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    AssertFalse(manager.Connect("oversized"),
+                        "Expected the final manager activation boundary to reject oversized profiles.");
+                    AssertEqual(0, nativeApi.GetHandleCount);
+                    AssertTrue(manager.LastError?.Contains("maximum supported size") == true,
+                        "Expected a useful oversized-profile activation diagnostic.");
+                }
+            });
+        }
+
         private static void ProfileReportsConfiguredScriptHooks()
         {
             var path = WriteConfig(
@@ -836,7 +881,7 @@ namespace WireSockUI.Tests
                 "#@ws VirtualAdapterMode = false\n" +
                 "#@WS:VirtualAdapterMode = true\n");
 
-            var section = new WireguardConfigParser.ConfigParser(path).GetSection("Interface");
+            var section = ParseConfig(path).GetSection("Interface");
 
             AssertTrue(section.ContainsKey("BypassLanTraffic"), "Expected #@ws: directive to become a normal key.");
             AssertFalse(section.ContainsKey("VirtualAdapterMode"),
@@ -847,7 +892,7 @@ namespace WireSockUI.Tests
         private static void ParserMatchesSdkCasing()
         {
             var path = WriteConfig("[interface]\nprivatekey = value\n");
-            var parser = new WireguardConfigParser.ConfigParser(path);
+            var parser = ParseConfig(path);
 
             AssertTrue(parser.GetSectionNames().Contains("interface", StringComparer.Ordinal),
                 "Expected the parser to preserve section casing.");
@@ -878,7 +923,7 @@ namespace WireSockUI.Tests
 
             try
             {
-                var peer = new WireguardConfigParser.ConfigParser(path).GetSection("Peer");
+                var peer = ParseConfig(path).GetSection("Peer");
                 AssertEqual("backup.example.com:51820", peer["Endpoint"]);
                 AssertEqual("::/0", peer["AllowedIPs"]);
             }
@@ -896,7 +941,7 @@ namespace WireSockUI.Tests
 
             try
             {
-                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "line 2");
+                AssertThrows<FormatException>(() => ParseConfig(path), "line 2");
             }
             finally
             {
@@ -910,7 +955,7 @@ namespace WireSockUI.Tests
 
             try
             {
-                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "before any section");
+                AssertThrows<FormatException>(() => ParseConfig(path), "before any section");
             }
             finally
             {
@@ -924,7 +969,7 @@ namespace WireSockUI.Tests
 
             try
             {
-                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "section name is empty");
+                AssertThrows<FormatException>(() => ParseConfig(path), "section name is empty");
             }
             finally
             {
@@ -946,7 +991,7 @@ namespace WireSockUI.Tests
 
             try
             {
-                var parser = new WireguardConfigParser.ConfigParser(path);
+                var parser = ParseConfig(path);
                 AssertTrue(parser.GetSectionNames().Contains("Interface", StringComparer.OrdinalIgnoreCase),
                     "Expected parser to trim trailing whitespace in section names.");
                 AssertTrue(parser.GetSectionNames().Contains("Peer", StringComparer.OrdinalIgnoreCase),
@@ -984,7 +1029,7 @@ namespace WireSockUI.Tests
                 "Endpoint = example.com:51820\n" +
                 "AllowedIPs = 0.0.0.0/0, ::/0\n");
 
-            var parser = new WireguardConfigParser.ConfigParser(path);
+            var parser = ParseConfig(path);
             var interfaceSection = parser.GetSection("Interface");
 
             AssertEqual("10-14", interfaceSection["H1"]);
@@ -1015,7 +1060,7 @@ namespace WireSockUI.Tests
             try
             {
                 File.WriteAllText(path, ValidConfig(), new UTF8Encoding(true));
-                AssertThrows<FormatException>(() => new WireguardConfigParser.ConfigParser(path), "BOM");
+                AssertThrows<FormatException>(() => ParseConfig(path), "BOM");
             }
             finally
             {
@@ -1044,7 +1089,7 @@ namespace WireSockUI.Tests
 
             try
             {
-                var parser = new WireguardConfigParser.ConfigParser(path);
+                var parser = ParseConfig(path);
                 var interfaceSection = parser.GetSection("Interface");
                 var peerSection = parser.GetSection("Peer");
 
@@ -1071,7 +1116,7 @@ namespace WireSockUI.Tests
                 var bytes = validPrefix.Concat(new byte[] { 0xc3, 0x28 }).ToArray();
                 File.WriteAllBytes(path, bytes);
                 AssertThrows<DecoderFallbackException>(
-                    () => new WireguardConfigParser.ConfigParser(path), null);
+                    () => ParseConfig(path), null);
             }
             finally
             {
@@ -1341,6 +1386,23 @@ namespace WireSockUI.Tests
 
             AssertFalse(ReleaseVersionParser.TryParseReleaseTag("not-a-version", out _),
                 "Expected invalid release tags to be rejected.");
+        }
+
+        private static void BoundedResponseReaderRejectsDeclaredAndStreamedOverflow()
+        {
+            var exact = Encoding.UTF8.GetBytes("12345678");
+            using (var stream = new MemoryStream(exact, false))
+                AssertEqual("12345678", BoundedStreamReader.ReadUtf8ToEnd(stream, exact.Length));
+
+            using (var oversized = new MemoryStream(new byte[9], false))
+                AssertThrows<InvalidDataException>(
+                    () => BoundedStreamReader.ReadUtf8ToEnd(oversized, 8),
+                    "maximum supported size");
+
+            using (var chunked = new ChunkedReadStream(new byte[9], 3))
+                AssertThrows<InvalidDataException>(
+                    () => BoundedStreamReader.ReadUtf8ToEnd(chunked, 8),
+                    "maximum supported size");
         }
 
         private static void ProgramPathNormalizationPreservesDriveRoots()
@@ -2049,11 +2111,12 @@ namespace WireSockUI.Tests
             {
                 Directory.CreateDirectory(Global.NativeRecoveryMarkerPath);
 
-                var diagnostic = Global.ReadNativeRecoveryMarker();
-                AssertTrue(diagnostic.IndexOf("directory", StringComparison.OrdinalIgnoreCase) >= 0,
-                    $"Expected directory marker diagnostic, got '{diagnostic}'.");
+                var snapshot = Global.NativeRecoveryMarkers.Capture();
+                AssertTrue(snapshot?.Contents.IndexOf("directory", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected directory marker diagnostic, got '{snapshot?.Contents}'.");
 
-                Global.TryDeleteNativeRecoveryMarker();
+                AssertTrue(Global.NativeRecoveryMarkers.TryDelete(snapshot),
+                    "Expected the unchanged invalid marker to be deleted through its startup snapshot.");
                 AssertFalse(Directory.Exists(Global.NativeRecoveryMarkerPath),
                     "Expected recovery marker cleanup to remove directory markers.");
             });
@@ -2075,11 +2138,119 @@ namespace WireSockUI.Tests
                         return;
                     }
 
-                    Global.WriteNativeRecoveryMarker("test marker", "test diagnostic");
+                    var lease = Global.NativeRecoveryMarkers.Write("test marker", "test diagnostic");
 
+                    AssertTrue(lease != null, "Expected recovery marker replacement to succeed.");
                     AssertEqual("unchanged", File.ReadAllText(target));
                     AssertTrue(File.ReadAllText(Global.NativeRecoveryMarkerPath).Contains("Context: test marker"),
                         "Expected recovery marker content to be written to a newly created file.");
+                }
+                finally
+                {
+                    SecureFileSystem.AllowOwnerWriteFailureForTests = originalOwnerWriteFailure;
+                }
+            });
+        }
+
+        private static void NativeRecoveryMarkerLeasesPreserveNewerFailures()
+        {
+            WithTemporarySecureMainFolder(() =>
+            {
+                var originalOwnerWriteFailure = SecureFileSystem.AllowOwnerWriteFailureForTests;
+                try
+                {
+                    SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                    var firstLease = Global.NativeRecoveryMarkers.Write("first operation", "first diagnostic");
+                    var firstSnapshot = Global.NativeRecoveryMarkers.Capture();
+                    var secondLease = Global.NativeRecoveryMarkers.Write("second operation", "second diagnostic");
+
+                    AssertTrue(firstLease != null && firstSnapshot != null && secondLease != null,
+                        "Expected every recovery marker operation to create an ownership token.");
+                    AssertFalse(Global.NativeRecoveryMarkers.TryDelete(firstLease),
+                        "Expected an older lease not to delete a newer marker.");
+                    AssertFalse(Global.NativeRecoveryMarkers.TryUpdate(firstLease, "stale failure", "stale diagnostic"),
+                        "Expected an older lease not to overwrite a newer marker.");
+                    AssertFalse(Global.NativeRecoveryMarkers.TryDelete(firstSnapshot),
+                        "Expected an older startup snapshot not to delete a newer marker.");
+
+                    var contents = Global.NativeRecoveryMarkers.Read();
+                    AssertTrue(contents.Contains("Context: second operation"),
+                        "Expected the newer recovery marker to remain intact.");
+                    AssertTrue(Global.NativeRecoveryMarkers.TryDelete(secondLease),
+                        "Expected the current marker owner to delete its marker.");
+                    AssertFalse(File.Exists(Global.NativeRecoveryMarkerPath),
+                        "Expected the owned recovery marker to be removed.");
+                }
+                finally
+                {
+                    SecureFileSystem.AllowOwnerWriteFailureForTests = originalOwnerWriteFailure;
+                }
+            });
+        }
+
+        private static void NativeRecoveryMarkersBoundDiagnostics()
+        {
+            WithTemporarySecureMainFolder(() =>
+            {
+                var originalOwnerWriteFailure = SecureFileSystem.AllowOwnerWriteFailureForTests;
+                try
+                {
+                    SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                    var lease = Global.NativeRecoveryMarkers.Write(
+                        new string('c', 100 * 1024),
+                        new string('d', 200 * 1024));
+
+                    AssertTrue(lease != null, "Expected the bounded recovery marker write to succeed.");
+                    AssertTrue(new FileInfo(Global.NativeRecoveryMarkerPath).Length <= 64 * 1024,
+                        "Expected the recovery marker to stay within its read limit.");
+                    AssertTrue(Global.NativeRecoveryMarkers.Read().Contains("Diagnostic: "),
+                        "Expected the bounded marker to retain its diagnostic field.");
+                    AssertTrue(Global.NativeRecoveryMarkers.TryDelete(lease),
+                        "Expected the bounded marker to remain owned and deletable.");
+
+                    using (var stream = new FileStream(Global.NativeRecoveryMarkerPath, FileMode.CreateNew,
+                               FileAccess.Write, FileShare.None))
+                        stream.SetLength(64 * 1024 + 1);
+
+                    var oversizedSnapshot = Global.NativeRecoveryMarkers.Capture();
+                    AssertTrue(oversizedSnapshot?.Contents.Contains("could not be read") == true,
+                        "Expected an oversized external marker to produce a bounded diagnostic.");
+                    AssertTrue(Global.NativeRecoveryMarkers.TryDelete(oversizedSnapshot),
+                        "Expected scoped cleanup to remove the unchanged oversized marker.");
+                    AssertFalse(File.Exists(Global.NativeRecoveryMarkerPath),
+                        "Expected the oversized marker to be removed through its validated handle.");
+                }
+                finally
+                {
+                    SecureFileSystem.AllowOwnerWriteFailureForTests = originalOwnerWriteFailure;
+                }
+            });
+        }
+
+        private static void NativeRecoveryMarkerReplacementPreservesPreviousRecordOnFailure()
+        {
+            WithTemporarySecureMainFolder(() =>
+            {
+                var originalOwnerWriteFailure = SecureFileSystem.AllowOwnerWriteFailureForTests;
+                try
+                {
+                    SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                    var firstLease = Global.NativeRecoveryMarkers.Write("preserved operation", "preserved diagnostic");
+                    AssertTrue(firstLease != null, "Expected the initial recovery marker write to succeed.");
+                    var previousContents = File.ReadAllText(Global.NativeRecoveryMarkerPath);
+
+                    using (new FileStream(Global.NativeRecoveryMarkerPath, FileMode.Open, FileAccess.Read,
+                               FileShare.Read))
+                    {
+                        var failedLease = Global.NativeRecoveryMarkers.Write("replacement operation",
+                            "replacement diagnostic");
+                        AssertTrue(failedLease == null,
+                            "Expected atomic marker replacement to report the sharing violation.");
+                    }
+
+                    AssertEqual(previousContents, File.ReadAllText(Global.NativeRecoveryMarkerPath));
+                    AssertFalse(Directory.GetFiles(Global.SecureMainFolder, "*.tmp").Any(),
+                        "Expected a failed atomic replacement to remove its temporary file.");
                 }
                 finally
                 {
@@ -2129,14 +2300,14 @@ namespace WireSockUI.Tests
                 Directory.CreateDirectory(directory);
                 File.WriteAllText(path, "[Interface]\r\nPrivateKey = test", new UTF8Encoding(true));
 
-                AssertEqual("[Interface]\r\nPrivateKey = test", SecureFileSystem.ReadAllText(path));
+                AssertEqual("[Interface]\r\nPrivateKey = test", SecureFileSystem.ReadAllText(path, 1024));
                 if (!CreateHardLink(hardLinkPath, path, IntPtr.Zero))
                 {
                     SkipOrFail("hard-link creation unavailable; validated content-read rejection not exercised.");
                     return;
                 }
 
-                AssertThrows<IOException>(() => SecureFileSystem.ReadAllText(hardLinkPath), "hard-linked");
+                AssertThrows<IOException>(() => SecureFileSystem.ReadAllText(hardLinkPath, 1024), "hard-linked");
             }
             finally
             {
@@ -3610,6 +3781,130 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void WireSockManagerBoundsNativeLogBackpressure()
+        {
+            var callbackEntered = new ManualResetEventSlim();
+            var releaseCallback = new ManualResetEventSlim();
+            var finalMessageReceived = new ManualResetEventSlim();
+            var messages = new List<string>();
+            var syncRoot = new object();
+
+            using (var manager = new WireSockManager(
+                       new FakeWireSockNativeApi(),
+                       message =>
+                       {
+                           lock (syncRoot)
+                               messages.Add(message.Message);
+
+                           if (message.Message == "blocked")
+                           {
+                               callbackEntered.Set();
+                               releaseCallback.Wait(5000);
+                           }
+                           else if (message.Message == "message-2499")
+                           {
+                               finalMessageReceived.Set();
+                           }
+                       }))
+            {
+                var printLog = typeof(WireSockManager).GetMethod(
+                    "PrintLog",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                AssertTrue(printLog != null, "Expected the private log queue entry point to exist.");
+
+                printLog.Invoke(manager, new object[] { "blocked" });
+                AssertTrue(callbackEntered.Wait(2000), "Expected the log worker callback to start.");
+
+                for (var index = 0; index < 2500; index++)
+                    printLog.Invoke(manager, new object[] { $"message-{index}" });
+
+                releaseCallback.Set();
+                AssertTrue(finalMessageReceived.Wait(5000), "Expected the bounded log queue to drain.");
+
+                string[] captured;
+                lock (syncRoot)
+                    captured = messages.ToArray();
+
+                AssertEqual(1002, captured.Length);
+                AssertTrue(captured[1].Contains("1500 messages dropped"),
+                    "Expected the manager queue to report its exact drop count.");
+                AssertEqual("message-1500", captured[2]);
+                AssertEqual("message-2499", captured[captured.Length - 1]);
+            }
+        }
+
+        private static void UiLogBufferingCoalescesAndBoundsDispatch()
+        {
+            var scheduled = new Queue<Action>();
+            var consumed = new List<WireSockManager.LogMessage>();
+            var scheduleCount = 0;
+            using (var buffer = new UiLogMessageBuffer(
+                       1000,
+                       128,
+                       action =>
+                       {
+                           scheduleCount++;
+                           scheduled.Enqueue(action);
+                           return true;
+                       },
+                       batch => consumed.AddRange(batch)))
+            {
+                for (var index = 0; index < 10000; index++)
+                    buffer.Enqueue(new WireSockManager.LogMessage { Message = $"message-{index}" });
+
+                AssertEqual(1, scheduleCount);
+                AssertEqual(1, scheduled.Count);
+
+                while (scheduled.Count > 0)
+                    scheduled.Dequeue()();
+
+                AssertTrue(scheduleCount <= 9,
+                    $"Expected batched UI dispatch, but {scheduleCount} callbacks were scheduled.");
+                AssertEqual(1001, consumed.Count);
+                AssertTrue(consumed[0].Message.Contains("dropped 9000"),
+                    "Expected the bounded UI queue to report the exact number of dropped messages.");
+                AssertEqual("message-9000", consumed[1].Message);
+                AssertEqual("message-9999", consumed[consumed.Count - 1].Message);
+
+                buffer.Dispose();
+                buffer.Enqueue(new WireSockManager.LogMessage { Message = "late message" });
+                AssertEqual(0, scheduled.Count);
+            }
+
+            var recoveryDispatches = new Queue<Action>();
+            var recoveredMessages = new List<WireSockManager.LogMessage>();
+            var failFirstBatch = true;
+            using (var buffer = new UiLogMessageBuffer(
+                       4,
+                       2,
+                       action =>
+                       {
+                           recoveryDispatches.Enqueue(action);
+                           return true;
+                       },
+                       batch =>
+                       {
+                           if (failFirstBatch)
+                           {
+                               failFirstBatch = false;
+                               throw new InvalidOperationException("consumer failed");
+                           }
+
+                           recoveredMessages.AddRange(batch);
+                       }))
+            {
+                buffer.Enqueue(new WireSockManager.LogMessage { Message = "first" });
+                buffer.Enqueue(new WireSockManager.LogMessage { Message = "second" });
+                buffer.Enqueue(new WireSockManager.LogMessage { Message = "third" });
+
+                AssertThrows<InvalidOperationException>(() => recoveryDispatches.Dequeue()(), "consumer failed");
+                AssertEqual(1, recoveryDispatches.Count);
+                recoveryDispatches.Dequeue()();
+                AssertEqual(1, recoveredMessages.Count);
+                AssertEqual("third", recoveredMessages[0].Message);
+            }
+        }
+
         private static void WireSockManagerRollsBackFailedLogLevelChanges()
         {
             WithTemporaryConfigFolder(() =>
@@ -3661,6 +3956,17 @@ namespace WireSockUI.Tests
                 AssertFalse(File.Exists(original), "Expected the old profile name to disappear after commit.");
                 AssertEqual("new", File.ReadAllText(destination));
                 AssertFalse(File.Exists(temporary), "Expected the temporary profile to be consumed.");
+
+                var distinctOriginal = Path.Combine(directory, "identity-original.conf");
+                var distinctDestination = Path.Combine(directory, "identity-destination.conf");
+                File.WriteAllText(distinctOriginal, "identity-original");
+                File.WriteAllText(distinctDestination, "identity-destination");
+                AssertThrows<IOException>(
+                    () => ProfileFileTransaction.ValidateCaseOnlyRenameDestination(
+                        distinctOriginal, distinctDestination),
+                    "different file");
+                AssertEqual("identity-original", File.ReadAllText(distinctOriginal));
+                AssertEqual("identity-destination", File.ReadAllText(distinctDestination));
 
                 var caseOriginal = Path.Combine(directory, "Office.conf");
                 var caseDestination = Path.Combine(directory, "office.conf");
@@ -4156,6 +4462,60 @@ namespace WireSockUI.Tests
             }
         }
 
+        private sealed class ChunkedReadStream : Stream
+        {
+            private readonly int _chunkSize;
+            private readonly MemoryStream _stream;
+
+            internal ChunkedReadStream(byte[] contents, int chunkSize)
+            {
+                _stream = new MemoryStream(contents ?? throw new ArgumentNullException(nameof(contents)), false);
+                _chunkSize = chunkSize > 0 ? chunkSize : throw new ArgumentOutOfRangeException(nameof(chunkSize));
+            }
+
+            public override bool CanRead => true;
+            public override bool CanSeek => false;
+            public override bool CanWrite => false;
+            public override long Length => throw new NotSupportedException();
+
+            public override long Position
+            {
+                get => throw new NotSupportedException();
+                set => throw new NotSupportedException();
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                return _stream.Read(buffer, offset, Math.Min(count, _chunkSize));
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void SetLength(long value)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                throw new NotSupportedException();
+            }
+
+            protected override void Dispose(bool disposing)
+            {
+                if (disposing)
+                    _stream.Dispose();
+                base.Dispose(disposing);
+            }
+        }
+
         private static string WriteConfig(string contents)
         {
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests");
@@ -4164,6 +4524,14 @@ namespace WireSockUI.Tests
             var path = Path.Combine(directory, $"{Guid.NewGuid():N}.conf");
             File.WriteAllText(path, contents);
             return path;
+        }
+
+        private static WireguardConfigParser.ConfigParser ParseConfig(string path)
+        {
+            WireguardConfigParser.ConfigParser parser = null;
+            using (var file = SecureFileSystem.OpenFileForBoundedRead(path, Profile.MaxProfileSizeBytes))
+                file.UseReadStream(stream => parser = new WireguardConfigParser.ConfigParser(stream));
+            return parser;
         }
 
         private static string ValidConfig()

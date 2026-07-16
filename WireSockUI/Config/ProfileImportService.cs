@@ -7,8 +7,6 @@ namespace WireSockUI.Config
 {
     internal static class ProfileImportService
     {
-        private const long MaxImportedProfileSizeBytes = 1024 * 1024;
-
         public static string CopyToTemporaryProfileFile(string sourcePath)
         {
             Global.EnsureConfigsFolderExists();
@@ -31,7 +29,7 @@ namespace WireSockUI.Config
             RegularFileSource.CopyToTemporaryFile(
                 sourcePath,
                 destinationPath,
-                MaxImportedProfileSizeBytes,
+                Profile.MaxProfileSizeBytes,
                 "profile",
                 "The profile file is too large to be imported.");
         }

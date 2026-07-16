@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Management;
 using System.Runtime.InteropServices;
+using System.Threading;
 using WireSockUI.Config;
 using WireSockUI.Native;
 using WireSockUI.Properties;
@@ -61,6 +62,7 @@ namespace WireSockUI
         private volatile bool _disposed;
         private volatile string _lastError;
         private volatile string _profileName;
+        private long _droppedLogMessages;
 
         /// <summary>
         ///     Initializes a new instance of the <see cref="WireSockManager" />.
@@ -442,8 +444,15 @@ namespace WireSockUI
                     if (_logQueue.TryAdd(logMessage))
                         return;
 
-                    _logQueue.TryTake(out _);
-                    _logQueue.TryAdd(logMessage);
+                    // The worker may have freed a slot after the first bounded add failed.
+                    if (_logQueue.TryAdd(logMessage))
+                        return;
+
+                    if (_logQueue.TryTake(out _))
+                        Interlocked.Increment(ref _droppedLogMessages);
+
+                    if (!_logQueue.TryAdd(logMessage))
+                        Interlocked.Increment(ref _droppedLogMessages);
                 }
             }
             catch (ObjectDisposedException)
@@ -457,7 +466,8 @@ namespace WireSockUI
         }
 
         /// <summary>
-        ///     Initialize a <see cref="T:BackgroundWorker" /> which retrieves log messages from the logging queue
+        ///     Initialize a <see cref="T:BackgroundWorker" /> which retrieves log messages from the logging queue.
+        ///     The callback runs on this worker; UI consumers must provide their own bounded marshaling.
         /// </summary>
         /// <param name="logMessageCallback"><see cref="T:LogMessageCallback" /> to call for each log message</param>
         /// <returns>
@@ -466,10 +476,7 @@ namespace WireSockUI
         private BackgroundWorker InitializeLogWorker(LogMessageCallback logMessageCallback)
         {
             var logQueue = _logQueue;
-            var worker = new BackgroundWorker
-            {
-                WorkerReportsProgress = true
-            };
+            var worker = new BackgroundWorker();
 
             worker.DoWork += (s, e) =>
             {
@@ -478,7 +485,10 @@ namespace WireSockUI
                     try
                     {
                         if (logQueue.TryTake(out var message, 500))
-                            worker.ReportProgress(0, message);
+                        {
+                            ReportDroppedLogMessages(logMessageCallback);
+                            DispatchLogMessage(logMessageCallback, message);
+                        }
                         else if (logQueue.IsCompleted)
                             break;
                     }
@@ -493,12 +503,6 @@ namespace WireSockUI
                 }
             };
 
-            worker.ProgressChanged += (s, e) =>
-            {
-                if (!_disposed && e.UserState is LogMessage message)
-                    logMessageCallback?.Invoke(message);
-            };
-
             worker.RunWorkerCompleted += (s, e) =>
             {
                 if (_disposed)
@@ -506,6 +510,34 @@ namespace WireSockUI
             };
 
             return worker;
+        }
+
+        private void ReportDroppedLogMessages(LogMessageCallback logMessageCallback)
+        {
+            var dropped = Interlocked.Exchange(ref _droppedLogMessages, 0);
+            if (dropped <= 0)
+                return;
+
+            DispatchLogMessage(logMessageCallback, new LogMessage
+            {
+                Message = $"wgbooster produced logs faster than WireSock UI could process them; {dropped} message{(dropped == 1 ? string.Empty : "s")} dropped."
+            });
+        }
+
+        private void DispatchLogMessage(LogMessageCallback logMessageCallback, LogMessage message)
+        {
+            if (_disposed || logMessageCallback == null)
+                return;
+
+            try
+            {
+                logMessageCallback(message);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceWarning(
+                    $"WireSock log consumer rejected a message: {ex.Message}");
+            }
         }
 
         private void CompleteAndDisposeLogQueue()
@@ -596,7 +628,7 @@ namespace WireSockUI
 
             try
             {
-                if (!Profile.IsRegularProfileFile(profilePath, out var profileDiagnostic))
+                if (!Profile.IsLoadableProfileFile(profilePath, out var profileDiagnostic))
                     return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
 
                 if (_handle != IntPtr.Zero &&
