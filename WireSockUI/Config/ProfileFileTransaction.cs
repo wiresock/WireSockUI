@@ -73,7 +73,8 @@ namespace WireSockUI.Config
         private static void CommitCaseOnlyRename(string temporaryPath, string destinationPath, string originalPath)
         {
             Profile.EnsureRegularProfileFile(originalPath);
-            File.Move(originalPath, destinationPath);
+            MoveFileReplacingExisting(originalPath, destinationPath,
+                $"Unable to rename profile '{originalPath}' to '{destinationPath}'.");
             try
             {
                 CommitWithoutRename(temporaryPath, destinationPath);
@@ -82,7 +83,8 @@ namespace WireSockUI.Config
             {
                 try
                 {
-                    File.Move(destinationPath, originalPath);
+                    MoveFileReplacingExisting(destinationPath, originalPath,
+                        $"Unable to restore profile '{originalPath}'.");
                 }
                 catch (Exception rollbackException)
                 {
@@ -101,17 +103,22 @@ namespace WireSockUI.Config
             if (Profile.ProfilePathExists(destinationPath))
             {
                 Profile.EnsureRegularProfileFile(destinationPath);
-                if (!MoveFileEx(temporaryPath, destinationPath,
-                        MoveFileReplaceExisting | MoveFileWriteThrough))
-                {
-                    var error = Marshal.GetLastWin32Error();
-                    throw new IOException($"Unable to replace profile '{destinationPath}'.",
-                        new Win32Exception(error));
-                }
+                MoveFileReplacingExisting(temporaryPath, destinationPath,
+                    $"Unable to replace profile '{destinationPath}'.");
                 return;
             }
 
             File.Move(temporaryPath, destinationPath);
+        }
+
+        private static void MoveFileReplacingExisting(string existingPath, string destinationPath,
+            string failureMessage)
+        {
+            if (MoveFileEx(existingPath, destinationPath, MoveFileReplaceExisting | MoveFileWriteThrough))
+                return;
+
+            var error = Marshal.GetLastWin32Error();
+            throw new IOException(failureMessage, new Win32Exception(error));
         }
     }
 }

@@ -412,7 +412,8 @@ namespace WireSockUI.Forms
             {
                 try
                 {
-                    var result = await pendingCompletion.ConfigureAwait(false);
+                    var result = NativeOperationRecoveryPolicy.NormalizeCompletion(
+                        await pendingCompletion.ConfigureAwait(false), "native disconnect cleanup");
                     cleanupFailed = !result.Succeeded || _tunnelLifecycle.HasTunnelHandle;
                     diagnostic = result.Diagnostic;
 
@@ -494,12 +495,19 @@ namespace WireSockUI.Forms
                                 return;
                             }
 
-                            if (task.IsCanceled || !task.Result.Succeeded)
+                            if (task.IsCanceled)
                             {
                                 Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
-                                    task.IsCanceled
-                                        ? "The native shutdown cleanup was canceled."
-                                        : task.Result.Diagnostic);
+                                    "The native shutdown cleanup was canceled.");
+                                return;
+                            }
+
+                            var completedResult = NativeOperationRecoveryPolicy.NormalizeCompletion(
+                                task.Result, "native shutdown cleanup");
+                            if (!completedResult.Succeeded)
+                            {
+                                Global.WriteNativeRecoveryMarker("shutdown cleanup failure",
+                                    completedResult.Diagnostic);
                                 return;
                             }
 
@@ -587,9 +595,14 @@ namespace WireSockUI.Forms
                                 $"Timed-out native operation after {context} faulted: {task.Exception?.GetBaseException().Message}");
                         else if (task.IsCanceled)
                             Trace.TraceWarning($"Timed-out native operation after {context} was canceled.");
-                        else if (!task.Result.Succeeded)
-                            Trace.TraceWarning(
-                                $"Timed-out native operation after {context} failed: {task.Result.Diagnostic}");
+                        else
+                        {
+                            var completedResult = NativeOperationRecoveryPolicy.NormalizeCompletion(
+                                task.Result, context);
+                            if (!completedResult.Succeeded)
+                                Trace.TraceWarning(
+                                    $"Timed-out native operation after {context} failed: {completedResult.Diagnostic}");
+                        }
                     }
                     finally
                     {
@@ -1151,7 +1164,8 @@ namespace WireSockUI.Forms
 
             try
             {
-                var connectResult = await pendingCompletion.ConfigureAwait(false);
+                var connectResult = NativeOperationRecoveryPolicy.NormalizeCompletion(
+                    await pendingCompletion.ConfigureAwait(false), "native tunnel connect");
                 var result = connectResult.Value;
                 diagnostic = connectResult.Diagnostic ?? result?.Diagnostic;
 
@@ -1542,7 +1556,7 @@ namespace WireSockUI.Forms
                 return;
 
             if (lstProfiles.Items.ContainsKey(PrivilegedSettingsStore.LastProfile))
-                OnProfileClick(lstProfiles, EventArgs.Empty);
+                await ExecuteSelectedProfileCommandAsync(TunnelCommand.ActivateSelectedProfile, false);
             else
                 MessageBox.Show(Resources.LastProfileNotFound, Resources.DialogAutoConnect, MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
@@ -1769,7 +1783,7 @@ namespace WireSockUI.Forms
             }
         }
 
-        private void OnEditProfileClick(object sender, EventArgs e)
+        private async void OnEditProfileClick(object sender, EventArgs e)
         {
             if (!TryBeginTunnelOperation())
                 return;
@@ -1802,7 +1816,7 @@ namespace WireSockUI.Forms
             }
 
             if (reconnect)
-                OnProfileClick(lstProfiles, EventArgs.Empty);
+                await ExecuteSelectedProfileCommandAsync(TunnelCommand.ActivateSelectedProfile, false);
         }
 
         private async void OnDeleteProfileClick(object sender, EventArgs e)
@@ -2004,6 +2018,8 @@ namespace WireSockUI.Forms
                 completedResult = NativeOperationResult<T>.Failure(ex.Message);
             }
 
+            completedResult = NativeOperationRecoveryPolicy.NormalizeCompletion(completedResult, context);
+
             try
             {
                 if (NativeOperationRecoveryPolicy.CanRestorePreviousState(completedResult))
@@ -2120,15 +2136,15 @@ namespace WireSockUI.Forms
 
         private async void OnProfileClick(object sender, EventArgs e)
         {
-            await ExecuteSelectedProfileCommandAsync(TunnelCommand.ActivateSelectedProfile);
+            await ExecuteSelectedProfileCommandAsync(TunnelCommand.ActivateSelectedProfile, true);
         }
 
         private async void OnActivateButtonClick(object sender, EventArgs e)
         {
-            await ExecuteSelectedProfileCommandAsync(TunnelCommand.ToggleSelectedProfile);
+            await ExecuteSelectedProfileCommandAsync(TunnelCommand.ToggleSelectedProfile, true);
         }
 
-        private async Task ExecuteSelectedProfileCommandAsync(TunnelCommand command)
+        private async Task ExecuteSelectedProfileCommandAsync(TunnelCommand command, bool userInitiated)
         {
             if (!TryBeginTunnelOperation())
                 return;
@@ -2172,7 +2188,7 @@ namespace WireSockUI.Forms
                 if (_currentState == ConnectionState.Connected || _currentState == ConnectionState.Connecting)
                 {
                     if (!await DisconnectCurrentTunnelAsync(
-                            command == TunnelCommand.ToggleSelectedProfile,
+                            userInitiated,
                             preserveNetworkLockForReconnect))
                         return;
 

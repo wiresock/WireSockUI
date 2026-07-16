@@ -2529,6 +2529,10 @@ namespace WireSockUI.Tests
 
         private static void SettingsRollbackIdentifiesNativeRecoveryRequirements()
         {
+            var noRollbackFailure = new CompensatingTransactionResult(true);
+            AssertFalse(noRollbackFailure.RollbackFailed("native Kill Switch"),
+                "Expected omitted rollback failures to normalize to an empty list.");
+
             var nativeFailure = new CompensatingTransactionResult(false, "native Kill Switch", null,
                 new[] { "native Kill Switch: access denied" });
             AssertTrue(FrmMain.SettingsFailureRequiresNativeRecovery(nativeFailure),
@@ -2572,6 +2576,13 @@ namespace WireSockUI.Tests
             AssertFalse(NativeOperationRecoveryPolicy.CanRestorePreviousState(
                     NativeOperationResult<bool>.Failure("failed")),
                 "Expected a late failure to retain recovery state.");
+
+            var missingCompletion = NativeOperationRecoveryPolicy.NormalizeCompletion<bool>(null,
+                "native state query");
+            AssertFalse(missingCompletion.Succeeded,
+                "Expected a missing late native result to retain recovery state.");
+            AssertTrue(missingCompletion.Diagnostic.Contains("completed without a result"),
+                "Expected a missing late native result to provide an actionable diagnostic.");
         }
 
         private static void AutorunPreservesPersistedStateWhenStatusIsUnknown()

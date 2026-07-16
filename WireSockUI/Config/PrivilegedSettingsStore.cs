@@ -40,6 +40,7 @@ namespace WireSockUI.Config
         private const string SettingsFileName = "PrivilegedSettings.xml";
         private const string BackupFileName = "PrivilegedSettings.xml.backup";
         private static readonly object SyncRoot = new object();
+        private static readonly object SaveSyncRoot = new object();
         private static PrivilegedSettingsSnapshot _current = CreateDefaults();
 
         internal static string SettingsFilePath => Path.Combine(Global.SecureMainFolder, SettingsFileName);
@@ -105,8 +106,14 @@ namespace WireSockUI.Config
 
         internal static void Save()
         {
-            lock (SyncRoot)
-                SaveSnapshot(_current);
+            lock (SaveSyncRoot)
+            {
+                PrivilegedSettingsSnapshot snapshot;
+                lock (SyncRoot)
+                    snapshot = Copy(_current);
+
+                SaveSnapshot(snapshot);
+            }
         }
 
         internal static void SetForTests(PrivilegedSettingsSnapshot settings)
