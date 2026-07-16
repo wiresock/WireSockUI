@@ -2,13 +2,6 @@ name: WireSock SDK Contract Drift
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - 'sdk-contract/**'
-      - 'scripts/Verify-WgboosterContract.ps1'
-      - 'WireSockUI/Config/Profile.cs'
-      - 'WireSockUI/Native/WireguardBoosterExports.cs'
-      - 'WireSockUI/Native/WireguardConfigParser.cs'
   schedule:
     - cron: '17 4 * * 1'
 
@@ -29,6 +22,8 @@ jobs:
         with:
           repository: Wiresock-Foundation/wiresock-vpn-client
           path: wiresock-sdk
+          token: ${{ secrets.MY_GITHUB_PAT }}
+          persist-credentials: false
 
       - name: Verify current upstream contract
         shell: pwsh

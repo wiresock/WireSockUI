@@ -3903,6 +3903,33 @@ namespace WireSockUI.Tests
                 AssertEqual(1, recoveredMessages.Count);
                 AssertEqual("third", recoveredMessages[0].Message);
             }
+
+            var retryDispatches = new Queue<Action>();
+            var retriedMessages = new List<WireSockManager.LogMessage>();
+            var schedulingAvailable = false;
+            using (var buffer = new UiLogMessageBuffer(
+                       4,
+                       2,
+                       action =>
+                       {
+                           if (!schedulingAvailable)
+                               return false;
+
+                           retryDispatches.Enqueue(action);
+                           return true;
+                       },
+                       batch => retriedMessages.AddRange(batch)))
+            {
+                buffer.Enqueue(new WireSockManager.LogMessage { Message = "before-handle" });
+                AssertEqual(0, retryDispatches.Count);
+
+                schedulingAvailable = true;
+                buffer.RetryPendingDispatch();
+                AssertEqual(1, retryDispatches.Count);
+                retryDispatches.Dequeue()();
+                AssertEqual(1, retriedMessages.Count);
+                AssertEqual("before-handle", retriedMessages[0].Message);
+            }
         }
 
         private static void WireSockManagerRollsBackFailedLogLevelChanges()

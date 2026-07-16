@@ -105,6 +105,12 @@ namespace WireSockUI.Forms
             LoadProfiles();
         }
 
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            _uiLogBuffer?.RetryPendingDispatch();
+        }
+
         private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
         {
             using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))

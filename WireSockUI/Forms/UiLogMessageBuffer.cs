@@ -57,6 +57,22 @@ namespace WireSockUI.Forms
                 CancelPendingDispatch();
         }
 
+        internal void RetryPendingDispatch()
+        {
+            var shouldSchedule = false;
+            lock (_syncRoot)
+            {
+                if (!_disposed && _messages.Count > 0 && !_dispatchPending)
+                {
+                    _dispatchPending = true;
+                    shouldSchedule = true;
+                }
+            }
+
+            if (shouldSchedule && !_schedule(DrainBatch))
+                CancelPendingDispatch();
+        }
+
         private void DrainBatch()
         {
             List<WireSockManager.LogMessage> batch;
