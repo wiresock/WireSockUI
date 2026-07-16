@@ -8,8 +8,6 @@ namespace WireSockUI.Config
 {
     internal static class LegacyProfileMigrationService
     {
-        private const long MaxMigratedProfileSizeBytes = 1024 * 1024;
-
         internal static void StageLegacyProfiles()
         {
             if (!Directory.Exists(Global.LegacyConfigsFolder))
@@ -115,7 +113,7 @@ namespace WireSockUI.Config
                 RegularFileSource.CopyToTemporaryFile(
                     legacyProfilePath,
                     temporaryPath,
-                    MaxMigratedProfileSizeBytes,
+                    Profile.MaxProfileSizeBytes,
                     "legacy profile",
                     "The legacy profile file is too large to be staged.");
 

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 
 namespace WireSockUI.Config
@@ -45,8 +46,18 @@ namespace WireSockUI.Config
         {
             try
             {
-                var profiles = _loadProfiles()
+                var loadedProfiles = _loadProfiles() ??
+                                     throw new InvalidDataException("The profile loader returned no catalog.");
+                var duplicate = loadedProfiles
+                    .GroupBy(profile => profile, StringComparer.OrdinalIgnoreCase)
+                    .FirstOrDefault(group => group.Count() > 1);
+                if (duplicate != null)
+                    throw new InvalidDataException(
+                        $"Profile names differ only by letter case: {string.Join(", ", duplicate.OrderBy(name => name, StringComparer.Ordinal))}. Rename one of these files before continuing.");
+
+                var profiles = loadedProfiles
                     .OrderBy(profile => profile, StringComparer.OrdinalIgnoreCase)
+                    .ThenBy(profile => profile, StringComparer.Ordinal)
                     .ToArray();
                 return ProfileCatalogResult.Success(profiles);
             }

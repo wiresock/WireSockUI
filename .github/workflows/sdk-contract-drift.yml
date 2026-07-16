@@ -22,6 +22,8 @@ jobs:
         with:
           repository: Wiresock-Foundation/wiresock-vpn-client
           path: wiresock-sdk
+          token: ${{ secrets.MY_GITHUB_PAT }}
+          persist-credentials: false
 
       - name: Verify current upstream contract
         shell: pwsh

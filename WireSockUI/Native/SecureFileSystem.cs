@@ -35,16 +35,39 @@ namespace WireSockUI.Native
             return Open(path, false, writableSecurity, false, false);
         }
 
-        internal static string ReadAllText(string path)
+        internal static string ReadAllText(string path, long maxBytes)
         {
-            using (var file = Open(path, false, false, false, false, true))
+            using (var file = OpenFileForBoundedRead(path, maxBytes))
                 return file.ReadAllText();
+        }
+
+        internal static bool ReferToSameFile(string firstPath, string secondPath)
+        {
+            using (var first = Open(firstPath, false, false, false, false))
+            using (var second = Open(secondPath, false, false, false, false))
+                return first.RepresentsSameFile(second);
         }
 
         internal static ValidatedHandle OpenFileForBoundedRead(string path, long maxBytes)
         {
             if (maxBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
             var file = Open(path, false, false, false, false, true);
+            try
+            {
+                file.EnsureMaximumLength(maxBytes);
+                return file;
+            }
+            catch
+            {
+                file.Dispose();
+                throw;
+            }
+        }
+
+        internal static ValidatedHandle OpenFileForBoundedReadAndDelete(string path, long maxBytes)
+        {
+            if (maxBytes <= 0) throw new ArgumentOutOfRangeException(nameof(maxBytes));
+            var file = Open(path, false, false, true, false, true);
             try
             {
                 file.EnsureMaximumLength(maxBytes);
@@ -159,7 +182,8 @@ namespace WireSockUI.Native
                     throw new IOException(
                         $"Opened path '{expectedPath}' resolved to unexpected object '{finalPath}'.");
 
-                return new ValidatedHandle(handle, expectedPath, attributes, readContent);
+                return new ValidatedHandle(handle, expectedPath, attributes, readContent,
+                    information.VolumeSerialNumber, information.FileIndexHigh, information.FileIndexLow);
             }
             catch
             {
@@ -219,21 +243,38 @@ namespace WireSockUI.Native
         {
             private readonly SafeFileHandle _handle;
             private readonly bool _canReadContent;
+            private readonly uint _fileIndexHigh;
+            private readonly uint _fileIndexLow;
+            private readonly uint _volumeSerialNumber;
 
             internal ValidatedHandle(
                 SafeFileHandle handle,
                 string path,
                 FileAttributes attributes,
-                bool canReadContent)
+                bool canReadContent,
+                uint volumeSerialNumber,
+                uint fileIndexHigh,
+                uint fileIndexLow)
             {
                 _handle = handle;
                 _canReadContent = canReadContent;
+                _volumeSerialNumber = volumeSerialNumber;
+                _fileIndexHigh = fileIndexHigh;
+                _fileIndexLow = fileIndexLow;
                 Path = path;
                 Attributes = attributes;
             }
 
             internal string Path { get; }
             internal FileAttributes Attributes { get; }
+
+            internal bool RepresentsSameFile(ValidatedHandle other)
+            {
+                if (other == null) throw new ArgumentNullException(nameof(other));
+                return _volumeSerialNumber == other._volumeSerialNumber &&
+                       _fileIndexHigh == other._fileIndexHigh &&
+                       _fileIndexLow == other._fileIndexLow;
+            }
 
             internal string ReadAllText()
             {
@@ -292,7 +333,7 @@ namespace WireSockUI.Native
                 });
             }
 
-            private void UseReadStream(Action<FileStream> action)
+            internal void UseReadStream(Action<FileStream> action)
             {
                 if (action == null)
                     throw new ArgumentNullException(nameof(action));
