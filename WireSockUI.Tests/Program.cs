@@ -2803,6 +2803,17 @@ namespace WireSockUI.Tests
                 $"Expected attribute inspection diagnostics to escape embedded NULs, got '{diagnostic}'.");
             AssertTrue(diagnostic.Contains("\\0"),
                 $"Expected attribute inspection diagnostics to include the escaped NUL marker, got '{diagnostic}'.");
+
+            AssertFalse(WireSockUI.Program.TryValidateApplicationPayloadDirectory(
+                    malformedPath, out var payloadDiagnostic),
+                "Expected malformed application payload paths to fail validation.");
+            AssertTrue(payloadDiagnostic.IndexOf("Unable to inspect file system attributes",
+                           StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected payload validation to preserve the attribute diagnostic, got '{payloadDiagnostic}'.");
+            AssertFalse(payloadDiagnostic.Contains("\0"),
+                $"Expected payload diagnostics to escape embedded NULs, got '{payloadDiagnostic}'.");
+            AssertTrue(payloadDiagnostic.Contains("\\0"),
+                $"Expected payload diagnostics to include the escaped NUL marker, got '{payloadDiagnostic}'.");
         }
 
         private static void TunnelMonitorPreservesStatisticsQueryTimeouts()
@@ -2909,9 +2920,23 @@ namespace WireSockUI.Tests
                     "Expected a statistics failure not to be classified as a connection query failure.");
                 AssertTrue(update.StatisticsQuery?.Succeeded == false,
                     "Expected the unexpected failure to retain statistics-query context.");
+                AssertTrue(update.StatisticsQuery.Diagnostic.Contains(nameof(InvalidOperationException)),
+                    "Expected the unexpected failure diagnostic to preserve the exception type.");
                 AssertTrue(update.StatisticsQuery.Diagnostic.Contains("simulated statistics failure"),
                     "Expected the original statistics failure diagnostic to be preserved.");
             }
+
+            var emptyMessageDiagnostic = TunnelMonitor.FormatUnexpectedFailureDiagnostic(
+                "Tunnel state monitor", new InvalidOperationException(string.Empty));
+            AssertEqual("Tunnel state monitor stopped unexpectedly (InvalidOperationException).",
+                emptyMessageDiagnostic);
+
+            var malformedMessageDiagnostic = TunnelMonitor.FormatUnexpectedFailureDiagnostic(
+                "Tunnel state monitor", new InvalidOperationException("invalid\0state"));
+            AssertFalse(malformedMessageDiagnostic.Contains("\0"),
+                "Expected unexpected monitor failure diagnostics to escape embedded NULs.");
+            AssertTrue(malformedMessageDiagnostic.Contains("invalid\\0state"),
+                "Expected unexpected monitor failure diagnostics to preserve the escaped message.");
         }
 
         private static void TunnelMonitorUiDispatchAwaitsMarshaledUpdates()

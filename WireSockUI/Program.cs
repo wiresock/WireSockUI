@@ -184,10 +184,18 @@ namespace WireSockUI
                 while (pendingDirectories.Count > 0)
                 {
                     var currentDirectory = pendingDirectories.Pop();
-                    if (!TryGetExistingAttributes(currentDirectory, out var attributes) ||
-                        (attributes & FileAttributes.Directory) == 0)
+                    if (!TryGetExistingAttributes(currentDirectory, out var attributes, out diagnostic))
                     {
-                        diagnostic = $"Application payload path '{currentDirectory}' is not an accessible directory.";
+                        if (string.IsNullOrWhiteSpace(diagnostic))
+                            diagnostic =
+                                $"Application payload path '{EscapeDiagnosticText(currentDirectory)}' is not an accessible directory.";
+                        return false;
+                    }
+
+                    if ((attributes & FileAttributes.Directory) == 0)
+                    {
+                        diagnostic =
+                            $"Application payload path '{EscapeDiagnosticText(currentDirectory)}' is not an accessible directory.";
                         return false;
                     }
 
@@ -208,7 +216,7 @@ namespace WireSockUI
             catch (Exception ex)
             {
                 diagnostic =
-                    $"Unable to enumerate WireSock UI application payload in '{normalizedDirectory}': {ex.Message}";
+                    $"Unable to enumerate WireSock UI application payload in '{EscapeDiagnosticText(normalizedDirectory)}': {EscapeDiagnosticText(ex.Message)}";
                 return false;
             }
 
@@ -217,13 +225,21 @@ namespace WireSockUI
             return true;
         }
 
-        private static bool TryValidateApplicationPayloadDirectory(string directory, out string diagnostic)
+        internal static bool TryValidateApplicationPayloadDirectory(string directory, out string diagnostic)
         {
             diagnostic = null;
-            if (!TryGetExistingAttributes(directory, out var attributes) ||
-                (attributes & FileAttributes.Directory) == 0)
+            if (!TryGetExistingAttributes(directory, out var attributes, out diagnostic))
             {
-                diagnostic = $"Application payload path '{directory}' is not an accessible directory.";
+                if (string.IsNullOrWhiteSpace(diagnostic))
+                    diagnostic =
+                        $"Application payload path '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
+                return false;
+            }
+
+            if ((attributes & FileAttributes.Directory) == 0)
+            {
+                diagnostic =
+                    $"Application payload path '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
                 return false;
             }
 
@@ -751,20 +767,8 @@ namespace WireSockUI
             }
         }
 
-        private static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
-            bool warnOnFailure = false)
-        {
-            return TryGetExistingAttributesCore(path, out attributes, out _, warnOnFailure);
-        }
-
         internal static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
             out string diagnostic)
-        {
-            return TryGetExistingAttributesCore(path, out attributes, out diagnostic, false);
-        }
-
-        private static bool TryGetExistingAttributesCore(string path, out FileAttributes attributes,
-            out string diagnostic, bool warnOnFailure)
         {
             attributes = 0;
             diagnostic = null;
@@ -786,9 +790,6 @@ namespace WireSockUI
             {
                 diagnostic =
                     $"Unable to inspect file system attributes for '{EscapeDiagnosticText(path)}': {EscapeDiagnosticText(ex.Message)}";
-                if (warnOnFailure)
-                    Trace.TraceWarning(diagnostic);
-
                 return false;
             }
         }
@@ -862,10 +863,16 @@ namespace WireSockUI
                 return false;
             }
 
-            if (!TryGetExistingAttributes(normalizedFile, out var fileAttributes) ||
-                (fileAttributes & FileAttributes.Directory) != 0)
+            if (!TryGetExistingAttributes(normalizedFile, out var fileAttributes, out diagnostic))
             {
-                diagnostic = $"{label} '{normalizedFile}' is not a regular file.";
+                if (string.IsNullOrWhiteSpace(diagnostic))
+                    diagnostic = $"{label} '{EscapeDiagnosticText(normalizedFile)}' is not a regular file.";
+                return false;
+            }
+
+            if ((fileAttributes & FileAttributes.Directory) != 0)
+            {
+                diagnostic = $"{label} '{EscapeDiagnosticText(normalizedFile)}' is not a regular file.";
                 return false;
             }
 
@@ -886,10 +893,18 @@ namespace WireSockUI
             var isContainingDirectory = true;
             while (!string.IsNullOrWhiteSpace(directory))
             {
-                if (!TryGetExistingAttributes(directory, out var directoryAttributes) ||
-                    (directoryAttributes & FileAttributes.Directory) == 0)
+                if (!TryGetExistingAttributes(directory, out var directoryAttributes, out diagnostic))
                 {
-                    diagnostic = $"{label} ancestor '{directory}' is not an accessible directory.";
+                    if (string.IsNullOrWhiteSpace(diagnostic))
+                        diagnostic =
+                            $"{label} ancestor '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
+                    return false;
+                }
+
+                if ((directoryAttributes & FileAttributes.Directory) == 0)
+                {
+                    diagnostic =
+                        $"{label} ancestor '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
                     return false;
                 }
 

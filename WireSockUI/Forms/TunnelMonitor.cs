@@ -287,13 +287,25 @@ namespace WireSockUI.Forms
             if (cancellationToken.IsCancellationRequested || generation != _currentGeneration())
                 return;
 
-            var diagnostic = $"{context} stopped unexpectedly: {exception.Message}";
+            var diagnostic = FormatUnexpectedFailureDiagnostic(context, exception);
             var update = failureSource == FailureSource.StatisticsQuery
                 ? TunnelMonitorUpdate.StatisticsQueryFailed(
                     generation, NativeOperationResult<WgbStats>.Failure(diagnostic))
                 : TunnelMonitorUpdate.ConnectionQueryFailed(
                     generation, NativeOperationResult<bool>.Failure(diagnostic));
             await _updateHandler(update);
+        }
+
+        internal static string FormatUnexpectedFailureDiagnostic(string context, Exception exception)
+        {
+            if (exception == null)
+                throw new ArgumentNullException(nameof(exception));
+
+            var exceptionType = exception.GetType().Name;
+            var exceptionMessage = (exception.Message ?? string.Empty).Replace("\0", "\\0");
+            return string.IsNullOrWhiteSpace(exceptionMessage)
+                ? $"{context} stopped unexpectedly ({exceptionType})."
+                : $"{context} stopped unexpectedly ({exceptionType}): {exceptionMessage}";
         }
 
         private static void CancelAndDisposeWhenComplete(CancellationTokenSource cancellation, Task task)
