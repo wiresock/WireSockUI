@@ -58,14 +58,21 @@ namespace WireSockUI
 
             try
             {
-                UpgradeUserSettings();
+                if (FrmMain.IsApplicationAlreadyRunning())
+                {
+                    MessageBox.Show(Resources.AlreadyRunningMessage, Resources.AlreadyRunningTitle,
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    Environment.Exit(1);
+                    return;
+                }
             }
             catch (Exception ex)
             {
                 MessageBox.Show(
-                    $"Unable to migrate WireSock UI settings from the previous release.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
-                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    $"WireSock UI could not establish exclusive access to the driver interface.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(1);
+                return;
             }
 
             try
@@ -79,6 +86,21 @@ namespace WireSockUI
                     $"Unable to initialize WireSock UI secure data folders and diagnostics.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
                     Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(1);
+                return;
+            }
+
+            try
+            {
+                UpgradeUserSettings();
+                InitializePrivilegedSettings();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"Unable to initialize or migrate WireSock UI settings.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
+                    Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+                return;
             }
 
             RegisterUnhandledExceptionHandlers();
@@ -298,6 +320,37 @@ namespace WireSockUI
                 Settings.Default.Upgrade,
                 () => Settings.Default.UpgradeRequired = false,
                 Settings.Default.Save);
+        }
+
+        private static void InitializePrivilegedSettings()
+        {
+            var legacyLastProfile = Profile.IsValidProfileName(Settings.Default.LastProfile)
+                ? Settings.Default.LastProfile
+                : string.Empty;
+            var legacySettings = new PrivilegedSettingsSnapshot(
+                Settings.Default.AutoConnect,
+                legacyLastProfile,
+                Settings.Default.UseAdapter,
+                Settings.Default.EnableKillSwitch);
+
+            PrivilegedSettingsStore.Initialize(legacySettings, ConfirmLegacyPrivilegedSettingsImport);
+        }
+
+        internal static bool ConfirmLegacyPrivilegedSettingsImport(PrivilegedSettingsSnapshot settings)
+        {
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
+
+            var message =
+                "WireSock UI found legacy per-user connection settings. Per-user settings can be changed by non-elevated applications, so they cannot be imported silently." +
+                Environment.NewLine + Environment.NewLine +
+                $"Auto-connect: {settings.AutoConnect}" + Environment.NewLine +
+                $"Last profile: {(string.IsNullOrEmpty(settings.LastProfile) ? "(none)" : settings.LastProfile)}" + Environment.NewLine +
+                $"Virtual adapter mode: {settings.UseAdapter}" + Environment.NewLine +
+                $"Kill Switch: {settings.EnableKillSwitch}" + Environment.NewLine + Environment.NewLine +
+                "Import these values into administrator-protected storage? Choose No to use safe defaults.";
+
+            return MessageBox.Show(message, "Import protected WireSock UI settings", MessageBoxButtons.YesNo,
+                       MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
         }
 
         internal static void RunSettingsUpgrade(bool upgradeRequired, Action upgrade, Action markComplete, Action save)

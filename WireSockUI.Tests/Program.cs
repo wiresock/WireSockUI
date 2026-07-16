@@ -13,6 +13,7 @@ using System.Security.Principal;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Xml;
 using System.Xml.Linq;
 using WireSockUI;
 using WireSockUI.Config;
@@ -29,6 +30,20 @@ namespace WireSockUI.Tests
         private static readonly string PublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)2, 32).ToArray());
         private const int SymbolicLinkFlagFile = 0;
         private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
+
+        private static bool TestKillSwitch
+        {
+            get => PrivilegedSettingsStore.EnableKillSwitch;
+            set
+            {
+                var current = PrivilegedSettingsStore.Capture();
+                PrivilegedSettingsStore.SetForTests(new PrivilegedSettingsSnapshot(
+                    current.AutoConnect,
+                    current.LastProfile,
+                    current.UseAdapter,
+                    value));
+            }
+        }
 
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         [return: MarshalAs(UnmanagedType.I1)]
@@ -134,7 +149,16 @@ namespace WireSockUI.Tests
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
                 { "Settings upgrade runs exactly once", SettingsUpgradeRunsExactlyOnce },
+                { "Protected settings require consent and persist securely", ProtectedSettingsRequireConsentAndPersist },
+                { "Protected settings reject malformed or oversized data", ProtectedSettingsRejectMalformedOrOversizedData },
+                { "Protected settings recover interrupted saves", ProtectedSettingsRecoverInterruptedSaves },
+                { "Application settings use protected connection values", ApplicationSettingsUseProtectedConnectionValues },
                 { "Settings transaction compensates failures in reverse order", SettingsTransactionCompensatesFailuresInReverseOrder },
+                { "Settings rollback identifies native recovery requirements", SettingsRollbackIdentifiesNativeRecoveryRequirements },
+                { "Tunnel commands distinguish activation from deactivation", TunnelCommandsDistinguishActivationFromDeactivation },
+                { "Native timeout policy defers cleanup until completion", NativeTimeoutPolicyDefersCleanupUntilCompletion },
+                { "Autorun preserves persisted state when status is unknown", AutorunPreservesPersistedStateWhenStatusIsUnknown },
+                { "Curve25519 matches RFC 7748 public-key vectors", Curve25519MatchesRfc7748PublicKeyVectors },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "Editor bounds synchronous syntax highlighting", EditorBoundsSynchronousSyntaxHighlighting },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
@@ -278,6 +302,8 @@ namespace WireSockUI.Tests
                     "WIRESOCKUI_TEST_PROFILE_TRANSPARENT", "WIRESOCKUI_TEST_PROFILE");
                 var virtualAdapterProfile = GetRequiredSdkProfilePath(
                     "WIRESOCKUI_TEST_PROFILE_VIRTUAL_ADAPTER", "WIRESOCKUI_TEST_PROFILE");
+                var amneziaProfile = GetRequiredSdkProfilePath("WIRESOCKUI_TEST_PROFILE_AMNEZIA");
+                ValidateAmneziaSdkIntegrationProfile(amneziaProfile);
 
                 EnsureGlobalNetworkLockInactive(false);
                 RunWithFinalCleanup(
@@ -287,10 +313,13 @@ namespace WireSockUI.Tests
                         EnsureGlobalNetworkLockInactive(true);
                         RunSdkModeSmoke(api, WireSockManager.Mode.VirtualAdapter, virtualAdapterProfile, logPrinter);
                         EnsureGlobalNetworkLockInactive(true);
+                        RunSdkModeSmoke(api, WireSockManager.Mode.Transparent, amneziaProfile, logPrinter);
+                        EnsureGlobalNetworkLockInactive(true);
                     },
                     () => EnsureGlobalNetworkLockInactive(true));
 
-                Console.WriteLine("PASS real wgbooster.dll transparent and virtual-adapter lifecycle smoke tests.");
+                Console.WriteLine(
+                    "PASS real wgbooster.dll transparent, virtual-adapter, Kill Switch, and Amnezia lifecycle smoke tests.");
                 return 0;
             }
             catch (Exception ex)
@@ -300,11 +329,11 @@ namespace WireSockUI.Tests
             }
         }
 
-        private static string GetRequiredSdkProfilePath(string variableName, string fallbackVariableName)
+        private static string GetRequiredSdkProfilePath(string variableName, string fallbackVariableName = null)
         {
             var sourceVariableName = variableName;
             var profilePath = Environment.GetEnvironmentVariable(variableName);
-            if (string.IsNullOrWhiteSpace(profilePath))
+            if (string.IsNullOrWhiteSpace(profilePath) && !string.IsNullOrWhiteSpace(fallbackVariableName))
             {
                 profilePath = Environment.GetEnvironmentVariable(fallbackVariableName);
                 sourceVariableName = fallbackVariableName;
@@ -338,6 +367,19 @@ namespace WireSockUI.Tests
                     "Use a dedicated non-production profile without PreUp, PostUp, PreDown, or PostDown commands.");
         }
 
+        private static void ValidateAmneziaSdkIntegrationProfile(string profilePath)
+        {
+            var parser = new WireguardConfigParser.ConfigParser(profilePath);
+            if (!parser.Sections.TryGetValue("Interface", out var interfaceSection))
+                throw new InvalidOperationException("The Amnezia SDK profile has no Interface section.");
+
+            var requiredFields = new[] { "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "Id", "Ip", "Ib" };
+            var missingFields = requiredFields.Where(field => !interfaceSection.Contains(field)).ToArray();
+            if (missingFields.Length != 0)
+                throw new InvalidOperationException(
+                    $"The Amnezia SDK profile must exercise all current fields. Missing: {string.Join(", ", missingFields)}.");
+        }
+
         private static void RunSdkModeSmoke(IWireSockNativeApi api, WireSockManager.Mode mode, string profilePath,
             WireguardBoosterExports.LogPrinter logPrinter)
         {
@@ -367,6 +409,27 @@ namespace WireSockUI.Tests
                 if (!api.SetNetworkLockMode(mode, handle, WireguardBoosterExports.WgbNetworkLockMode.Disabled))
                     throw new Win32Exception(Marshal.GetLastWin32Error(),
                         $"wgbooster failed to disable the {mode} network-lock mode.");
+
+                if (!api.SetNetworkLockMode(mode, handle, WireguardBoosterExports.WgbNetworkLockMode.Enabled))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),
+                        $"wgbooster failed to enable the {mode} network-lock mode.");
+                SetLastErrorForTest(0);
+                var enabledNetworkLockMode = api.GetNetworkLockMode(mode, handle);
+                var enabledNetworkLockError = Marshal.GetLastWin32Error();
+                if (enabledNetworkLockError != 0 ||
+                    enabledNetworkLockMode != WireguardBoosterExports.WgbNetworkLockMode.Enabled)
+                    throw new InvalidOperationException(
+                        $"wgbooster did not preserve the enabled {mode} network-lock mode.");
+                if (!api.SetNetworkLockMode(mode, handle, WireguardBoosterExports.WgbNetworkLockMode.Disabled))
+                    throw new Win32Exception(Marshal.GetLastWin32Error(),
+                        $"wgbooster failed to reset the {mode} network-lock mode.");
+                SetLastErrorForTest(0);
+                var resetNetworkLockMode = api.GetNetworkLockMode(mode, handle);
+                var resetNetworkLockError = Marshal.GetLastWin32Error();
+                if (resetNetworkLockError != 0 ||
+                    resetNetworkLockMode != WireguardBoosterExports.WgbNetworkLockMode.Disabled)
+                    throw new InvalidOperationException(
+                        $"wgbooster did not reset the {mode} network-lock mode.");
 
                 tunnelCreationAttempted = true;
                 if (!api.CreateTunnelFromFile(mode, handle, profilePath))
@@ -2195,6 +2258,218 @@ namespace WireSockUI.Tests
                 () => throw new InvalidOperationException("Save should not run."));
         }
 
+        private static void ProtectedSettingsRequireConsentAndPersist()
+        {
+            var originalSettings = PrivilegedSettingsStore.Capture();
+            var originalAllowOwnerFailure = SecureFileSystem.AllowOwnerWriteFailureForTests;
+            try
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                WithTemporarySecureMainFolder(() =>
+                {
+                    var legacy = new PrivilegedSettingsSnapshot(true, "office", true, true);
+                    var confirmations = 0;
+                    PrivilegedSettingsStore.Initialize(legacy, settings =>
+                    {
+                        confirmations++;
+                        AssertEqual("office", settings.LastProfile);
+                        return false;
+                    });
+
+                    AssertEqual(1, confirmations);
+                    AssertFalse(PrivilegedSettingsStore.AutoConnect,
+                        "Expected rejected legacy settings to use safe defaults.");
+                    AssertFalse(PrivilegedSettingsStore.EnableKillSwitch,
+                        "Expected rejected legacy settings not to alter the Kill Switch preference.");
+                    AssertTrue(File.Exists(PrivilegedSettingsStore.SettingsFilePath),
+                        "Expected protected defaults to be persisted after migration was declined.");
+
+                    PrivilegedSettingsStore.Apply(legacy);
+                    PrivilegedSettingsStore.Save();
+                    PrivilegedSettingsStore.SetForTests(new PrivilegedSettingsSnapshot(false, string.Empty,
+                        false, false));
+                    PrivilegedSettingsStore.Initialize(
+                        new PrivilegedSettingsSnapshot(false, string.Empty, false, false),
+                        _ => throw new InvalidOperationException("Existing protected settings must not prompt."));
+
+                    AssertTrue(PrivilegedSettingsStore.AutoConnect,
+                        "Expected the protected auto-connect setting to round-trip.");
+                    AssertEqual("office", PrivilegedSettingsStore.LastProfile);
+                    AssertTrue(PrivilegedSettingsStore.UseAdapter,
+                        "Expected the protected adapter mode to round-trip.");
+                    AssertTrue(PrivilegedSettingsStore.EnableKillSwitch,
+                        "Expected the protected Kill Switch preference to round-trip.");
+                });
+            }
+            finally
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = originalAllowOwnerFailure;
+                PrivilegedSettingsStore.SetForTests(originalSettings);
+            }
+        }
+
+        private static void ProtectedSettingsRejectMalformedOrOversizedData()
+        {
+            AssertThrows<XmlException>(
+                () => PrivilegedSettingsStore.Parse(
+                    "<!DOCTYPE settings [<!ENTITY x 'true'>]><PrivilegedSettings Version='1'><AutoConnect>&x;</AutoConnect><LastProfile/><UseAdapter>false</UseAdapter><EnableKillSwitch>false</EnableKillSwitch></PrivilegedSettings>"),
+                "DTD");
+            AssertThrows<FormatException>(
+                () => PrivilegedSettingsStore.Parse(
+                    "<PrivilegedSettings Version='1'><AutoConnect>false</AutoConnect><LastProfile/><UseAdapter>false</UseAdapter><EnableKillSwitch>false</EnableKillSwitch><Unexpected/></PrivilegedSettings>"),
+                "structure");
+            AssertThrows<FormatException>(
+                () => PrivilegedSettingsStore.Parse(
+                    "<PrivilegedSettings Version='1'><AutoConnect>false</AutoConnect><LastProfile>..</LastProfile><UseAdapter>false</UseAdapter><EnableKillSwitch>false</EnableKillSwitch></PrivilegedSettings>"),
+                "invalid value");
+
+            var originalSettings = PrivilegedSettingsStore.Capture();
+            var originalAllowOwnerFailure = SecureFileSystem.AllowOwnerWriteFailureForTests;
+            try
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                WithTemporarySecureMainFolder(() =>
+                {
+                    File.WriteAllText(PrivilegedSettingsStore.SettingsFilePath, new string('x', 64 * 1024 + 1));
+                    AssertThrows<InvalidDataException>(
+                        () => PrivilegedSettingsStore.Initialize(
+                            new PrivilegedSettingsSnapshot(false, string.Empty, false, false), _ => false),
+                        "maximum supported size");
+
+                    File.WriteAllBytes(PrivilegedSettingsStore.SettingsFilePath, new byte[] { 0xc3, 0x28 });
+                    AssertThrows<DecoderFallbackException>(
+                        () => PrivilegedSettingsStore.Initialize(
+                            new PrivilegedSettingsSnapshot(false, string.Empty, false, false), _ => false),
+                        string.Empty);
+
+                    File.Delete(PrivilegedSettingsStore.SettingsFilePath);
+                    Directory.CreateDirectory(PrivilegedSettingsStore.SettingsFilePath);
+                    AssertThrows<IOException>(
+                        () => PrivilegedSettingsStore.Initialize(
+                            new PrivilegedSettingsSnapshot(false, string.Empty, false, false), _ => false),
+                        "regular file");
+                });
+            }
+            finally
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = originalAllowOwnerFailure;
+                PrivilegedSettingsStore.SetForTests(originalSettings);
+            }
+        }
+
+        private static void ProtectedSettingsRecoverInterruptedSaves()
+        {
+            var originalSettings = PrivilegedSettingsStore.Capture();
+            var originalAllowOwnerFailure = SecureFileSystem.AllowOwnerWriteFailureForTests;
+            try
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                WithTemporarySecureMainFolder(() =>
+                {
+                    var backupPath = Path.Combine(Global.SecureMainFolder, "PrivilegedSettings.xml.backup");
+                    var backupOnly = new PrivilegedSettingsSnapshot(true, "restored", false, true);
+                    File.WriteAllText(backupPath, PrivilegedSettingsStore.Serialize(backupOnly),
+                        new UTF8Encoding(false, true));
+
+                    PrivilegedSettingsStore.Initialize(
+                        new PrivilegedSettingsSnapshot(false, string.Empty, false, false),
+                        _ => throw new InvalidOperationException("Backup recovery must not prompt."));
+
+                    AssertEqual("restored", PrivilegedSettingsStore.LastProfile);
+                    AssertTrue(File.Exists(PrivilegedSettingsStore.SettingsFilePath),
+                        "Expected a backup-only interrupted save to restore the settings file.");
+                    AssertFalse(File.Exists(backupPath),
+                        "Expected the restored backup to be consumed.");
+
+                    var committed = new PrivilegedSettingsSnapshot(false, "committed", true, false);
+                    File.WriteAllText(PrivilegedSettingsStore.SettingsFilePath,
+                        PrivilegedSettingsStore.Serialize(committed), new UTF8Encoding(false, true));
+                    File.WriteAllText(backupPath, PrivilegedSettingsStore.Serialize(backupOnly),
+                        new UTF8Encoding(false, true));
+
+                    PrivilegedSettingsStore.Initialize(
+                        new PrivilegedSettingsSnapshot(false, string.Empty, false, false),
+                        _ => throw new InvalidOperationException("Committed settings recovery must not prompt."));
+
+                    AssertEqual("committed", PrivilegedSettingsStore.LastProfile);
+                    AssertTrue(PrivilegedSettingsStore.UseAdapter,
+                        "Expected a committed settings file to win over its stale backup.");
+                    AssertFalse(File.Exists(backupPath),
+                        "Expected a stale backup to be deleted after the committed file was verified.");
+
+                    File.WriteAllText(PrivilegedSettingsStore.SettingsFilePath, "invalid protected settings");
+                    File.WriteAllText(backupPath, PrivilegedSettingsStore.Serialize(backupOnly),
+                        new UTF8Encoding(false, true));
+
+                    PrivilegedSettingsStore.Initialize(
+                        new PrivilegedSettingsSnapshot(false, string.Empty, false, false),
+                        _ => throw new InvalidOperationException("Invalid committed settings recovery must not prompt."));
+
+                    AssertEqual("restored", PrivilegedSettingsStore.LastProfile);
+                    AssertFalse(File.Exists(backupPath),
+                        "Expected a valid backup to replace an invalid committed settings file.");
+                    AssertFalse(Directory.GetFiles(Global.SecureMainFolder, "*.invalid").Any(),
+                        "Expected the invalid committed settings file to be removed after recovery.");
+
+                    File.Delete(PrivilegedSettingsStore.SettingsFilePath);
+                    Directory.CreateDirectory(PrivilegedSettingsStore.SettingsFilePath);
+                    File.WriteAllText(backupPath, PrivilegedSettingsStore.Serialize(backupOnly),
+                        new UTF8Encoding(false, true));
+                    AssertThrows<IOException>(
+                        () => PrivilegedSettingsStore.Initialize(
+                            new PrivilegedSettingsSnapshot(false, string.Empty, false, false), _ => false),
+                        "regular file");
+                    AssertTrue(File.Exists(backupPath),
+                        "Expected a trust-boundary failure to leave the recovery backup untouched.");
+                });
+            }
+            finally
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = originalAllowOwnerFailure;
+                PrivilegedSettingsStore.SetForTests(originalSettings);
+            }
+        }
+
+        private static void ApplicationSettingsUseProtectedConnectionValues()
+        {
+            var originalProtectedSettings = PrivilegedSettingsStore.Capture();
+            var originalLegacyAutoConnect = WireSockUI.Properties.Settings.Default.AutoConnect;
+            var originalLegacyUseAdapter = WireSockUI.Properties.Settings.Default.UseAdapter;
+            var originalLegacyKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+            try
+            {
+                PrivilegedSettingsStore.SetForTests(new PrivilegedSettingsSnapshot(true, "office", true, true));
+                WireSockUI.Properties.Settings.Default.AutoConnect = false;
+                WireSockUI.Properties.Settings.Default.UseAdapter = false;
+                WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+
+                var captured = ApplicationSettingsSnapshot.Capture();
+                AssertTrue(captured.AutoConnect,
+                    "Expected connection settings capture to ignore the legacy user-scoped value.");
+                AssertTrue(captured.UseAdapter,
+                    "Expected adapter mode capture to come from protected storage.");
+                AssertTrue(captured.EnableKillSwitch,
+                    "Expected Kill Switch capture to come from protected storage.");
+
+                new ApplicationSettingsSnapshot(captured.AutoRun, false, captured.AutoMinimize,
+                    captured.AutoUpdate, false, captured.EnableNotifications, false, captured.LogLevel).Apply();
+                AssertEqual("office", PrivilegedSettingsStore.LastProfile);
+                AssertFalse(PrivilegedSettingsStore.AutoConnect,
+                    "Expected applying settings to update protected auto-connect state.");
+                AssertFalse(PrivilegedSettingsStore.UseAdapter,
+                    "Expected applying settings to update protected adapter state.");
+                AssertFalse(PrivilegedSettingsStore.EnableKillSwitch,
+                    "Expected applying settings to update protected Kill Switch state.");
+            }
+            finally
+            {
+                WireSockUI.Properties.Settings.Default.AutoConnect = originalLegacyAutoConnect;
+                WireSockUI.Properties.Settings.Default.UseAdapter = originalLegacyUseAdapter;
+                WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalLegacyKillSwitch;
+                PrivilegedSettingsStore.SetForTests(originalProtectedSettings);
+            }
+        }
+
         private static void SettingsTransactionCompensatesFailuresInReverseOrder()
         {
             var calls = new List<string>();
@@ -2250,6 +2525,91 @@ namespace WireSockUI.Tests
             AssertFalse(exceptionResult.Succeeded, "Expected an autorun exception to fail the transaction.");
             AssertTrue(ReferenceEquals(expectedException, exceptionResult.Exception),
                 "Expected the transaction result to retain the actionable autorun exception.");
+        }
+
+        private static void SettingsRollbackIdentifiesNativeRecoveryRequirements()
+        {
+            var noRollbackFailure = new CompensatingTransactionResult(true);
+            AssertFalse(noRollbackFailure.RollbackFailed("native Kill Switch"),
+                "Expected omitted rollback failures to normalize to an empty list.");
+
+            var nativeFailure = new CompensatingTransactionResult(false, "native Kill Switch", null,
+                new[] { "native Kill Switch: access denied" });
+            AssertTrue(FrmMain.SettingsFailureRequiresNativeRecovery(nativeFailure),
+                "Expected a failed native Kill Switch rollback to require recovery.");
+
+            var persistenceFailure = new CompensatingTransactionResult(false, "settings persistence", null,
+                new[] { "settings persistence: disk full" });
+            AssertFalse(FrmMain.SettingsFailureRequiresNativeRecovery(persistenceFailure),
+                "Expected a non-native rollback failure not to be mislabeled as driver recovery.");
+
+            var similarlyNamedFailure = new CompensatingTransactionResult(false, "settings persistence", null,
+                new[] { "native Kill Switch backup: disk full" });
+            AssertFalse(FrmMain.SettingsFailureRequiresNativeRecovery(similarlyNamedFailure),
+                "Expected only the exact native Kill Switch transaction step to require driver recovery.");
+        }
+
+        private static void TunnelCommandsDistinguishActivationFromDeactivation()
+        {
+            AssertTrue(TunnelCommandPolicy.IsDisconnectOnly(FrmMain.ConnectionState.Connected,
+                    TunnelCommand.ToggleSelectedProfile),
+                "Expected the connected Activate/Deactivate button to request disconnect only.");
+            AssertFalse(TunnelCommandPolicy.IsDisconnectOnly(FrmMain.ConnectionState.Disconnected,
+                    TunnelCommand.ToggleSelectedProfile),
+                "Expected the disconnected button to activate the selected profile.");
+            AssertFalse(TunnelCommandPolicy.IsDisconnectOnly(FrmMain.ConnectionState.Connected,
+                    TunnelCommand.ActivateSelectedProfile),
+                "Expected profile activation to switch or reconnect instead of acting as Deactivate.");
+        }
+
+        private static void NativeTimeoutPolicyDefersCleanupUntilCompletion()
+        {
+            var pending = Task.FromResult(NativeOperationResult<bool>.Success(true));
+            var timedOut = NativeOperationResult<bool>.Timeout("timeout", pending);
+            AssertTrue(NativeOperationRecoveryPolicy.MustDeferCleanup(timedOut),
+                "Expected cleanup to wait for the timed-out native query.");
+            AssertFalse(NativeOperationRecoveryPolicy.MustDeferCleanup(NativeOperationResult<bool>.Failure("failed")),
+                "Expected a completed failure to permit immediate cleanup.");
+            AssertTrue(NativeOperationRecoveryPolicy.CanRestorePreviousState(
+                    NativeOperationResult<bool>.Success(true)),
+                "Expected a verified late success to restore the previous UI state.");
+            AssertFalse(NativeOperationRecoveryPolicy.CanRestorePreviousState(
+                    NativeOperationResult<bool>.Failure("failed")),
+                "Expected a late failure to retain recovery state.");
+
+            var missingCompletion = NativeOperationRecoveryPolicy.NormalizeCompletion<bool>(null,
+                "native state query");
+            AssertFalse(missingCompletion.Succeeded,
+                "Expected a missing late native result to retain recovery state.");
+            AssertTrue(missingCompletion.Diagnostic.Contains("completed without a result"),
+                "Expected a missing late native result to provide an actionable diagnostic.");
+        }
+
+        private static void AutorunPreservesPersistedStateWhenStatusIsUnknown()
+        {
+            AssertTrue(FrmSettings.ResolveRequestedAutoRun(FrmSettings.AutoRunStatus.Unknown, false, true),
+                "Expected an unknown Task Scheduler state to preserve the persisted preference.");
+            AssertFalse(FrmSettings.ResolveRequestedAutoRun(FrmSettings.AutoRunStatus.Disabled, false, true),
+                "Expected a verified disabled state to override a stale persisted preference.");
+            AssertTrue(FrmSettings.ResolveRequestedAutoRun(FrmSettings.AutoRunStatus.Enabled, true, false),
+                "Expected a known enabled state to use the requested value.");
+        }
+
+        private static void Curve25519MatchesRfc7748PublicKeyVectors()
+        {
+            var privateKey = ParseHex(
+                "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
+            Curve25519.ClampPrivateKeyInline(privateKey);
+            var publicKey = Curve25519.GetPublicKey(privateKey);
+            AssertEqual(
+                "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
+                ToHex(publicKey));
+
+            var generatedPrivateKey = Curve25519.CreateRandomPrivateKey();
+            AssertEqual(32, generatedPrivateKey.Length);
+            AssertEqual(0, generatedPrivateKey[0] & 7);
+            AssertEqual(0x40, generatedPrivateKey[31] & 0x40);
+            AssertEqual(0, generatedPrivateKey[31] & 0x80);
         }
 
         private static void EditorValidatesAmneziaOptions()
@@ -2600,13 +2960,13 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi();
                 using (var manager = new WireSockManager(nativeApi))
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
                         AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
@@ -2624,7 +2984,7 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2634,14 +2994,14 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi { CreateHandleResult = IntPtr.Zero };
                 var networkLockApi = new FakeNetworkLockApi { Active = true };
                 using (var manager = new WireSockManager(nativeApi))
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = true;
+                        TestKillSwitch = true;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
                         var controller = new TunnelLifecycleController(manager, networkLockApi);
 
@@ -2665,7 +3025,7 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2675,7 +3035,7 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi
                 {
                     DropEntered = new ManualResetEventSlim(false),
@@ -2687,7 +3047,7 @@ namespace WireSockUI.Tests
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
                         var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
                         AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
@@ -2708,7 +3068,7 @@ namespace WireSockUI.Tests
                     finally
                     {
                         nativeApi.ContinueDrop.Set();
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2718,7 +3078,7 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi
                 {
                     DropEntered = new ManualResetEventSlim(false),
@@ -2731,7 +3091,7 @@ namespace WireSockUI.Tests
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
                         var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
                         AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
@@ -2785,7 +3145,7 @@ namespace WireSockUI.Tests
                     finally
                     {
                         nativeApi.ContinueDrop.Set();
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2795,13 +3155,13 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi();
                 using (var manager = new WireSockManager(nativeApi))
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
                         AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
 
@@ -2838,7 +3198,7 @@ namespace WireSockUI.Tests
                         nativeApi.TunnelActiveError = 0;
                         nativeApi.NetworkLockModeError = 0;
                         nativeApi.TunnelStateError = 0;
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2848,7 +3208,7 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi
                 {
                     StartResult = false,
@@ -2859,7 +3219,7 @@ namespace WireSockUI.Tests
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
                         AssertFalse(manager.Connect("office"), "Expected the failed native start to fail connect.");
@@ -2874,7 +3234,7 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2884,7 +3244,7 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi
                 {
                     StartResult = false,
@@ -2896,7 +3256,7 @@ namespace WireSockUI.Tests
 
                 try
                 {
-                    WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                    TestKillSwitch = false;
                     File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
                     AssertFalse(manager.Connect("office"), "Expected the failed native start to fail connect.");
@@ -2923,7 +3283,7 @@ namespace WireSockUI.Tests
                     nativeApi.DropResult = true;
                     nativeApi.DropError = 0;
                     manager.Dispose();
-                    WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                    TestKillSwitch = originalKillSwitch;
                 }
             });
         }
@@ -2932,13 +3292,13 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi { ReleaseFailuresRemaining = 1 };
                 using (var manager = new WireSockManager(nativeApi))
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
                         AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
@@ -2955,7 +3315,7 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -2965,13 +3325,13 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi { ReleaseFailuresRemaining = 1 };
                 using (var manager = new WireSockManager(nativeApi))
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
 
                         AssertThrows<ArgumentOutOfRangeException>(
@@ -3011,7 +3371,7 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -3254,13 +3614,13 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                var originalKillSwitch = WireSockUI.Properties.Settings.Default.EnableKillSwitch;
+                var originalKillSwitch = TestKillSwitch;
                 var nativeApi = new FakeWireSockNativeApi();
                 using (var manager = new WireSockManager(nativeApi))
                 {
                     try
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = false;
+                        TestKillSwitch = false;
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
                         manager.LogLevel = WireguardBoosterExports.WgbLogLevel.Info;
                         AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
@@ -3278,7 +3638,7 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
-                        WireSockUI.Properties.Settings.Default.EnableKillSwitch = originalKillSwitch;
+                        TestKillSwitch = originalKillSwitch;
                     }
                 }
             });
@@ -3301,6 +3661,33 @@ namespace WireSockUI.Tests
                 AssertFalse(File.Exists(original), "Expected the old profile name to disappear after commit.");
                 AssertEqual("new", File.ReadAllText(destination));
                 AssertFalse(File.Exists(temporary), "Expected the temporary profile to be consumed.");
+
+                var caseOriginal = Path.Combine(directory, "Office.conf");
+                var caseDestination = Path.Combine(directory, "office.conf");
+                var caseTemporary = Path.Combine(directory, "case-profile.tmp");
+                File.WriteAllText(caseOriginal, "old-case");
+                File.WriteAllText(caseTemporary, "new-case");
+                ProfileFileTransaction.Commit(caseTemporary, caseDestination, caseOriginal);
+                AssertEqual("new-case", File.ReadAllText(caseDestination));
+                AssertEqual("office.conf", Path.GetFileName(Directory.GetFiles(directory, "office.conf").Single()));
+
+                var caseRollbackOriginal = Path.Combine(directory, "Rollback.conf");
+                var caseRollbackDestination = Path.Combine(directory, "rollback.conf");
+                var caseRollbackTemporary = Path.Combine(directory, "case-rollback.tmp");
+                File.WriteAllText(caseRollbackOriginal, "case-preserved");
+                File.WriteAllText(caseRollbackTemporary, "case-replacement");
+                using (new FileStream(caseRollbackTemporary, FileMode.Open, FileAccess.Read, FileShare.Read))
+                {
+                    AssertThrows<IOException>(
+                        () => ProfileFileTransaction.Commit(caseRollbackTemporary, caseRollbackDestination,
+                            caseRollbackOriginal),
+                        string.Empty);
+                }
+
+                AssertEqual("case-preserved", File.ReadAllText(caseRollbackOriginal));
+                AssertEqual("Rollback.conf",
+                    Path.GetFileName(Directory.GetFiles(directory, "rollback.conf").Single()));
+                AssertEqual("case-replacement", File.ReadAllText(caseRollbackTemporary));
 
                 var rollbackOriginal = Path.Combine(directory, "rollback-original.conf");
                 var rollbackDestination = Path.Combine(directory, "rollback-renamed.conf");
@@ -3507,7 +3894,7 @@ namespace WireSockUI.Tests
             {
                 Environment.SetEnvironmentVariable(variableName, profilePath);
                 AssertThrows<InvalidOperationException>(
-                    () => GetRequiredSdkProfilePath(variableName, variableName),
+                    () => GetRequiredSdkProfilePath(variableName),
                     "writable by or owned by non-administrative users");
             }
             finally
@@ -3532,7 +3919,7 @@ namespace WireSockUI.Tests
             var failedLockCleanupApi = new FakeWireSockNativeApi
             {
                 CreateTunnelResult = false,
-                SetNetworkLockFailureOnCall = 2,
+                SetNetworkLockFailureOnCall = 4,
                 SetNetworkLockError = 5
             };
             AssertThrows<AggregateException>(
@@ -4097,6 +4484,23 @@ namespace WireSockUI.Tests
 
                 TryDeleteDirectory(root, true);
             }
+        }
+
+        private static byte[] ParseHex(string value)
+        {
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            if (value.Length % 2 != 0) throw new FormatException("Hexadecimal input must contain complete bytes.");
+
+            var result = new byte[value.Length / 2];
+            for (var index = 0; index < result.Length; index++)
+                result[index] = Convert.ToByte(value.Substring(index * 2, 2), 16);
+            return result;
+        }
+
+        private static string ToHex(IEnumerable<byte> value)
+        {
+            if (value == null) throw new ArgumentNullException(nameof(value));
+            return string.Concat(value.Select(item => item.ToString("x2")));
         }
 
         private static void AssertThrows<T>(Action action, string messagePart) where T : Exception

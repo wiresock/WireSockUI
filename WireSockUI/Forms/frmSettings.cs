@@ -14,8 +14,15 @@ namespace WireSockUI.Forms
     public partial class FrmSettings : Form
     {
         private const long MaxLegacyStartupShortcutSizeBytes = 1024 * 1024;
-        private readonly bool _initialAutoRun;
+        private readonly AutoRunStatus _initialAutoRunStatus;
         private readonly bool _initialAutoRunUsesPathScopedTask;
+
+        internal enum AutoRunStatus
+        {
+            Unknown,
+            Disabled,
+            Enabled
+        }
 
         public FrmSettings()
         {
@@ -23,14 +30,16 @@ namespace WireSockUI.Forms
 
             Icon = Resources.ico;
 
-            _initialAutoRun = IsAutoRunEnabled(out _initialAutoRunUsesPathScopedTask);
-            chkAutorun.Checked = _initialAutoRun;
+            _initialAutoRunStatus = GetAutoRunStatus(out _initialAutoRunUsesPathScopedTask);
+            chkAutorun.Checked = ResolveRequestedAutoRun(_initialAutoRunStatus,
+                _initialAutoRunStatus == AutoRunStatus.Enabled, Settings.Default.AutoRun);
+            chkAutorun.Enabled = _initialAutoRunStatus != AutoRunStatus.Unknown;
             chkAutoMinimize.Checked = Settings.Default.AutoMinimize;
-            chkAutoConnect.Checked = Settings.Default.AutoConnect;
+            chkAutoConnect.Checked = PrivilegedSettingsStore.AutoConnect;
             chkAutoUpdate.Checked = Settings.Default.AutoUpdate;
-            chkUseAdapter.Checked = Settings.Default.UseAdapter;
+            chkUseAdapter.Checked = PrivilegedSettingsStore.UseAdapter;
             chkNotify.Checked = Settings.Default.EnableNotifications;
-            chkEnableKillSwitch.Checked = Settings.Default.EnableKillSwitch;
+            chkEnableKillSwitch.Checked = PrivilegedSettingsStore.EnableKillSwitch;
             ddlLogLevel.SelectedItem = Settings.Default.LogLevel;
             if (ddlLogLevel.SelectedItem == null)
                 ddlLogLevel.SelectedItem = "Error";
@@ -40,7 +49,7 @@ namespace WireSockUI.Forms
         public string RequestedLogLevel => ddlLogLevel.SelectedItem as string ?? "Error";
 
         internal ApplicationSettingsSnapshot RequestedSettings => new ApplicationSettingsSnapshot(
-            chkAutorun.Checked,
+            ResolveRequestedAutoRun(_initialAutoRunStatus, chkAutorun.Checked, Settings.Default.AutoRun),
             chkAutoConnect.Checked,
             chkAutoMinimize.Checked,
             chkAutoUpdate.Checked,
@@ -159,7 +168,7 @@ namespace WireSockUI.Forms
         /// <remarks>
         ///     This method uses a path-seeded task name and verifies that the task points to the current executable.
         /// </remarks>
-        private static bool IsAutoRunEnabled(out bool usesPathScopedTask)
+        private static AutoRunStatus GetAutoRunStatus(out bool usesPathScopedTask)
         {
             usesPathScopedTask = false;
 
@@ -185,14 +194,21 @@ namespace WireSockUI.Forms
                                             IsTaskReplaceableByCurrentExecutable(legacyTask);
 
                     usesPathScopedTask = usesPathScopedTask && !legacyTaskEnabled;
-                    return pathScopedTaskEnabled || legacyTaskEnabled;
+                    return pathScopedTaskEnabled || legacyTaskEnabled
+                        ? AutoRunStatus.Enabled
+                        : AutoRunStatus.Disabled;
                 }
             }
             catch (Exception ex)
             {
                 ShowSettingsError(Resources.SettingsAutoRunCheckAdminError, ex);
-                return false;
+                return AutoRunStatus.Unknown;
             }
+        }
+
+        internal static bool ResolveRequestedAutoRun(AutoRunStatus status, bool checkedValue, bool persistedValue)
+        {
+            return status == AutoRunStatus.Unknown ? persistedValue : checkedValue;
         }
 
         /// <summary>
@@ -533,7 +549,11 @@ namespace WireSockUI.Forms
 
         internal bool ApplyAutoRunChange()
         {
-            var autoRunChanged = _initialAutoRun != chkAutorun.Checked ||
+            if (_initialAutoRunStatus == AutoRunStatus.Unknown)
+                return true;
+
+            var initialAutoRun = _initialAutoRunStatus == AutoRunStatus.Enabled;
+            var autoRunChanged = initialAutoRun != chkAutorun.Checked ||
                                  chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask;
             if (!autoRunChanged)
                 return true;
@@ -548,12 +568,16 @@ namespace WireSockUI.Forms
 
         internal bool RollbackAutoRunChange()
         {
-            var autoRunChanged = _initialAutoRun != chkAutorun.Checked ||
+            if (_initialAutoRunStatus == AutoRunStatus.Unknown)
+                return true;
+
+            var initialAutoRun = _initialAutoRunStatus == AutoRunStatus.Enabled;
+            var autoRunChanged = initialAutoRun != chkAutorun.Checked ||
                                  chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask;
             if (!autoRunChanged)
                 return true;
 
-            if (_initialAutoRun)
+            if (initialAutoRun)
                 EnableAutoRun();
             else
                 DisableAutoRun();

@@ -43,6 +43,14 @@ jobs:
           /p:Platform=x64
           /p:UseSharedCompilation=false
 
+  sdk-integration:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs:
+      - sdk-contract
+      - test
+    uses: ./.github/workflows/sdk-integration.yml
+    secrets: inherit
+
   publish:
     runs-on: windows-latest
     needs:

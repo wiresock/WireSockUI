@@ -34,6 +34,16 @@ namespace WireSockUI.Config
         internal string FailedStep { get; }
         internal Exception Exception { get; }
         internal IReadOnlyList<string> RollbackFailures { get; }
+
+        internal bool RollbackFailed(string stepName)
+        {
+            if (string.IsNullOrWhiteSpace(stepName))
+                throw new ArgumentException("A step name is required.", nameof(stepName));
+
+            return RollbackFailures.Any(failure =>
+                string.Equals(failure, stepName, StringComparison.Ordinal) ||
+                failure.StartsWith(stepName + ":", StringComparison.Ordinal));
+        }
     }
 
     internal static class CompensatingTransaction

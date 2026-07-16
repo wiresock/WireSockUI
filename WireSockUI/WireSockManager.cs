@@ -600,7 +600,7 @@ namespace WireSockUI
                     return ShowTunnelError($"Failed to load profile '{profile}'.", profileDiagnostic);
 
                 if (_handle != IntPtr.Zero &&
-                    !DropCurrentHandle(true, preserveNetworkLock: Settings.Default.EnableKillSwitch))
+                    !DropCurrentHandle(true, preserveNetworkLock: PrivilegedSettingsStore.EnableKillSwitch))
                     return ShowTunnelError(
                         "A previous WireSock tunnel handle could not be released. Retry disconnect or restart WireSock UI before connecting again.");
 
@@ -614,7 +614,7 @@ namespace WireSockUI
                 if (_handle == IntPtr.Zero)
                     return ShowTunnelError(Resources.TunnelErrorManager);
 
-                if (Settings.Default.EnableKillSwitch && !SetNetworkLockMode(true))
+                if (PrivilegedSettingsStore.EnableKillSwitch && !SetNetworkLockMode(true))
                 {
                     DropFailedConnectHandle();
                     return false;

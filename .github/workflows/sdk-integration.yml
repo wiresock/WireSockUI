@@ -2,6 +2,8 @@ name: WireSock SDK Integration
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * 1'
   workflow_call:
 
 permissions:
@@ -40,6 +42,7 @@ jobs:
           WIRESOCKUI_TEST_PROFILE: ${{ vars.WIRESOCKUI_TEST_PROFILE }}
           WIRESOCKUI_TEST_PROFILE_TRANSPARENT: ${{ vars.WIRESOCKUI_TEST_PROFILE_TRANSPARENT }}
           WIRESOCKUI_TEST_PROFILE_VIRTUAL_ADAPTER: ${{ vars.WIRESOCKUI_TEST_PROFILE_VIRTUAL_ADAPTER }}
+          WIRESOCKUI_TEST_PROFILE_AMNEZIA: ${{ vars.WIRESOCKUI_TEST_PROFILE_AMNEZIA }}
         run: >
           dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj
           --configuration Release
