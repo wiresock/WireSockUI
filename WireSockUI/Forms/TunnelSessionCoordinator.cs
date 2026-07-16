@@ -1,3 +1,6 @@
+using System;
+using System.Threading.Tasks;
+
 namespace WireSockUI.Forms
 {
     internal enum TunnelOperationBlockReason
@@ -101,6 +104,28 @@ namespace WireSockUI.Forms
                 blockReason = TunnelOperationBlockReason.None;
                 return true;
             }
+        }
+
+        public async Task<bool> WaitToBeginOperationAsync(Func<bool> shouldStop,
+            int retryDelayMilliseconds = 100)
+        {
+            if (shouldStop == null) throw new ArgumentNullException(nameof(shouldStop));
+            if (retryDelayMilliseconds <= 0)
+                throw new ArgumentOutOfRangeException(nameof(retryDelayMilliseconds));
+
+            while (!TryBeginOperation(out var blockReason))
+            {
+                if (blockReason == TunnelOperationBlockReason.RecoveryRequired || shouldStop())
+                    return false;
+
+                await Task.Delay(retryDelayMilliseconds);
+            }
+
+            if (!shouldStop())
+                return true;
+
+            EndOperation();
+            return false;
         }
 
         public void EndOperation()

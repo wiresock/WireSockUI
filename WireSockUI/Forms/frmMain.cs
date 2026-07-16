@@ -53,6 +53,7 @@ namespace WireSockUI.Forms
         private Icon _ownedTrayIcon;
         private Image _inactiveStatusImage;
         private Image _connectedStatusImage;
+        private string _activeTunnelAddresses;
 
         /**
          * @brief Initializes a new instance of the Main class.
@@ -1055,13 +1056,9 @@ namespace WireSockUI.Forms
 
         private async Task HandleTunnelQueryFailureAsync(int generation, string diagnostic)
         {
-            while (!TryBeginTunnelOperation(false))
-            {
-                if (ShouldStopTunnelFailureHandling(generation))
-                    return;
-
-                await Task.Delay(100);
-            }
+            if (!await _tunnelSession.WaitToBeginOperationAsync(
+                    () => ShouldStopTunnelFailureHandling(generation)))
+                return;
 
             try
             {
@@ -1093,7 +1090,11 @@ namespace WireSockUI.Forms
 
         private async Task HandleTunnelConnectionTimeoutAsync(int generation)
         {
-            if (!RequestTunnelConnectionTimeout(generation) || !TryBeginTunnelOperation(false))
+            if (!RequestTunnelConnectionTimeout(generation))
+                return;
+
+            if (!await _tunnelSession.WaitToBeginOperationAsync(
+                    () => ShouldStopTunnelFailureHandling(generation)))
                 return;
 
             try
@@ -1278,13 +1279,9 @@ namespace WireSockUI.Forms
 
         private async Task HandleTunnelInactiveAsync(int generation)
         {
-            while (!TryBeginTunnelOperation(false))
-            {
-                if (ShouldStopTunnelFailureHandling(generation))
-                    return;
-
-                await Task.Delay(100);
-            }
+            if (!await _tunnelSession.WaitToBeginOperationAsync(
+                    () => ShouldStopTunnelFailureHandling(generation)))
+                return;
 
             try
             {
@@ -1333,7 +1330,10 @@ namespace WireSockUI.Forms
                 var item = mnuContext.Items[i];
 
                 if (Equals(item.Tag, "tunnel"))
-                    mnuContext.Items.Remove(item);
+                {
+                    mnuContext.Items.RemoveAt(i);
+                    item.Dispose();
+                }
             }
 
             if (profiles.Any())
@@ -1357,19 +1357,29 @@ namespace WireSockUI.Forms
 
             if (lstProfiles.Items.Count > 0)
             {
+                ListViewItem profileToSelect = null;
                 if (!string.IsNullOrWhiteSpace(selectedProfile))
-                {
-                    var profile = lstProfiles.Items[selectedProfile];
+                    profileToSelect = lstProfiles.Items[selectedProfile];
 
-                    if (profile != null)
-                    {
-                        profile.Selected = true;
-                        return;
-                    }
-                }
-
-                lstProfiles.Items[0].Selected = true;
+                (profileToSelect ?? lstProfiles.Items[0]).Selected = true;
             }
+
+            if (_currentState != ConnectionState.Disconnected)
+                RestoreLoadedProfileTunnelState();
+        }
+
+        private void RestoreLoadedProfileTunnelState()
+        {
+            var activeProfileName = _tunnelLifecycle?.ProfileName;
+            if (TryGetProfileItem(activeProfileName, out var activeProfile))
+                activeProfile.ImageKey = _currentState.ToString();
+
+            foreach (ToolStripItem item in mnuContext.Items)
+                if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
+                    menuItem.Checked = _currentState == ConnectionState.Connected &&
+                                       IsTunnelProfileSelected(menuItem.Text, activeProfileName);
+
+            UpdateSelectedProfileState(_currentState, activeProfileName);
         }
 
         /// <summary>
@@ -1387,52 +1397,31 @@ namespace WireSockUI.Forms
             _currentState = state;
             var activeProfileName = profileName ?? _tunnelLifecycle?.ProfileName;
 
-            var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
-            var imgStatus = layoutInterface.Controls.Find("imgStatus", true).FirstOrDefault() as PictureBox;
-            var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
-            var txtAddresses = layoutInterface.Controls["txtAddresses"] as TextBox;
-
             switch (state)
             {
                 case ConnectionState.Connecting:
-                    if (btnActivate != null)
-                    {
-                        btnActivate.Text = Resources.ButtonActivating;
-                        SetActivateButtonEnabled(false);
-                    }
-
-                    imgStatus?.Focus();
-
                     cmiDeactivateTunnel.Enabled = false;
 
                     if (TryGetProfileItem(activeProfileName, out var connectingProfile))
                         connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
 
+                    SetTrayIcon(Resources.ico, false);
                     trayIcon.Text = Resources.TrayActivating;
+                    cmiStatus.Image = _inactiveStatusImage;
+                    cmiStatus.Text = Resources.TrayActivating;
 
                     cmiResetKillSwitch.Enabled = false;
 
                     StartTunnelConnectionMonitor();
                     break;
                 case ConnectionState.Connected:
-                    if (btnActivate != null)
-                    {
-                        btnActivate.Text = Resources.ButtonActive;
-                        SetActivateButtonEnabled(true);
-                    }
-
-                    if (imgStatus != null)
-                    {
-                        SetStatusImage(imgStatus, _connectedStatusImage);
-                        if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusActive;
-
-                        SetTrayIcon(Resources.ico.SuperImpose(64, WindowsIcons.Icons.Activated, 48, 24), true);
-                        trayIcon.Text = Resources.TrayActive;
-                    }
+                    cmiStatus.Image = _connectedStatusImage;
+                    SetTrayIcon(Resources.ico.SuperImpose(64, WindowsIcons.Icons.Activated, 48, 24), true);
+                    trayIcon.Text = Resources.TrayActive;
 
                     cmiStatus.Text = Resources.ContextMenuActive;
 
-                    if (txtAddresses != null) cmiAddresses.Text = txtAddresses.Text;
+                    cmiAddresses.Text = _activeTunnelAddresses ?? string.Empty;
                     cmiAddresses.Visible = true;
 
                     cmiDeactivateTunnel.Enabled = true;
@@ -1440,7 +1429,7 @@ namespace WireSockUI.Forms
 
                     foreach (ToolStripItem item in mnuContext.Items)
                         if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
-                            menuItem.Checked = menuItem.Text == activeProfileName;
+                            menuItem.Checked = IsTunnelProfileSelected(menuItem.Text, activeProfileName);
 
                     if (TryGetProfileItem(activeProfileName, out var connectedProfile))
                         connectedProfile.ImageKey = ConnectionState.Connected.ToString();
@@ -1457,8 +1446,6 @@ namespace WireSockUI.Forms
                         }
                     }
 
-                    gbxState.Visible = true;
-
                     StartTunnelStateMonitor();
 
 #if WIRESOCKUI_ENABLE_UWP
@@ -1470,25 +1457,15 @@ namespace WireSockUI.Forms
                 case ConnectionState.Disconnected:
                     CancelTunnelMonitoring();
 
-                    if (btnActivate != null)
-                    {
-                        btnActivate.Text = Resources.ButtonInactive;
-                        SetActivateButtonEnabled(true);
-                    }
-
-                    if (imgStatus != null)
-                    {
-                        SetStatusImage(imgStatus, _inactiveStatusImage);
-                        if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusInactive;
-
-                        SetTrayIcon(Resources.ico, false);
-                        trayIcon.Text = Resources.TrayInactive;
-                    }
+                    cmiStatus.Image = _inactiveStatusImage;
+                    SetTrayIcon(Resources.ico, false);
+                    trayIcon.Text = Resources.TrayInactive;
 
                     cmiStatus.Text = Resources.ContextMenuInactive;
 
                     cmiAddresses.Text = string.Empty;
                     cmiAddresses.Visible = false;
+                    _activeTunnelAddresses = null;
 
                     cmiDeactivateTunnel.Enabled = false;
                     cmiResetKillSwitch.Enabled = !IsNativeCleanupInProgress();
@@ -1500,8 +1477,6 @@ namespace WireSockUI.Forms
                     if (TryGetProfileItem(activeProfileName, out var disconnectedProfile))
                         disconnectedProfile.ImageKey = ConnectionState.Disconnected.ToString();
 
-                    gbxState.Visible = false;
-
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
                         TryShowNotification(Resources.ToastInactiveTitle,
@@ -1511,18 +1486,8 @@ namespace WireSockUI.Forms
                 case ConnectionState.Indeterminate:
                     CancelTunnelMonitoring();
 
-                    if (btnActivate != null)
-                    {
-                        btnActivate.Text = Resources.ButtonInactive;
-                        SetActivateButtonEnabled(false);
-                    }
-
-                    if (imgStatus != null)
-                    {
-                        SetStatusImage(imgStatus, _inactiveStatusImage);
-                        if (txtStatus != null) txtStatus.Text = Resources.InterfaceStatusRecoveryRequired;
-                    }
-
+                    cmiStatus.Image = _inactiveStatusImage;
+                    SetTrayIcon(Resources.ico, false);
                     trayIcon.Text = Resources.InterfaceStatusRecoveryRequired;
                     cmiStatus.Text = Resources.InterfaceStatusRecoveryRequired;
                     cmiAddresses.Text = string.Empty;
@@ -1533,10 +1498,63 @@ namespace WireSockUI.Forms
                     if (TryGetProfileItem(activeProfileName, out var indeterminateProfile))
                         indeterminateProfile.ImageKey = ConnectionState.Indeterminate.ToString();
 
-                    gbxState.Visible = false;
                     break;
             }
 
+            UpdateSelectedProfileState(state, activeProfileName);
+        }
+
+        private void UpdateSelectedProfileState(ConnectionState state, string activeProfileName)
+        {
+            var selectedProfileName = lstProfiles.SelectedItems.Count == 0
+                ? null
+                : lstProfiles.SelectedItems[0].Text;
+            var selectedProfileIsTunnelProfile = IsTunnelProfileSelected(
+                selectedProfileName, activeProfileName);
+            var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
+            var imgStatus = layoutInterface.Controls.Find("imgStatus", true).FirstOrDefault() as PictureBox;
+            var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
+
+            if (btnActivate != null)
+            {
+                btnActivate.Text = state == ConnectionState.Connecting && selectedProfileIsTunnelProfile
+                    ? Resources.ButtonActivating
+                    : state == ConnectionState.Connected && selectedProfileIsTunnelProfile
+                        ? Resources.ButtonActive
+                        : Resources.ButtonInactive;
+
+                if (state == ConnectionState.Disconnected ||
+                    (state == ConnectionState.Connected && selectedProfileIsTunnelProfile))
+                    SetActivateButtonEnabled(true);
+                else
+                    btnActivate.Enabled = false;
+            }
+
+            if (imgStatus != null)
+            {
+                imgStatus.Image = state == ConnectionState.Connected && selectedProfileIsTunnelProfile
+                    ? _connectedStatusImage
+                    : _inactiveStatusImage;
+
+                if (txtStatus != null)
+                    txtStatus.Text = state == ConnectionState.Connected && selectedProfileIsTunnelProfile
+                        ? Resources.InterfaceStatusActive
+                        : state == ConnectionState.Indeterminate && selectedProfileIsTunnelProfile
+                            ? Resources.InterfaceStatusRecoveryRequired
+                            : Resources.InterfaceStatusInactive;
+            }
+
+            if (state == ConnectionState.Connecting && selectedProfileIsTunnelProfile)
+                imgStatus?.Focus();
+
+            gbxState.Visible = state == ConnectionState.Connected && selectedProfileIsTunnelProfile;
+        }
+
+        internal static bool IsTunnelProfileSelected(string selectedProfileName, string tunnelProfileName)
+        {
+            return !string.IsNullOrWhiteSpace(selectedProfileName) &&
+                   !string.IsNullOrWhiteSpace(tunnelProfileName) &&
+                   string.Equals(selectedProfileName, tunnelProfileName, StringComparison.OrdinalIgnoreCase);
         }
 
         private static void PersistLastActiveProfile(string profileName)
@@ -2277,6 +2295,7 @@ namespace WireSockUI.Forms
                 try
                 {
                     var connectGeneration = CurrentTunnelGeneration();
+                    _activeTunnelAddresses = profileSettings.Address;
                     UpdateState(ConnectionState.Connecting, true, profile);
                     var connectTask = ConnectWithTimeoutAsync(profile, connectGeneration,
                         preservedNetworkLockPending);
@@ -2582,14 +2601,9 @@ namespace WireSockUI.Forms
 
                     layoutState.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
-                    // Only 1 profile can be active at a time, either show the active state or do not allow to activate
-                    if (_tunnelLifecycle != null && _currentState == ConnectionState.Connected)
-                    {
-                        if (_tunnelLifecycle.ProfileName == selectedConf)
-                            UpdateState(ConnectionState.Connected, false);
-                        else
-                            SetActivateButtonEnabled(false);
-                    }
+                    // Selection changes repaint profile details without restarting global tunnel monitoring.
+                    if (_tunnelLifecycle != null && _currentState != ConnectionState.Disconnected)
+                        UpdateSelectedProfileState(_currentState, _tunnelLifecycle.ProfileName);
                 }
                 catch (Exception ex)
                 {

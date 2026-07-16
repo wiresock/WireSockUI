@@ -16,6 +16,7 @@ namespace WireSockUI.Config
     {
         internal const int MaxProfileNameLength = 250;
         internal const long MaxProfileSizeBytes = 1024 * 1024;
+        internal const int MaxProfileCatalogEntries = 1024;
 
         private static readonly HashSet<string> ReservedDeviceNames = new HashSet<string>(
             new[]
@@ -641,12 +642,16 @@ namespace WireSockUI.Config
         public static IReadOnlyList<string> GetProfiles()
         {
             Global.EnsureConfigsFolderExists();
-            var files = Directory.GetFiles(Global.ConfigsFolder);
             var profiles = new List<string>();
+            var catalogEntries = 0;
 
-            foreach (var file in files)
+            foreach (var file in Directory.EnumerateFiles(
+                         Global.ConfigsFolder, "*.conf", SearchOption.TopDirectoryOnly))
             {
-                if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase)) continue;
+                catalogEntries++;
+                if (catalogEntries > MaxProfileCatalogEntries)
+                    throw new InvalidDataException(
+                        $"The profile catalog contains more than {MaxProfileCatalogEntries} configuration files. Remove unused profiles before continuing.");
 
                 if (!IsLoadableProfileFile(file, out var diagnostic))
                 {
