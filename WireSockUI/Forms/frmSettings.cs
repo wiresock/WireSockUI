@@ -171,7 +171,7 @@ namespace WireSockUI.Forms
                     using (var pathScopedTask = ts.FindTask(GetAutoRunTaskName()))
                     {
                         if (pathScopedTask != null && pathScopedTask.Enabled &&
-                            IsTaskOwnedByCurrentExecutable(pathScopedTask))
+                            IsTaskReplaceableByCurrentExecutable(pathScopedTask))
                         {
                             pathScopedTaskEnabled = true;
                             usesPathScopedTask = IsTaskDefinitionOwnedByExecutable(
@@ -182,7 +182,7 @@ namespace WireSockUI.Forms
                     var legacyTaskEnabled = false;
                     using (var legacyTask = ts.FindTask(GetLegacyAutoRunTaskName()))
                         legacyTaskEnabled = legacyTask != null && legacyTask.Enabled &&
-                                            IsTaskOwnedByCurrentExecutable(legacyTask);
+                                            IsTaskReplaceableByCurrentExecutable(legacyTask);
 
                     usesPathScopedTask = usesPathScopedTask && !legacyTaskEnabled;
                     return pathScopedTaskEnabled || legacyTaskEnabled;
@@ -204,9 +204,9 @@ namespace WireSockUI.Forms
         ///     The task action is set to the path of the current executable.
         ///     The task is also configured to run even if the computer is running on batteries, to not stop if the computer
         ///     switches to battery power, to wake the computer if needed, and to not stop when the computer ceases to be idle.
-        ///     If an error occurs while enabling auto-run, an error message is displayed.
+        ///     If an error occurs while enabling auto-run, a contextual exception is propagated to the settings transaction.
         /// </remarks>
-        private static bool EnableAutoRun()
+        private static void EnableAutoRun()
         {
             try
             {
@@ -243,16 +243,15 @@ namespace WireSockUI.Forms
 
                     EnsureAutoRunTaskCanBeReplaced(ts, GetAutoRunTaskName());
                     ts.RootFolder.RegisterTaskDefinition(GetAutoRunTaskName(), td);
-                    TryDeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
+                    TryDeleteAutoRunTaskIfReplaceable(ts, GetLegacyAutoRunTaskName());
                 }
 
                 DeleteLegacyStartupShortcutIfPresent();
-                return true;
             }
             catch (Exception ex)
             {
-                ShowSettingsError(Resources.SettingsAutoRunEnableAdminError, ex);
-                return false;
+                throw new InvalidOperationException(
+                    string.Format(Resources.SettingsAutoRunEnableAdminError, ex.Message), ex);
             }
         }
 
@@ -261,25 +260,24 @@ namespace WireSockUI.Forms
         /// </summary>
         /// <remarks>
         ///     This method deletes only tasks that point to the current executable.
-        ///     If an error occurs while disabling auto-run, an error message is displayed.
+        ///     If an error occurs while disabling auto-run, a contextual exception is propagated to the settings transaction.
         /// </remarks>
-        private static bool DisableAutoRun()
+        private static void DisableAutoRun()
         {
             try
             {
                 using (var ts = new TaskService())
                 {
-                    DeleteAutoRunTaskIfOwned(ts, GetAutoRunTaskName());
-                    DeleteAutoRunTaskIfOwned(ts, GetLegacyAutoRunTaskName());
+                    DeleteAutoRunTaskIfReplaceable(ts, GetAutoRunTaskName());
+                    DeleteAutoRunTaskIfReplaceable(ts, GetLegacyAutoRunTaskName());
                 }
 
                 DeleteLegacyStartupShortcutIfPresent();
-                return true;
             }
             catch (Exception ex)
             {
-                ShowSettingsError(Resources.SettingsAutoRunDisableAdminError, ex);
-                return false;
+                throw new InvalidOperationException(
+                    string.Format(Resources.SettingsAutoRunDisableAdminError, ex.Message), ex);
             }
         }
 
@@ -359,17 +357,17 @@ namespace WireSockUI.Forms
             return false;
         }
 
-        private static void DeleteAutoRunTaskIfOwned(TaskService ts, string taskName)
+        private static void DeleteAutoRunTaskIfReplaceable(TaskService ts, string taskName)
         {
             using (var task = ts.FindTask(taskName))
             {
                 if (task == null)
                     return;
 
-                if (!IsTaskOwnedByCurrentExecutable(task))
+                if (!IsTaskReplaceableByCurrentExecutable(task))
                 {
                     Trace.TraceWarning(
-                        $"Skipping autorun task '{taskName}' because its complete definition is not owned by this WireSock UI installation.");
+                        $"Skipping autorun task '{taskName}' because its complete definition is not replaceable by this WireSock UI installation.");
                     return;
                 }
             }
@@ -377,11 +375,11 @@ namespace WireSockUI.Forms
             ts.RootFolder.DeleteTask(taskName, false);
         }
 
-        private static void TryDeleteAutoRunTaskIfOwned(TaskService ts, string taskName)
+        private static void TryDeleteAutoRunTaskIfReplaceable(TaskService ts, string taskName)
         {
             try
             {
-                DeleteAutoRunTaskIfOwned(ts, taskName);
+                DeleteAutoRunTaskIfReplaceable(ts, taskName);
             }
             catch (Exception ex)
             {
@@ -393,13 +391,13 @@ namespace WireSockUI.Forms
         {
             using (var existingTask = taskService.FindTask(taskName))
             {
-                if (existingTask != null && !IsTaskOwnedByCurrentExecutable(existingTask))
+                if (existingTask != null && !IsTaskReplaceableByCurrentExecutable(existingTask))
                     throw new InvalidOperationException(
-                        $"Autorun task '{taskName}' already exists with a definition that does not belong to this WireSock UI installation.");
+                        $"Autorun task '{taskName}' already exists with a definition that this WireSock UI installation cannot safely replace.");
             }
         }
 
-        private static bool IsTaskOwnedByCurrentExecutable(Microsoft.Win32.TaskScheduler.Task task)
+        private static bool IsTaskReplaceableByCurrentExecutable(Microsoft.Win32.TaskScheduler.Task task)
         {
             return task != null &&
                    IsTaskDefinitionReplaceableByExecutable(task.Definition, Application.ExecutablePath);
@@ -533,18 +531,34 @@ namespace WireSockUI.Forms
                 MessageBoxIcon.Error);
         }
 
-        internal bool TryApplyAutoRunChange()
+        internal bool ApplyAutoRunChange()
         {
             var autoRunChanged = _initialAutoRun != chkAutorun.Checked ||
                                  chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask;
-            return !autoRunChanged || (chkAutorun.Checked ? EnableAutoRun() : DisableAutoRun());
+            if (!autoRunChanged)
+                return true;
+
+            if (chkAutorun.Checked)
+                EnableAutoRun();
+            else
+                DisableAutoRun();
+
+            return true;
         }
 
-        internal bool TryRollbackAutoRunChange()
+        internal bool RollbackAutoRunChange()
         {
             var autoRunChanged = _initialAutoRun != chkAutorun.Checked ||
                                  chkAutorun.Checked && !_initialAutoRunUsesPathScopedTask;
-            return !autoRunChanged || (_initialAutoRun ? EnableAutoRun() : DisableAutoRun());
+            if (!autoRunChanged)
+                return true;
+
+            if (_initialAutoRun)
+                EnableAutoRun();
+            else
+                DisableAutoRun();
+
+            return true;
         }
 
         private void OnSaveClick(object sender, EventArgs e)

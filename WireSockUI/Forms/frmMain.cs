@@ -1869,8 +1869,8 @@ namespace WireSockUI.Forms
                         {
                             new CompensatingTransactionStep(
                                 "autorun task",
-                                () => Task.FromResult(form.TryApplyAutoRunChange()),
-                                () => Task.FromResult(form.TryRollbackAutoRunChange())),
+                                () => Task.FromResult(form.ApplyAutoRunChange()),
+                                () => Task.FromResult(form.RollbackAutoRunChange())),
                             new CompensatingTransactionStep(
                                 "native log level",
                                 () => logLevelChanged
@@ -1958,7 +1958,7 @@ namespace WireSockUI.Forms
 
         private static void ShowSettingsTransactionFailure(CompensatingTransactionResult result)
         {
-            var diagnostic = result.Exception?.GetBaseException().Message ??
+            var diagnostic = result.Exception?.Message ??
                              $"The {result.FailedStep} step did not complete.";
             var message = string.Format(Resources.SettingsApplyError, result.FailedStep, diagnostic);
             if (result.RollbackFailures.Count > 0)

@@ -2237,6 +2237,19 @@ namespace WireSockUI.Tests
             AssertEqual("apply-log-level,apply-kill-switch,rollback-kill-switch,rollback-log-level",
                 string.Join(",", calls));
             AssertEqual("kill-switch", string.Join(",", result.RollbackFailures));
+
+            var expectedException = new InvalidOperationException("autorun access denied");
+            var exceptionResult = FrmMain.ApplySettingsUpdatesAsync(new[]
+                {
+                    new CompensatingTransactionStep("autorun task",
+                        () => throw expectedException,
+                        () => Task.FromResult(true))
+                })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(exceptionResult.Succeeded, "Expected an autorun exception to fail the transaction.");
+            AssertTrue(ReferenceEquals(expectedException, exceptionResult.Exception),
+                "Expected the transaction result to retain the actionable autorun exception.");
         }
 
         private static void EditorValidatesAmneziaOptions()
