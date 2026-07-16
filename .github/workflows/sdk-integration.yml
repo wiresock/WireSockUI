@@ -38,6 +38,8 @@ jobs:
         env:
           WIRESOCKUI_WGBOOSTER_PATH: ${{ matrix.platform == 'ARM64' && vars.WIRESOCKUI_WGBOOSTER_PATH_ARM64 || vars.WIRESOCKUI_WGBOOSTER_PATH_X64 }}
           WIRESOCKUI_TEST_PROFILE: ${{ vars.WIRESOCKUI_TEST_PROFILE }}
+          WIRESOCKUI_TEST_PROFILE_TRANSPARENT: ${{ vars.WIRESOCKUI_TEST_PROFILE_TRANSPARENT }}
+          WIRESOCKUI_TEST_PROFILE_VIRTUAL_ADAPTER: ${{ vars.WIRESOCKUI_TEST_PROFILE_VIRTUAL_ADAPTER }}
         run: >
           dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj
           --configuration Release

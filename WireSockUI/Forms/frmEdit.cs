@@ -12,6 +12,8 @@ namespace WireSockUI.Forms
 {
     public sealed partial class FrmEdit : Form
     {
+        internal const int MaximumSyntaxHighlightCharacters = 256 * 1024;
+
         private static readonly Regex ProfileMatch =
             new Regex(
                 @"^\s*((?<comment>[;#](?!(?-i:@ws:)).*)|(?<section>\[[^\]\r\n]+\])|(?:(?<prefix>(?-i:#@ws:))\s*)?(?<key>[a-zA-Z0-9]+)[ \t]*=[ \t]*(?<value>.*?))\s*$",
@@ -42,6 +44,7 @@ namespace WireSockUI.Forms
             Initialize();
 
             ShowInTaskbar = false;
+            txtProfileName.MaxLength = Profile.MaxProfileNameLength;
             _originalProfileName = sourcePath == null ? config : null;
 
             if (string.IsNullOrEmpty(config))
@@ -93,6 +96,12 @@ namespace WireSockUI.Forms
         private void ApplySyntaxHighlighting()
         {
             if (_highlighting) return;
+            if (!ShouldApplySyntaxHighlighting(txtEditor.TextLength))
+            {
+                btnSave.Enabled = true;
+                return;
+            }
+
             _highlighting = true;
 
             var hasErrors = false;
@@ -382,6 +391,11 @@ namespace WireSockUI.Forms
             }
         }
 
+        internal static bool ShouldApplySyntaxHighlighting(int textLength)
+        {
+            return textLength >= 0 && textLength <= MaximumSyntaxHighlightCharacters;
+        }
+
         private void InsertOrAppendConfigurationValue(string key, string value)
         {
             // Insertion must be robust: it needs to handle incomplete or malformed configurations since
@@ -480,7 +494,20 @@ namespace WireSockUI.Forms
                 return;
             }
 
-            var profilePath = Profile.GetProfilePath(requestedProfileName);
+            string profilePath;
+            try
+            {
+                profilePath = Profile.GetProfilePath(requestedProfileName);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, Resources.EditProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                TryDeleteTemporaryProfile(tmpProfile);
+
+                DialogResult = DialogResult.None;
+                return;
+            }
+
             var isExistingProfile = !string.IsNullOrEmpty(_originalProfileName);
             var isRename = isExistingProfile &&
                            !string.Equals(_originalProfileName, requestedProfileName,

@@ -14,6 +14,18 @@ namespace WireSockUI.Config
     /// </summary>
     internal class Profile
     {
+        internal const int MaxProfileNameLength = 250;
+
+        private static readonly HashSet<string> ReservedDeviceNames = new HashSet<string>(
+            new[]
+            {
+                "CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$",
+                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+                "COM\u00B9", "COM\u00B2", "COM\u00B3", "LPT\u00B9", "LPT\u00B2", "LPT\u00B3"
+            },
+            StringComparer.OrdinalIgnoreCase);
+
         private static readonly string[] InterfaceKeys =
         {
             "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "Table", "ScriptExecTimeout", "PreUp",
@@ -623,20 +635,11 @@ namespace WireSockUI.Config
                     $"\"{minKey}\" in \"Interface\" must be less than \"{maxKey}\".");
         }
 
-        public static IEnumerable<string> GetProfiles()
+        public static IReadOnlyList<string> GetProfiles()
         {
-            string[] files;
-
-            try
-            {
-                Global.EnsureConfigsFolderExists();
-                files = Directory.GetFiles(Global.ConfigsFolder);
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Unable to enumerate WireSock UI profiles: {ex.Message}");
-                yield break;
-            }
+            Global.EnsureConfigsFolderExists();
+            var files = Directory.GetFiles(Global.ConfigsFolder);
+            var profiles = new List<string>();
 
             foreach (var file in files)
             {
@@ -655,8 +658,10 @@ namespace WireSockUI.Config
                     continue;
                 }
 
-                yield return profileName;
+                profiles.Add(profileName);
             }
+
+            return profiles;
         }
 
         /// <summary>
@@ -689,6 +694,7 @@ namespace WireSockUI.Config
 
             var trimmedName = profileName.Trim();
             if (!string.Equals(profileName, trimmedName, StringComparison.Ordinal) ||
+                trimmedName.Length > MaxProfileNameLength ||
                 trimmedName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
                 return false;
 
@@ -696,16 +702,9 @@ namespace WireSockUI.Config
             if (reservedName.Length == 0 || !string.Equals(reservedName, trimmedName, StringComparison.Ordinal))
                 return false;
 
-            var reservedDeviceNames = new[]
-            {
-                "CON", "PRN", "AUX", "NUL",
-                "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-                "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
-            };
-
             var baseName = reservedName.Split('.')[0];
 
-            return !reservedDeviceNames.Contains(baseName, StringComparer.OrdinalIgnoreCase);
+            return !ReservedDeviceNames.Contains(baseName);
         }
 
         /// <summary>

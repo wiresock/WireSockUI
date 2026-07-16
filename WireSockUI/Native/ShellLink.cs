@@ -81,7 +81,7 @@ namespace WireSockUI.Native
             public readonly uint dwReserved0;
             public readonly uint dwReserved1;
 
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = MaxPath)]
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = Win32FindDataPathCapacity)]
             public readonly string cFileName;
 
             [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
@@ -238,7 +238,8 @@ namespace WireSockUI.Native
         private readonly PropertyKey _appUserModelIdKey =
             new PropertyKey("{9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}", 5);
 
-        private const int MaxPath = 260;
+        private const int Win32FindDataPathCapacity = 260;
+        private const int UnicodePathCapacity = 32768;
         private const int Infotipsize = 1024;
 
         private const int StgmRead = 0x00000000; // STGM constants
@@ -292,7 +293,7 @@ namespace WireSockUI.Native
             get
             {
                 // No limitation to length of buffer string in the case of Unicode though.
-                var targetPath = new StringBuilder(MaxPath);
+                var targetPath = new StringBuilder(UnicodePathCapacity);
 
                 var data = new Win32FindDataw();
 
@@ -322,7 +323,7 @@ namespace WireSockUI.Native
         {
             get
             {
-                var workingDirectory = new StringBuilder(MaxPath);
+                var workingDirectory = new StringBuilder(UnicodePathCapacity);
                 VerifySucceeded(_shellLinkW.GetWorkingDirectory(workingDirectory, workingDirectory.Capacity));
                 return workingDirectory.ToString();
             }

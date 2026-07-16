@@ -712,6 +712,15 @@ namespace WireSockUI.Properties {
         }
 
         /// <summary>
+        ///   Looks up a localized string similar to Unable to load profiles: {0}.
+        /// </summary>
+        internal static string ProfileEnumerationError {
+            get {
+                return ResourceManager.GetString("ProfileEnumerationError", resourceCulture);
+            }
+        }
+
+        /// <summary>
         ///   Looks up a localized string similar to Do you want to continue?.
         /// </summary>
         internal static string ProfileScriptWarningContinue {
@@ -726,6 +735,24 @@ namespace WireSockUI.Properties {
         internal static string ProfileScriptWarningMessage {
             get {
                 return ResourceManager.GetString("ProfileScriptWarningMessage", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Yes.
+        /// </summary>
+        internal static string Yes {
+            get {
+                return ResourceManager.GetString("Yes", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to No.
+        /// </summary>
+        internal static string No {
+            get {
+                return ResourceManager.GetString("No", resourceCulture);
             }
         }
 
@@ -852,6 +879,24 @@ namespace WireSockUI.Properties {
         internal static string SettingsSaveError {
             get {
                 return ResourceManager.GetString("SettingsSaveError", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Unable to apply settings at "{0}": {1}.
+        /// </summary>
+        internal static string SettingsApplyError {
+            get {
+                return ResourceManager.GetString("SettingsApplyError", resourceCulture);
+            }
+        }
+
+        /// <summary>
+        ///   Looks up a localized string similar to Rollback also failed for: {0}. Restart WireSock UI and verify the current settings before reconnecting..
+        /// </summary>
+        internal static string SettingsRollbackError {
+            get {
+                return ResourceManager.GetString("SettingsRollbackError", resourceCulture);
             }
         }
 

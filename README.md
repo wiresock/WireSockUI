@@ -50,9 +50,13 @@ Runtime state that can be written by the elevated process, including the native 
 
 Elevated autorun and SDK DLL loading are available only when the target file, containing directory, and replacement-sensitive ancestor path are administrator-owned. Install WireSockUI and the SDK into administrator-owned locations.
 
+Autorun tasks are scoped to the current Windows user and have no execution-time limit. Opening and saving Settings migrates an older WireSockUI autorun task to the current definition. Settings are applied as a compensating transaction: autorun, runtime log level, Kill Switch state, and persisted preferences are rolled back together when a later step fails.
+
 This release applies the same trust requirement to the complete WireSockUI application payload. Move existing portable installations to a directory created and owned by Administrators or `SYSTEM`, and ensure ordinary users have no write, delete, permission-change, or ownership rights on the executable, its `.config`, or companion DLL/EXE files.
 
 Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks require confirmation before import/save and again before activation. Treat script-hook profiles as privileged code.
+
+Script-hook confirmation displays every complete command in a scrollable, read-only view, escapes invisible control and bidirectional-formatting characters, and defaults to rejection. Profile names are limited to a single Windows filesystem component of at most 250 characters.
 
 The Settings dialog includes an optional Kill Switch toggle. When enabled, WireSockUI calls the `wgbooster.dll` network-lock API before creating the tunnel, preserves the native lock during reconnect/profile-switch cleanup, and clears the lock through normal tunnel cleanup when disconnecting. The option is off by default so existing SDK/minimal installations keep their current behavior.
 
@@ -76,9 +80,11 @@ dotnet build WireSockUI.sln --configuration Release -p:Platform=x64 -p:UseShared
 dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:UseSharedCompilation=false -m:1
 ```
 
+Use `-- --list-tests` to list test names or `-- --filter "profile catalog"` to run a focused subset with full exception diagnostics.
+
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
 
-CI checks both the native header/export ABI and the managed P/Invoke declarations against the pinned SDK contract snapshot under `sdk-contract`. The snapshot currently comes from `Wiresock-Foundation/wiresock-vpn-client` revision `aa72bc6ab8dce8f8128f74b8a6e3167b8caaf11a`; update the header, export definition, and `SDK_REVISION` together when intentionally adopting a newer SDK revision. A scheduled workflow compares the snapshot with current upstream contract files. The `SDK Integration` workflow runs a handle lifecycle smoke test on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`; it remains manually runnable and is also a required release job. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths; `WIRESOCKUI_TEST_PROFILE` is optional and enables a full start/query/stop/drop smoke test with a non-production profile.
+CI checks both the native header/export ABI and the managed P/Invoke declarations against the pinned SDK contract snapshot under `sdk-contract`. The snapshot currently comes from `Wiresock-Foundation/wiresock-vpn-client` revision `aa72bc6ab8dce8f8128f74b8a6e3167b8caaf11a`; update the header, export definition, and `SDK_REVISION` together when intentionally adopting a newer SDK revision. A scheduled workflow compares the snapshot with current upstream contract files. The `SDK Integration` workflow runs transparent and virtual-adapter lifecycle smoke tests on administrator-controlled, elevated self-hosted Windows runners labeled `wiresock-sdk`; it remains manually runnable and is also a required release job. Protect the `wiresock-sdk` GitHub environment with required reviewers, then configure `WIRESOCKUI_WGBOOSTER_PATH_X64` and `WIRESOCKUI_WGBOOSTER_PATH_ARM64` repository variables with trusted installed DLL paths. Configure `WIRESOCKUI_TEST_PROFILE_TRANSPARENT` and `WIRESOCKUI_TEST_PROFILE_VIRTUAL_ADAPTER` with dedicated, administrator-owned, non-production profiles that do not contain script hooks; the legacy `WIRESOCKUI_TEST_PROFILE` variable is accepted as a fallback for both modes during migration. The workflow fails when no profile is configured or a profile is mutable by non-administrative users.
 
 Native state and statistics polling use bounded asynchronous queries. If `wgbooster.dll` does not return before the query timeout, WireSockUI stops issuing additional native operations, records a recovery marker, and requires recovery or restart. Startup also compares the process and `wgbooster.dll` PE architectures so x64/ARM64 mismatches are reported directly.
 
