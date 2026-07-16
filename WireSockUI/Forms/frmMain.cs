@@ -43,6 +43,7 @@ namespace WireSockUI.Forms
         private readonly TunnelLifecycleController _tunnelLifecycle;
         private readonly TunnelMonitor _tunnelMonitor;
         private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
+        private readonly ProfileCatalog _profileCatalog = new ProfileCatalog();
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
         private bool _exitRequested;
@@ -1276,10 +1277,16 @@ namespace WireSockUI.Forms
         /// <param name="selectedProfile">Optional profile to automatically select</param>
         private void LoadProfiles(string selectedProfile = "")
         {
-            lstProfiles.Items.Clear();
+            var catalogResult = _profileCatalog.Load();
+            if (!catalogResult.Succeeded)
+            {
+                MessageBox.Show(string.Format(Resources.ProfileEnumerationError, catalogResult.Exception.Message),
+                    Resources.ProfileError, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
 
-            var profiles = Profile.GetProfiles().ToList();
-            profiles.Sort();
+            var profiles = catalogResult.Profiles;
+            lstProfiles.Items.Clear();
 
             lstProfiles.Items.AddRange(profiles
                 .Select(p => new ListViewItem(p, ConnectionState.Disconnected.ToString()) { Name = p }).ToArray());
@@ -1845,19 +1852,50 @@ namespace WireSockUI.Forms
             {
                 using (var form = new FrmSettings())
                 {
-                    var previousEnableKillSwitch = Settings.Default.EnableKillSwitch;
-                    var previousLogLevel = Settings.Default.LogLevel;
+                    var previousSettings = ApplicationSettingsSnapshot.Capture();
 
                     // set the owner of the child form to the main form instance
                     form.Owner = this;
 
                     if (form.ShowDialog() == DialogResult.OK)
                     {
-                        if (!await ApplySettingsUpdatesAsync(
-                                () => ApplyAndSaveLogLevelSettingAsync(form.RequestedLogLevel, previousLogLevel),
-                                () => ApplyAndSaveKillSwitchSettingAsync(form.RequestedEnableKillSwitch,
-                                    previousEnableKillSwitch)))
+                        var requestedSettings = form.RequestedSettings;
+                        var logLevelChanged = !string.Equals(requestedSettings.LogLevel,
+                            previousSettings.LogLevel, StringComparison.Ordinal);
+                        var killSwitchRequiresNativeUpdate =
+                            requestedSettings.EnableKillSwitch != previousSettings.EnableKillSwitch ||
+                            _tunnelLifecycle.HasTunnelHandle;
+                        var result = await ApplySettingsUpdatesAsync(new[]
+                        {
+                            new CompensatingTransactionStep(
+                                "autorun task",
+                                () => Task.FromResult(form.ApplyAutoRunChange()),
+                                () => Task.FromResult(form.RollbackAutoRunChange())),
+                            new CompensatingTransactionStep(
+                                "native log level",
+                                () => logLevelChanged
+                                    ? ApplyLogLevelSettingAsync(requestedSettings.LogLevel)
+                                    : Task.FromResult(true),
+                                () => logLevelChanged
+                                    ? ApplyLogLevelSettingAsync(previousSettings.LogLevel)
+                                    : Task.FromResult(true)),
+                            new CompensatingTransactionStep(
+                                "settings persistence",
+                                () => PersistSettingsAsync(requestedSettings),
+                                () => PersistSettingsAsync(previousSettings)),
+                            new CompensatingTransactionStep(
+                                "native Kill Switch",
+                                () => ApplyKillSwitchSettingAsync(requestedSettings.EnableKillSwitch,
+                                    killSwitchRequiresNativeUpdate),
+                                () => ApplyKillSwitchSettingAsync(previousSettings.EnableKillSwitch,
+                                    killSwitchRequiresNativeUpdate))
+                        });
+
+                        if (!result.Succeeded)
+                        {
+                            ShowSettingsTransactionFailure(result);
                             return;
+                        }
                     }
                 }
             }
@@ -1872,126 +1910,64 @@ namespace WireSockUI.Forms
             }
         }
 
-        internal static async Task<bool> ApplySettingsUpdatesAsync(
-            Func<Task<bool>> applyLogLevel,
-            Func<Task<bool>> applyKillSwitch)
+        internal static Task<CompensatingTransactionResult> ApplySettingsUpdatesAsync(
+            IReadOnlyList<CompensatingTransactionStep> steps)
         {
-            if (applyLogLevel == null) throw new ArgumentNullException(nameof(applyLogLevel));
-            if (applyKillSwitch == null) throw new ArgumentNullException(nameof(applyKillSwitch));
-
-            if (!await applyLogLevel())
-                return false;
-
-            return await applyKillSwitch();
+            return CompensatingTransaction.ApplyAsync(steps);
         }
 
-        private async Task<bool> ApplyAndSaveLogLevelSettingAsync(string requestedLogLevel, string previousLogLevel)
+        private async Task<bool> ApplyLogLevelSettingAsync(string logLevel)
         {
-            string runtimeDiagnostic = null;
-            var result = await PersistedSettingTransaction.ApplyAsync(
-                requestedLogLevel,
-                previousLogLevel,
-                value => Settings.Default.LogLevel = value,
-                Settings.Default.Save,
-                async () =>
-                {
-                    var stateBeforeUpdate = _currentState;
-                    var profile = _tunnelLifecycle.ProfileName;
-                    var updateResult = await _tunnelLifecycle.SetLogLevelAsync(
-                        _tunnelLifecycle.ConfiguredLogLevel, NativeQueryTimeoutMilliseconds);
-                    updateResult = await AwaitTimedOutNativeOperationAsync(updateResult,
-                        "native log-level update", profile, stateBeforeUpdate);
-                    runtimeDiagnostic = updateResult.Diagnostic;
-                    return updateResult.Succeeded;
-                });
+            var stateBeforeUpdate = _currentState;
+            var profile = _tunnelLifecycle.ProfileName;
+            var updateResult = await _tunnelLifecycle.SetLogLevelAsync(
+                WireSockManager.ParseLogLevelSetting(logLevel), NativeQueryTimeoutMilliseconds);
+            updateResult = await AwaitTimedOutNativeOperationAsync(updateResult,
+                "native log-level update", profile, stateBeforeUpdate);
+            if (!updateResult.Succeeded)
+                throw new InvalidOperationException(updateResult.Diagnostic ??
+                                                    "Unable to update the native log level.");
 
-            switch (result.Status)
-            {
-                case PersistedSettingUpdateStatus.Succeeded:
-                    return true;
-                case PersistedSettingUpdateStatus.InitialSaveFailed:
-                case PersistedSettingUpdateStatus.RollbackSaveFailed:
-                    MessageBox.Show(string.Format(Resources.SettingsSaveError, result.Exception?.Message),
-                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return false;
-                case PersistedSettingUpdateStatus.RuntimeApplyFailed:
-                    var diagnostic = result.Exception?.Message ?? runtimeDiagnostic ??
-                                     "Unable to update the native log level.";
-                    Trace.TraceWarning($"Unable to apply the native log level: {diagnostic}");
-                    MessageBox.Show(diagnostic, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
-                        MessageBoxIcon.Error);
-                    return false;
-                default:
-                    throw new InvalidOperationException("Unknown log-level settings update result.");
-            }
+            return true;
         }
 
-        private async Task<bool> ApplyAndSaveKillSwitchSettingAsync(bool requestedEnableKillSwitch,
-            bool previousEnableKillSwitch)
+        private async Task<bool> ApplyKillSwitchSettingAsync(bool enableKillSwitch, bool shouldApplyNativeState)
         {
-            var shouldApplyNativeState =
-                requestedEnableKillSwitch != previousEnableKillSwitch ||
-                _tunnelLifecycle.HasTunnelHandle;
-            var result = await PersistedSettingTransaction.ApplyAsync(
-                requestedEnableKillSwitch,
-                previousEnableKillSwitch,
-                value => Settings.Default.EnableKillSwitch = value,
-                Settings.Default.Save,
-                () => !shouldApplyNativeState
-                    ? Task.FromResult(true)
-                    : ApplyKillSwitchSettingAsync(requestedEnableKillSwitch));
+            if (!shouldApplyNativeState)
+                return true;
 
-            switch (result.Status)
-            {
-                case PersistedSettingUpdateStatus.Succeeded:
-                    return true;
-                case PersistedSettingUpdateStatus.InitialSaveFailed:
-                    MessageBox.Show(string.Format(Resources.SettingsSaveError, result.Exception?.Message),
-                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return false;
-                case PersistedSettingUpdateStatus.RollbackSaveFailed:
-                    Trace.TraceError(
-                        $"Unable to roll back the Kill Switch preference after the native update failed: {result.Exception?.Message}");
-                    MessageBox.Show(string.Format(Resources.SettingsSaveError, result.Exception?.Message),
-                        Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    return false;
-                case PersistedSettingUpdateStatus.RuntimeApplyFailed:
-                    if (result.Exception != null)
-                    {
-                        Trace.TraceWarning($"Unable to apply the Kill Switch runtime state: {result.Exception.Message}");
-                        MessageBox.Show(result.Exception.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK,
-                            MessageBoxIcon.Error);
-                    }
+            var stateBeforeUpdate = _currentState;
+            var profile = _tunnelLifecycle.ProfileName;
+            var result = await _tunnelLifecycle.ApplyKillSwitchAsync(enableKillSwitch,
+                NativeQueryTimeoutMilliseconds);
+            result = await AwaitTimedOutNativeOperationAsync(result, "native Kill Switch update", profile,
+                stateBeforeUpdate);
+            if (!result.Succeeded)
+                throw new InvalidOperationException(
+                    $"{Resources.TunnelKillSwitchStateError} {result.Diagnostic}".Trim());
 
-                    return false;
-                default:
-                    throw new InvalidOperationException("Unknown Kill Switch settings update result.");
-            }
+            return true;
         }
 
-        private async Task<bool> ApplyKillSwitchSettingAsync(bool enableKillSwitch)
+        private static Task<bool> PersistSettingsAsync(ApplicationSettingsSnapshot settings)
         {
-            try
-            {
-                var stateBeforeUpdate = _currentState;
-                var profile = _tunnelLifecycle.ProfileName;
-                var result = await _tunnelLifecycle.ApplyKillSwitchAsync(enableKillSwitch,
-                    NativeQueryTimeoutMilliseconds);
-                result = await AwaitTimedOutNativeOperationAsync(result, "native Kill Switch update", profile,
-                    stateBeforeUpdate);
-                if (result.Succeeded)
-                    return true;
+            settings.Apply();
+            Settings.Default.Save();
+            return Task.FromResult(true);
+        }
 
-                MessageBox.Show(
-                    $"{Resources.TunnelKillSwitchStateError}{Environment.NewLine}{Environment.NewLine}{result.Diagnostic}",
-                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return false;
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                return false;
-            }
+        private static void ShowSettingsTransactionFailure(CompensatingTransactionResult result)
+        {
+            var diagnostic = result.Exception?.Message ??
+                             $"The {result.FailedStep} step did not complete.";
+            var message = string.Format(Resources.SettingsApplyError, result.FailedStep, diagnostic);
+            if (result.RollbackFailures.Count > 0)
+                message += Environment.NewLine + Environment.NewLine +
+                           string.Format(Resources.SettingsRollbackError,
+                               string.Join(", ", result.RollbackFailures));
+
+            Trace.TraceError(message);
+            MessageBox.Show(message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
 
         private async Task<NativeOperationResult<T>> AwaitTimedOutNativeOperationAsync<T>(

@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\WireSockUI\WireSockUI.csproj" />
+    <Reference Include="System.Configuration" />
     <Reference Include="System.Windows.Forms" />
   </ItemGroup>
 </Project>

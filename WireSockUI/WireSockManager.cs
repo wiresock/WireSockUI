@@ -141,21 +141,23 @@ namespace WireSockUI
         /// </summary>
         public WgbLogLevel LogLevelSetting
         {
-            get
+            get => ParseLogLevelSetting(Settings.Default.LogLevel);
+        }
+
+        internal static WgbLogLevel ParseLogLevelSetting(string logLevel)
+        {
+            switch (logLevel)
             {
-                switch (Settings.Default.LogLevel)
-                {
-                    case "Info":
-                        return WgbLogLevel.Info;
-                    case "Warning":
-                        return WgbLogLevel.Warning;
-                    case "Debug":
-                        return WgbLogLevel.Debug;
-                    case "All":
-                        return WgbLogLevel.All;
-                    default:
-                        return WgbLogLevel.Error;
-                }
+                case "Info":
+                    return WgbLogLevel.Info;
+                case "Warning":
+                    return WgbLogLevel.Warning;
+                case "Debug":
+                    return WgbLogLevel.Debug;
+                case "All":
+                    return WgbLogLevel.All;
+                default:
+                    return WgbLogLevel.Error;
             }
         }
 
