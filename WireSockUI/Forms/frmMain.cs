@@ -31,8 +31,6 @@ namespace WireSockUI.Forms
             Indeterminate
         }
 
-        private readonly BackgroundWorker _tunnelConnectionWorker;
-        private readonly BackgroundWorker _tunnelStateWorker;
         private const int TunnelConnectionTimeoutMilliseconds = 30000;
         private const int TunnelDisconnectTimeoutMilliseconds = 10000;
         private const int NativeQueryTimeoutMilliseconds = 5000;
@@ -43,6 +41,7 @@ namespace WireSockUI.Forms
          * @brief The manager that handles the Wireguard connections.
          */
         private readonly TunnelLifecycleController _tunnelLifecycle;
+        private readonly TunnelMonitor _tunnelMonitor;
         private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
@@ -51,22 +50,6 @@ namespace WireSockUI.Forms
         private Icon _ownedTrayIcon;
         private Image _inactiveStatusImage;
         private Image _connectedStatusImage;
-
-        private sealed class TunnelConnectionProgress
-        {
-            public int Generation { get; set; }
-            public bool Connected { get; set; }
-            public bool TimedOut { get; set; }
-            public string Diagnostic { get; set; }
-        }
-
-        private sealed class TunnelStateProgress
-        {
-            public int Generation { get; set; }
-            public WgbStats Stats { get; set; }
-            public string Diagnostic { get; set; }
-            public bool TunnelInactive { get; set; }
-        }
 
         /**
          * @brief Initializes a new instance of the Main class.
@@ -96,8 +79,14 @@ namespace WireSockUI.Forms
                 Environment.Exit(1);
             }
 
-            _tunnelConnectionWorker = InitializeTunnelConnectionWorker();
-            _tunnelStateWorker = InitTunnelStateWorker();
+            _tunnelLifecycle = new TunnelLifecycleController(OnWireSockLogMessage);
+            _tunnelMonitor = new TunnelMonitor(
+                _tunnelLifecycle.GetConnectedAsync,
+                _tunnelLifecycle.GetStateAsync,
+                CurrentTunnelGeneration,
+                HandleTunnelMonitorUpdateAsync,
+                NativeQueryTimeoutMilliseconds,
+                TunnelConnectionTimeoutMilliseconds);
 
             // Configure icons
             Icon = Resources.ico;
@@ -125,27 +114,8 @@ namespace WireSockUI.Forms
 
             OnLogWindowResize(lstLog, EventArgs.Empty);
 
-            _tunnelLifecycle = new TunnelLifecycleController(OnWireSockLogMessage);
-
             // Update the list of available configurations.
             LoadProfiles();
-        }
-
-        private static bool SleepUntilCancelled(BackgroundWorker worker, int milliseconds)
-        {
-            const int interval = 100;
-            var waited = 0;
-
-            while (waited < milliseconds)
-            {
-                if (worker.CancellationPending)
-                    return true;
-
-                Thread.Sleep(Math.Min(interval, milliseconds - waited));
-                waited += interval;
-            }
-
-            return worker.CancellationPending;
         }
 
         private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
@@ -352,8 +322,7 @@ namespace WireSockUI.Forms
         private void CancelTunnelMonitoring()
         {
             AdvanceTunnelGeneration();
-            _tunnelConnectionWorker.CancelAsync();
-            _tunnelStateWorker.CancelAsync();
+            _tunnelMonitor.Cancel();
         }
 
         private bool TryBeginTunnelOperation(bool showBlockedMessage = true)
@@ -379,16 +348,14 @@ namespace WireSockUI.Forms
             _tunnelSession.EndOperation();
         }
 
-        private void StartTunnelConnectionWorker()
+        private void StartTunnelConnectionMonitor()
         {
-            if (!_tunnelConnectionWorker.IsBusy)
-                _tunnelConnectionWorker.RunWorkerAsync(CurrentTunnelGeneration());
+            _tunnelMonitor.StartConnecting(CurrentTunnelGeneration());
         }
 
-        private void StartTunnelStateWorker()
+        private void StartTunnelStateMonitor()
         {
-            if (!_tunnelStateWorker.IsBusy)
-                _tunnelStateWorker.RunWorkerAsync(CurrentTunnelGeneration());
+            _tunnelMonitor.StartConnected(CurrentTunnelGeneration());
         }
 
         private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true, bool preserveNetworkLock = false)
@@ -508,8 +475,7 @@ namespace WireSockUI.Forms
             _shutdownComplete = true;
             _currentState = ConnectionState.Disconnected;
 
-            _tunnelConnectionWorker.CancelAsync();
-            _tunnelStateWorker.CancelAsync();
+            _tunnelMonitor.Dispose();
 
             DisposeTunnelLifecycleWithTimeout();
 
@@ -809,6 +775,13 @@ namespace WireSockUI.Forms
 
                 if (createdNew) return false;
 
+                if (!TryValidateSingleInstanceEventSecurity(Global.AlreadyRunning, out var diagnostic))
+                {
+                    Global.AlreadyRunning.Dispose();
+                    Global.AlreadyRunning = null;
+                    throw new InvalidOperationException(diagnostic);
+                }
+
                 Global.AlreadyRunning.Dispose();
                 Global.AlreadyRunning = null;
                 return true;
@@ -840,145 +813,202 @@ namespace WireSockUI.Forms
             return security;
         }
 
-        /// <summary>
-        ///     Initialize a <see cref="T:BackgroundWorker" /> which retrieves tunnel connecting / connecting state and updates it
-        ///     in the UI
-        /// </summary>
-        /// <returns>
-        ///     <see cref="T:BackgroundWorker" />
-        /// </returns>
-        private BackgroundWorker InitializeTunnelConnectionWorker()
+        private static bool TryValidateSingleInstanceEventSecurity(EventWaitHandle waitHandle,
+            out string diagnostic)
         {
-            var worker = new BackgroundWorker
+            diagnostic = null;
+            try
             {
-                WorkerSupportsCancellation = true,
-                WorkerReportsProgress = true
-            };
-
-            worker.DoWork += (s, e) =>
+                return IsSingleInstanceEventSecurityTrusted(
+                    waitHandle.GetAccessControl(),
+                    WindowsIdentity.GetCurrent().User,
+                    out diagnostic);
+            }
+            catch (Exception ex)
             {
-                var generation = (int)e.Argument;
-                var connected = false;
-                var timeout = Stopwatch.StartNew();
+                diagnostic = $"Unable to validate the global WireSock ownership event: {ex.Message}";
+                return false;
+            }
+        }
 
-                do
+        internal static bool IsSingleInstanceEventSecurityTrusted(EventWaitHandleSecurity security,
+            SecurityIdentifier currentUser, out string diagnostic)
+        {
+            diagnostic = null;
+            if (security == null || currentUser == null)
+            {
+                diagnostic = "The global WireSock ownership event has no verifiable security descriptor.";
+                return false;
+            }
+
+            if (!(security.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner) ||
+                (!owner.Equals(currentUser) && !Program.IsTrustedOwnerSid(owner)))
+            {
+                diagnostic = "The global WireSock ownership event is not owned by the current administrator, " +
+                             "the Administrators group, or LocalSystem.";
+                return false;
+            }
+
+            var rules = security.GetAccessRules(true, true, typeof(SecurityIdentifier));
+            foreach (EventWaitHandleAccessRule rule in rules)
+            {
+                if (rule.AccessControlType != AccessControlType.Allow ||
+                    !(rule.IdentityReference is SecurityIdentifier sid))
+                    continue;
+
+                if (sid.Equals(currentUser) || Program.IsTrustedAdministrativeSid(sid))
+                    continue;
+
+                diagnostic =
+                    $"The global WireSock ownership event grants access to an untrusted identity ({sid.Value}).";
+                return false;
+            }
+
+            return true;
+        }
+
+        private Task HandleTunnelMonitorUpdateAsync(TunnelMonitorUpdate update)
+        {
+            if (_shutdownComplete || IsDisposed || Disposing || !IsHandleCreated)
+                return Task.CompletedTask;
+
+            return InvokeOnUiThreadAsync(this, () => HandleTunnelMonitorUpdateOnUiThreadAsync(update));
+        }
+
+        internal static Task InvokeOnUiThreadAsync(ISynchronizeInvoke synchronizer, Func<Task> action)
+        {
+            if (synchronizer == null)
+                throw new ArgumentNullException(nameof(synchronizer));
+            if (action == null)
+                throw new ArgumentNullException(nameof(action));
+
+            bool invokeRequired;
+            try
+            {
+                invokeRequired = synchronizer.InvokeRequired;
+            }
+            catch (ObjectDisposedException)
+            {
+                return Task.CompletedTask;
+            }
+            catch (InvalidOperationException)
+            {
+                return Task.CompletedTask;
+            }
+
+            if (!invokeRequired)
+                return action();
+
+            var completion = new TaskCompletionSource<object>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                synchronizer.BeginInvoke(new Action(async () =>
                 {
-                    if (generation != CurrentTunnelGeneration())
+                    try
                     {
-                        e.Cancel = true;
-                        return;
+                        await action();
+                        completion.TrySetResult(null);
                     }
-
-                    if (SleepUntilCancelled(worker, 500))
+                    catch (Exception ex)
                     {
-                        e.Cancel = true;
-                        return;
+                        completion.TrySetException(ex);
                     }
+                }), Array.Empty<object>());
+                return completion.Task;
+            }
+            catch (ObjectDisposedException)
+            {
+                return Task.CompletedTask;
+            }
+            catch (InvalidOperationException)
+            {
+                return Task.CompletedTask;
+            }
+        }
 
-                    if (!_tunnelLifecycle.TryGetConnected(out connected, out var diagnostic))
-                    {
-                        worker.ReportProgress(0, new TunnelConnectionProgress
+        private async Task HandleTunnelMonitorUpdateOnUiThreadAsync(TunnelMonitorUpdate update)
+        {
+            try
+            {
+                if (update == null || _shutdownComplete || IsDisposed || Disposing ||
+                    update.Generation != CurrentTunnelGeneration())
+                    return;
+
+                switch (update.Kind)
+                {
+                    case TunnelMonitorUpdateKind.Connected:
+                        if (_currentState == ConnectionState.Connecting)
+                            UpdateState(ConnectionState.Connected);
+                        return;
+                    case TunnelMonitorUpdateKind.ConnectionTimedOut:
+                        if (_currentState == ConnectionState.Connecting)
+                            await HandleTunnelConnectionTimeoutAsync(update.Generation);
+                        return;
+                    case TunnelMonitorUpdateKind.TunnelInactive:
+                        if (_currentState == ConnectionState.Connected)
+                            await HandleTunnelInactiveAsync(update.Generation);
+                        return;
+                    case TunnelMonitorUpdateKind.Statistics:
+                        if (_currentState == ConnectionState.Connected)
+                            ApplyTunnelStatistics(update.Statistics);
+                        return;
+                    case TunnelMonitorUpdateKind.QueryFailed:
+                        if (update.ConnectionQuery != null)
                         {
-                            Generation = generation,
-                            Diagnostic = diagnostic ?? "Unable to query the native tunnel state."
-                        });
-                        e.Cancel = true;
-                        return;
-                    }
-
-                    if (!connected && timeout.ElapsedMilliseconds >= TunnelConnectionTimeoutMilliseconds)
-                    {
-                        worker.ReportProgress(0, new TunnelConnectionProgress
+                            await HandleTunnelMonitorQueryFailureAsync(
+                                update.Generation,
+                                update.ConnectionQuery,
+                                "tunnel active-state monitor");
+                        }
+                        else if (update.StatisticsQuery != null)
                         {
-                            Generation = generation,
-                            TimedOut = true
-                        });
-                        e.Cancel = true;
+                            await HandleTunnelMonitorQueryFailureAsync(
+                                update.Generation,
+                                update.StatisticsQuery,
+                                "tunnel statistics monitor");
+                        }
+
                         return;
-                    }
-
-                    worker.ReportProgress(0, new TunnelConnectionProgress
-                    {
-                        Generation = generation,
-                        Connected = connected
-                    });
-                } while (!worker.CancellationPending && generation == CurrentTunnelGeneration() && !connected);
-            };
-
-            worker.ProgressChanged += async (s, e) =>
+                    default:
+                        throw new ArgumentOutOfRangeException();
+                }
+            }
+            catch (Exception ex)
             {
-                try
-                {
-                    if (_shutdownComplete || !(e.UserState is TunnelConnectionProgress progress) ||
-                        progress.Generation != CurrentTunnelGeneration())
-                        return;
+                Trace.TraceError($"Tunnel monitor update handling failed unexpectedly: {ex.Message}");
+            }
+        }
 
-                    if (progress.TimedOut)
-                    {
-                        await HandleTunnelConnectionTimeoutAsync(progress.Generation);
-                        return;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(progress.Diagnostic))
-                    {
-                        await HandleTunnelMonitorFailureAsync(progress.Generation, progress.Diagnostic);
-                        return;
-                    }
-
-                    if (_currentState == ConnectionState.Connecting && progress.Connected)
-                        UpdateState(ConnectionState.Connected);
-                }
-                catch (Exception ex)
-                {
-                    Trace.TraceError(
-                        $"Tunnel connection monitor progress handling failed unexpectedly: {ex.Message}");
-                }
-            };
-
-            worker.RunWorkerCompleted += async (s, e) =>
+        private async Task HandleTunnelMonitorQueryFailureAsync<T>(int generation,
+            NativeOperationResult<T> result, string context)
+        {
+            var diagnostic = result.Diagnostic ?? $"The native {context} query failed.";
+            if (result.TimedOut)
             {
-                try
-                {
-                    if (_shutdownComplete || IsDisposed || Disposing)
-                        return;
+                TrackTimedOutNativeOperation(result, context);
+                MarkNativeRecoveryRequired(_tunnelLifecycle.ProfileName, $"{context}: {diagnostic}");
+                return;
+            }
 
-                    if (e.Error != null)
-                    {
-                        await HandleTunnelMonitorFailureAsync(CurrentTunnelGeneration(),
-                            $"Tunnel connection monitor stopped unexpectedly: {e.Error.Message}");
-                        return;
-                    }
+            await HandleTunnelMonitorFailureAsync(generation, diagnostic);
+        }
 
-                    if (e.Cancelled)
-                        return;
+        private void ApplyTunnelStatistics(WgbStats stats)
+        {
+            if (layoutState.Controls["txtHandshake"] is TextBox txtHandshake)
+                txtHandshake.Text = stats.time_since_last_handshake.AsHandshakeAge();
 
-                    if (_currentState != ConnectionState.Connecting)
-                        return;
+            if (layoutState.Controls["txtTransfer"] is TextBox txtTransfer)
+                txtTransfer.Text = string.Format(Resources.StateTransferValue,
+                    stats.rx_bytes.AsHumanReadable(),
+                    stats.tx_bytes.AsHumanReadable());
 
-                    var generation = CurrentTunnelGeneration();
-                    var queryResult = await _tunnelLifecycle.GetConnectedAsync(NativeQueryTimeoutMilliseconds);
-                    if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
-                        _currentState != ConnectionState.Connecting)
-                        return;
+            if (layoutState.Controls["txtRTT"] is TextBox txtRtt)
+                txtRtt.Text = string.Format(Resources.StateRTTValue, stats.estimated_rtt);
 
-                    if (!queryResult.Succeeded)
-                    {
-                        await HandleTunnelMonitorFailureAsync(generation,
-                            queryResult.Diagnostic ?? "Unable to query the native tunnel state.");
-                        return;
-                    }
-
-                    if (!queryResult.Value && !worker.IsBusy)
-                        worker.RunWorkerAsync(CurrentTunnelGeneration());
-                }
-                catch (Exception ex)
-                {
-                    await HandleTunnelMonitorFailureAsync(CurrentTunnelGeneration(),
-                        $"Tunnel connection monitor completion handling failed unexpectedly: {ex.Message}");
-                }
-            };
-
-            return worker;
+            if (layoutState.Controls["txtLoss"] is TextBox txtLoss)
+                txtLoss.Text = string.Format(Resources.StateLossValue, stats.estimated_loss * 100);
         }
 
         private async Task HandleTunnelMonitorFailureAsync(int generation, string diagnostic)
@@ -1209,167 +1239,6 @@ namespace WireSockUI.Forms
             });
         }
 
-        /// <summary>
-        ///     Initialize a <see cref="T:BackgroundWorker" /> which retrieves the connected tunnel state and updates it in the UI
-        /// </summary>
-        /// <returns>
-        ///     <see cref="T:BackgroundWorker" />
-        /// </returns>
-        private BackgroundWorker InitTunnelStateWorker()
-        {
-            var worker = new BackgroundWorker
-            {
-                WorkerSupportsCancellation = true,
-                WorkerReportsProgress = true
-            };
-
-            worker.DoWork += (s, e) =>
-            {
-                var generation = (int)e.Argument;
-
-                while (!worker.CancellationPending)
-                {
-                    if (generation != CurrentTunnelGeneration())
-                    {
-                        e.Cancel = true;
-                        return;
-                    }
-
-                    if (SleepUntilCancelled(worker, 1000))
-                    {
-                        e.Cancel = true;
-                        return;
-                    }
-
-                    if (!_tunnelLifecycle.TryGetConnected(out var connected, out var stateDiagnostic))
-                    {
-                        worker.ReportProgress(0, new TunnelStateProgress
-                        {
-                            Generation = generation,
-                            Diagnostic = stateDiagnostic ?? "Unable to query the native tunnel state."
-                        });
-                        e.Cancel = true;
-                        return;
-                    }
-
-                    if (!connected)
-                    {
-                        worker.ReportProgress(0, new TunnelStateProgress
-                        {
-                            Generation = generation,
-                            TunnelInactive = true
-                        });
-                        e.Cancel = true;
-                        return;
-                    }
-
-                    if (!_tunnelLifecycle.TryGetState(out var stats, out var statsDiagnostic))
-                    {
-                        worker.ReportProgress(0, new TunnelStateProgress
-                        {
-                            Generation = generation,
-                            Diagnostic = statsDiagnostic ?? "Unable to query native tunnel statistics."
-                        });
-                        e.Cancel = true;
-                        return;
-                    }
-
-                    worker.ReportProgress(0, new TunnelStateProgress
-                    {
-                        Generation = generation,
-                        Stats = stats
-                    });
-                }
-            };
-
-            worker.ProgressChanged += async (s, e) =>
-            {
-                try
-                {
-                    if (_shutdownComplete || !(e.UserState is TunnelStateProgress progress) ||
-                        progress.Generation != CurrentTunnelGeneration() || _currentState != ConnectionState.Connected)
-                        return;
-
-                    if (progress.TunnelInactive)
-                    {
-                        await HandleTunnelInactiveAsync(progress.Generation);
-                        return;
-                    }
-
-                    if (!string.IsNullOrWhiteSpace(progress.Diagnostic))
-                    {
-                        await HandleTunnelMonitorFailureAsync(progress.Generation, progress.Diagnostic);
-                        return;
-                    }
-
-                    var stats = progress.Stats;
-
-                    if (layoutState.Controls["txtHandshake"] is TextBox txtHandshake)
-                        txtHandshake.Text = stats.time_since_last_handshake.AsHandshakeAge();
-
-                    if (layoutState.Controls["txtTransfer"] is TextBox txtTransfer)
-                        txtTransfer.Text = string.Format(Resources.StateTransferValue,
-                            stats.rx_bytes.AsHumanReadable(),
-                            stats.tx_bytes.AsHumanReadable());
-
-                    if (layoutState.Controls["txtRTT"] is TextBox txtRtt)
-                        txtRtt.Text = string.Format(Resources.StateRTTValue, stats.estimated_rtt);
-
-                    if (layoutState.Controls["txtLoss"] is TextBox txtLoss)
-                        txtLoss.Text = string.Format(Resources.StateLossValue, stats.estimated_loss * 100);
-                }
-                catch (Exception ex)
-                {
-                    Trace.TraceError($"Tunnel state monitor progress handling failed unexpectedly: {ex.Message}");
-                }
-            };
-
-            worker.RunWorkerCompleted += async (s, e) =>
-            {
-                try
-                {
-                    if (_shutdownComplete || IsDisposed || Disposing)
-                        return;
-
-                    if (e.Error != null)
-                    {
-                        await HandleTunnelMonitorFailureAsync(CurrentTunnelGeneration(),
-                            $"Tunnel state monitor stopped unexpectedly: {e.Error.Message}");
-                        return;
-                    }
-
-                    if (e.Cancelled)
-                        return;
-
-                    if (_currentState != ConnectionState.Connected)
-                        return;
-
-                    var generation = CurrentTunnelGeneration();
-                    var queryResult = await _tunnelLifecycle.GetConnectedAsync(NativeQueryTimeoutMilliseconds);
-                    if (_shutdownComplete || generation != CurrentTunnelGeneration() ||
-                        _currentState != ConnectionState.Connected)
-                        return;
-
-                    if (!queryResult.Succeeded)
-                    {
-                        await HandleTunnelMonitorFailureAsync(generation,
-                            queryResult.Diagnostic ?? "Unable to query the native tunnel state.");
-                        return;
-                    }
-
-                    if (queryResult.Value && !worker.IsBusy)
-                        worker.RunWorkerAsync(CurrentTunnelGeneration());
-                }
-                catch (Exception ex)
-                {
-                    await HandleTunnelMonitorFailureAsync(CurrentTunnelGeneration(),
-                        $"Tunnel state monitor completion handling failed unexpectedly: {ex.Message}");
-                }
-            };
-
-            return worker;
-        }
-
         private async Task HandleTunnelInactiveAsync(int generation)
         {
             while (!TryBeginTunnelOperation(false))
@@ -1500,7 +1369,7 @@ namespace WireSockUI.Forms
 
                     cmiResetKillSwitch.Enabled = false;
 
-                    StartTunnelConnectionWorker();
+                    StartTunnelConnectionMonitor();
                     break;
                 case ConnectionState.Connected:
                     if (btnActivate != null)
@@ -1548,7 +1417,7 @@ namespace WireSockUI.Forms
 
                     gbxState.Visible = true;
 
-                    StartTunnelStateWorker();
+                    StartTunnelStateMonitor();
 
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)

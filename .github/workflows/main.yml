@@ -23,7 +23,7 @@ jobs:
           dotnet-version: '10.x'
 
       - name: Restore
-        run: dotnet restore WireSockUI.sln -p:Platform=x64
+        run: dotnet restore WireSockUI.sln -p:Platform=x64 -m:1
 
       - name: Verify formatting
         run: dotnet format WireSockUI.sln whitespace --verify-no-changes --no-restore
@@ -31,8 +31,14 @@ jobs:
       - name: Test
         run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Platform=x64 -p:UseSharedCompilation=false --no-restore
 
+  sdk-integration:
+    uses: ./.github/workflows/sdk-integration.yml
+    secrets: inherit
+
   build-and-package:
-    needs: test
+    needs:
+      - test
+      - sdk-integration
     strategy:
       matrix:
         platform: ['AnyCPU', 'x64', 'ARM64']

@@ -150,6 +150,16 @@ namespace WireSockUI.Forms
             }, timeoutMilliseconds, "The native tunnel-state query timed out.");
         }
 
+        public Task<NativeOperationResult<WgbStats>> GetStateAsync(int timeoutMilliseconds)
+        {
+            return RunWithTimeoutAsync(() =>
+            {
+                return _manager.TryGetState(out var state, out var diagnostic)
+                    ? NativeOperationResult<WgbStats>.Success(state)
+                    : NativeOperationResult<WgbStats>.Failure(diagnostic);
+            }, timeoutMilliseconds, "The native tunnel-statistics query timed out.");
+        }
+
         public Task<NativeOperationResult<bool>> ApplyKillSwitchAsync(bool enableKillSwitch,
             int timeoutMilliseconds)
         {
@@ -226,16 +236,6 @@ namespace WireSockUI.Forms
                         "The native tunnel handle remained allocated after shutdown cleanup returned.", false)
                     : NativeOperationResult<bool>.Success(true);
             }, timeoutMilliseconds, "The native shutdown cleanup timed out.");
-        }
-
-        public bool TryGetConnected(out bool connected, out string diagnostic)
-        {
-            return _manager.TryGetConnected(out connected, out diagnostic);
-        }
-
-        public bool TryGetState(out WgbStats state, out string diagnostic)
-        {
-            return _manager.TryGetState(out state, out diagnostic);
         }
 
         internal bool TryReleasePreservedNetworkLock(out string diagnostic)

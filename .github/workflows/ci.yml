@@ -29,7 +29,7 @@ jobs:
           dotnet-version: '10.x'
 
       - name: Restore
-        run: dotnet restore WireSockUI.sln /p:Platform=x64
+        run: dotnet restore WireSockUI.sln /p:Platform=x64 -m:1
 
       - name: Verify formatting
         run: dotnet format WireSockUI.sln whitespace --verify-no-changes --no-restore

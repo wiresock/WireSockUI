@@ -96,18 +96,15 @@ namespace WireSockUI
                     Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
-            if (!IsWireSockArchitectureSupported())
+            if (!IsWireSockInstalled(out var wireSockDiagnostic, out var installationCandidateFound))
             {
-                MessageBox.Show(Resources.AppUnsupportedArchMessage, Resources.AppNoWireSockTitle,
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                Environment.Exit(1);
-            }
-
-            if (!IsWireSockInstalled())
-            {
-                MessageBox.Show(Resources.AppNoWireSockMessage, Resources.AppNoWireSockTitle, MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
-                OpenBrowser(Resources.AppWireSockURL);
+                var message = string.IsNullOrWhiteSpace(wireSockDiagnostic)
+                    ? Resources.AppNoWireSockMessage
+                    : $"{Resources.AppNoWireSockMessage}{Environment.NewLine}{Environment.NewLine}{wireSockDiagnostic}";
+                MessageBox.Show(message, Resources.AppNoWireSockTitle, MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                if (!installationCandidateFound)
+                    OpenBrowser(Resources.AppWireSockURL);
 
                 Environment.Exit(1);
             }
@@ -135,16 +132,14 @@ namespace WireSockUI
                 return false;
 
             var applicationDirectory = Path.GetDirectoryName(normalizedExecutable);
-            string[] companionFiles;
-            try
-            {
-                companionFiles = Directory.GetFiles(applicationDirectory, "*", SearchOption.TopDirectoryOnly);
-            }
-            catch (Exception ex)
-            {
-                diagnostic =
-                    $"Unable to enumerate WireSock UI managed dependencies in '{applicationDirectory}': {ex.Message}";
+            if (!TryEnumerateApplicationPayloadEntries(applicationDirectory, out var companionFiles,
+                    out var payloadDirectories, out diagnostic))
                 return false;
+
+            foreach (var payloadDirectory in payloadDirectories)
+            {
+                if (!TryValidateApplicationPayloadDirectory(payloadDirectory, out diagnostic))
+                    return false;
             }
 
             foreach (var companionFile in companionFiles)
@@ -163,6 +158,103 @@ namespace WireSockUI
             }
 
             return true;
+        }
+
+        internal static bool TryEnumerateApplicationPayloadEntries(string applicationDirectory,
+            out string[] files, out string[] directories, out string diagnostic)
+        {
+            files = new string[0];
+            directories = new string[0];
+            diagnostic = null;
+
+            var normalizedDirectory = NormalizePathDirectoryCore(applicationDirectory, false);
+            if (normalizedDirectory == null)
+            {
+                diagnostic = "The WireSock UI application directory path is invalid.";
+                return false;
+            }
+
+            var pendingDirectories = new Stack<string>();
+            var discoveredDirectories = new List<string>();
+            var discoveredFiles = new List<string>();
+            pendingDirectories.Push(normalizedDirectory);
+
+            try
+            {
+                while (pendingDirectories.Count > 0)
+                {
+                    var currentDirectory = pendingDirectories.Pop();
+                    if (!TryGetExistingAttributes(currentDirectory, out var attributes, out diagnostic))
+                    {
+                        if (string.IsNullOrWhiteSpace(diagnostic))
+                            diagnostic =
+                                $"Application payload path '{EscapeDiagnosticText(currentDirectory)}' is not an accessible directory.";
+                        return false;
+                    }
+
+                    if ((attributes & FileAttributes.Directory) == 0)
+                    {
+                        diagnostic =
+                            $"Application payload path '{EscapeDiagnosticText(currentDirectory)}' is not an accessible directory.";
+                        return false;
+                    }
+
+                    if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    {
+                        diagnostic = $"Application payload directory '{currentDirectory}' is a reparse point.";
+                        return false;
+                    }
+
+                    discoveredDirectories.Add(currentDirectory);
+                    discoveredFiles.AddRange(Directory.GetFiles(currentDirectory, "*", SearchOption.TopDirectoryOnly));
+
+                    foreach (var childDirectory in Directory.GetDirectories(
+                                 currentDirectory, "*", SearchOption.TopDirectoryOnly))
+                        pendingDirectories.Push(childDirectory);
+                }
+            }
+            catch (Exception ex)
+            {
+                diagnostic =
+                    $"Unable to enumerate WireSock UI application payload in '{EscapeDiagnosticText(normalizedDirectory)}': {EscapeDiagnosticText(ex.Message)}";
+                return false;
+            }
+
+            files = discoveredFiles.ToArray();
+            directories = discoveredDirectories.ToArray();
+            return true;
+        }
+
+        internal static bool TryValidateApplicationPayloadDirectory(string directory, out string diagnostic)
+        {
+            diagnostic = null;
+            if (!TryGetExistingAttributes(directory, out var attributes, out diagnostic))
+            {
+                if (string.IsNullOrWhiteSpace(diagnostic))
+                    diagnostic =
+                        $"Application payload path '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
+                return false;
+            }
+
+            if ((attributes & FileAttributes.Directory) == 0)
+            {
+                diagnostic =
+                    $"Application payload path '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
+                return false;
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                diagnostic = $"Application payload directory '{directory}' is a reparse point.";
+                return false;
+            }
+
+            if (!IsPotentiallyUserWritableDirectoryCore(directory, false))
+                return true;
+
+            diagnostic =
+                $"Application payload directory '{directory}' is writable by or owned by non-administrative users.";
+            return false;
         }
 
         private static void RegisterUnhandledExceptionHandlers()
@@ -288,17 +380,34 @@ namespace WireSockUI
         ///     Determine if the WireSock library components are installed.
         /// </summary>
         /// <returns><c>true</c> if installed, otherwise <c>false</c></returns>
-        private static bool IsWireSockInstalled()
+        private static bool IsWireSockInstalled(out string diagnostic, out bool installationCandidateFound)
         {
+            var diagnostics = new List<string>();
             foreach (var candidate in EnumerateWireSockLibraryDirectoryCandidates())
             {
-                if (!TryValidateWireSockLibraryDirectory(candidate, out var libraryDirectory))
+                if (!TryValidateWireSockLibraryDirectory(candidate, out var libraryDirectory,
+                        out var candidateDiagnostic))
+                {
+                    if (!string.IsNullOrWhiteSpace(candidateDiagnostic))
+                        diagnostics.Add(candidateDiagnostic);
                     continue;
+                }
 
-                if (ConfigureWireSockLibraryDirectory(libraryDirectory))
+                if (ConfigureWireSockLibraryDirectory(libraryDirectory, out candidateDiagnostic))
+                {
+                    diagnostic = null;
+                    installationCandidateFound = true;
                     return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(candidateDiagnostic))
+                    diagnostics.Add(candidateDiagnostic);
             }
 
+            installationCandidateFound = diagnostics.Count != 0;
+            diagnostic = !installationCandidateFound
+                ? "No trusted wgbooster.dll installation candidate was found."
+                : string.Join(Environment.NewLine, diagnostics);
             return false;
         }
 
@@ -315,48 +424,91 @@ namespace WireSockUI
 
         internal static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory)
         {
+            return TryValidateWireSockLibraryDirectory(directory, out libraryDirectory, out _);
+        }
+
+        internal static bool TryValidateWireSockLibraryDirectory(string directory, out string libraryDirectory,
+            out string diagnostic)
+        {
             libraryDirectory = null;
+            diagnostic = null;
 
             var fullDirectory = NormalizePathDirectory(directory);
-            if (fullDirectory == null ||
-                !TryGetExistingAttributes(fullDirectory, out var directoryAttributes) ||
-                (directoryAttributes & FileAttributes.Directory) == 0)
+            if (fullDirectory == null)
+                return false;
+
+            if (!TryGetExistingAttributes(fullDirectory, out var directoryAttributes, out diagnostic))
+            {
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    Trace.TraceWarning(diagnostic);
+                return false;
+            }
+
+            if ((directoryAttributes & FileAttributes.Directory) == 0)
                 return false;
 
             if ((directoryAttributes & FileAttributes.ReparsePoint) != 0)
             {
-                Trace.TraceWarning(
-                    $"Skipping WireSock library directory '{fullDirectory}' because it is a reparse point.");
+                diagnostic =
+                    $"Skipping WireSock library directory '{fullDirectory}' because it is a reparse point.";
+                Trace.TraceWarning(diagnostic);
                 return false;
             }
 
             var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
-            if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes))
+            if (!TryGetExistingAttributes(libraryPath, out var libraryAttributes, out diagnostic))
+            {
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    Trace.TraceWarning(diagnostic);
                 return false;
+            }
 
             if ((libraryAttributes & FileAttributes.Directory) != 0)
             {
-                Trace.TraceWarning(
-                    $"Skipping WireSock library '{libraryPath}' because it is a directory.");
+                diagnostic = $"Skipping WireSock library '{libraryPath}' because it is a directory.";
+                Trace.TraceWarning(diagnostic);
                 return false;
             }
 
             if ((libraryAttributes & FileAttributes.ReparsePoint) != 0)
             {
-                Trace.TraceWarning(
-                    $"Skipping WireSock library '{libraryPath}' because it is a reparse point.");
+                diagnostic = $"Skipping WireSock library '{libraryPath}' because it is a reparse point.";
+                Trace.TraceWarning(diagnostic);
                 return false;
             }
 
-            if (!TryValidateTrustedFilePath(libraryPath, "WireSock library", out var trustDiagnostic))
+            if (!TryValidateTrustedFilePath(libraryPath, "WireSock library", out diagnostic))
             {
-                Trace.TraceWarning(trustDiagnostic);
+                Trace.TraceWarning(diagnostic);
                 return false;
             }
 
-            if (!TryValidateTrustedWireSockCompanionFiles(fullDirectory, libraryPath, out trustDiagnostic))
+            if (!TryValidateTrustedWireSockCompanionFiles(fullDirectory, libraryPath, out diagnostic))
             {
-                Trace.TraceWarning(trustDiagnostic);
+                Trace.TraceWarning(diagnostic);
+                return false;
+            }
+
+            if (!WindowsBinaryArchitectureInfo.TryGetCurrentProcessArchitecture(
+                    out var processArchitecture, out diagnostic))
+            {
+                diagnostic = $"Unable to determine the WireSock UI process architecture: {diagnostic}";
+                Trace.TraceWarning(diagnostic);
+                return false;
+            }
+
+            if (!WindowsBinaryArchitectureInfo.TryReadPortableExecutableArchitecture(
+                    libraryPath, out var libraryArchitecture, out diagnostic))
+            {
+                Trace.TraceWarning(diagnostic);
+                return false;
+            }
+
+            if (!WindowsBinaryArchitectureInfo.AreCompatible(processArchitecture, libraryArchitecture))
+            {
+                diagnostic =
+                    $"WireSock library '{libraryPath}' targets {WindowsBinaryArchitectureInfo.Format(libraryArchitecture)}, but WireSock UI is running as {WindowsBinaryArchitectureInfo.Format(processArchitecture)}.";
+                Trace.TraceWarning(diagnostic);
                 return false;
             }
 
@@ -476,28 +628,36 @@ namespace WireSockUI
             return locations.ToArray();
         }
 
-        private static bool ConfigureWireSockLibraryDirectory(string directory)
+        private static bool ConfigureWireSockLibraryDirectory(string directory, out string diagnostic)
         {
+            diagnostic = null;
             if (string.IsNullOrWhiteSpace(directory))
+            {
+                diagnostic = "The WireSock library directory path is empty.";
                 return false;
+            }
 
             var fullDirectory = NormalizePathDirectory(directory);
             if (fullDirectory == null)
+            {
+                diagnostic = $"The WireSock library directory '{directory}' is invalid.";
                 return false;
+            }
 
             var libraryPath = Path.Combine(fullDirectory, "wgbooster.dll");
 
             try
             {
-                if (TryConfigureRestrictedDllSearchPath(fullDirectory, libraryPath, out var diagnostic))
+                if (TryConfigureRestrictedDllSearchPath(fullDirectory, libraryPath, out diagnostic))
                     return true;
 
-                Trace.TraceWarning(
-                    $"Failed to configure WireSock library '{libraryPath}': {diagnostic}");
+                diagnostic = $"Failed to configure WireSock library '{libraryPath}': {diagnostic}";
+                Trace.TraceWarning(diagnostic);
             }
             catch (Exception ex)
             {
-                Trace.TraceWarning($"Failed to load WireSock library '{libraryPath}': {ex.Message}");
+                diagnostic = $"Failed to load WireSock library '{libraryPath}': {ex.Message}";
+                Trace.TraceWarning(diagnostic);
             }
 
             return false;
@@ -607,10 +767,11 @@ namespace WireSockUI
             }
         }
 
-        private static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
-            bool warnOnFailure = false)
+        internal static bool TryGetExistingAttributes(string path, out FileAttributes attributes,
+            out string diagnostic)
         {
             attributes = 0;
+            diagnostic = null;
 
             try
             {
@@ -627,11 +788,15 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                if (warnOnFailure)
-                    Trace.TraceWarning($"Unable to inspect file system attributes for '{path}': {ex.Message}");
-
+                diagnostic =
+                    $"Unable to inspect file system attributes for '{EscapeDiagnosticText(path)}': {EscapeDiagnosticText(ex.Message)}";
                 return false;
             }
+        }
+
+        private static string EscapeDiagnosticText(string value)
+        {
+            return (value ?? string.Empty).Replace("\0", "\\0");
         }
 
         internal static bool IsPotentiallyUserWritableDirectory(string directory)
@@ -698,10 +863,16 @@ namespace WireSockUI
                 return false;
             }
 
-            if (!TryGetExistingAttributes(normalizedFile, out var fileAttributes) ||
-                (fileAttributes & FileAttributes.Directory) != 0)
+            if (!TryGetExistingAttributes(normalizedFile, out var fileAttributes, out diagnostic))
             {
-                diagnostic = $"{label} '{normalizedFile}' is not a regular file.";
+                if (string.IsNullOrWhiteSpace(diagnostic))
+                    diagnostic = $"{label} '{EscapeDiagnosticText(normalizedFile)}' is not a regular file.";
+                return false;
+            }
+
+            if ((fileAttributes & FileAttributes.Directory) != 0)
+            {
+                diagnostic = $"{label} '{EscapeDiagnosticText(normalizedFile)}' is not a regular file.";
                 return false;
             }
 
@@ -722,10 +893,18 @@ namespace WireSockUI
             var isContainingDirectory = true;
             while (!string.IsNullOrWhiteSpace(directory))
             {
-                if (!TryGetExistingAttributes(directory, out var directoryAttributes) ||
-                    (directoryAttributes & FileAttributes.Directory) == 0)
+                if (!TryGetExistingAttributes(directory, out var directoryAttributes, out diagnostic))
                 {
-                    diagnostic = $"{label} ancestor '{directory}' is not an accessible directory.";
+                    if (string.IsNullOrWhiteSpace(diagnostic))
+                        diagnostic =
+                            $"{label} ancestor '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
+                    return false;
+                }
+
+                if ((directoryAttributes & FileAttributes.Directory) == 0)
+                {
+                    diagnostic =
+                        $"{label} ancestor '{EscapeDiagnosticText(directory)}' is not an accessible directory.";
                     return false;
                 }
 
@@ -858,7 +1037,7 @@ namespace WireSockUI
             return false;
         }
 
-        private static bool IsTrustedAdministrativeSid(SecurityIdentifier sid)
+        internal static bool IsTrustedAdministrativeSid(SecurityIdentifier sid)
         {
             return sid.IsWellKnown(WellKnownSidType.LocalSystemSid) ||
                    sid.IsWellKnown(WellKnownSidType.BuiltinAdministratorsSid) ||
@@ -868,7 +1047,7 @@ namespace WireSockUI
                        StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool IsTrustedOwnerSid(SecurityIdentifier sid)
+        internal static bool IsTrustedOwnerSid(SecurityIdentifier sid)
         {
             if (IsTrustedAdministrativeSid(sid))
                 return true;
@@ -939,18 +1118,5 @@ namespace WireSockUI
             return fullPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
 
-        /// <summary>
-        ///     Determine if running under a supported architecture.
-        /// </summary>
-        /// <remarks>
-        ///     WireSock VPN Client's wgbooster.dll currently forces us to match the operating system's architecture. Under
-        ///     normal circumstances this check always succeeds, but under a debugger AnyCPU builds may run as x86 or x64
-        ///     processes, disregarding the host OS bitness.
-        /// </remarks>
-        /// <returns><c>true</c> if supported, otherwise <c>false</c></returns>
-        private static bool IsWireSockArchitectureSupported()
-        {
-            return Environment.Is64BitOperatingSystem == Environment.Is64BitProcess;
-        }
     }
 }

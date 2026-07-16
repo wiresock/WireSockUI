@@ -511,18 +511,9 @@ namespace WireSockUI.Forms
 
             try
             {
-                if (Profile.ProfilePathExists(profilePath))
-                {
-                    Profile.EnsureRegularProfileFile(profilePath);
-                    File.Replace(tmpProfile, profilePath, null);
-                }
-                else
-                {
-                    File.Move(tmpProfile, profilePath);
-                }
-
-                if (isRename)
-                    TryDeleteOriginalProfile(_originalProfileName, profilePath);
+                var originalProfilePath = isRename ? Profile.GetProfilePath(_originalProfileName) : null;
+                ProfileFileTransaction.Commit(tmpProfile, profilePath, originalProfilePath);
+                tmpProfile = null;
             }
             catch (Exception ex)
             {
@@ -545,25 +536,6 @@ namespace WireSockUI.Forms
 
             ApplySyntaxHighlighting();
             return btnSave.Enabled;
-        }
-
-        private static void TryDeleteOriginalProfile(string originalProfileName, string newProfilePath)
-        {
-            try
-            {
-                var originalProfilePath = Profile.GetProfilePath(originalProfileName);
-                if (!string.Equals(Path.GetFullPath(originalProfilePath), Path.GetFullPath(newProfilePath),
-                        StringComparison.OrdinalIgnoreCase) &&
-                    Profile.ProfilePathExists(originalProfilePath))
-                {
-                    Profile.EnsureRegularProfileFile(originalProfilePath);
-                    File.Delete(originalProfilePath);
-                }
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to delete renamed profile '{originalProfileName}': {ex.Message}");
-            }
         }
 
         private static void TryDeleteTemporaryProfile(string tmpProfile)

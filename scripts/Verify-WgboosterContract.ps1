@@ -7,12 +7,16 @@ $ErrorActionPreference = 'Stop'
 $sdkRootPath = (Resolve-Path -LiteralPath $SdkRoot).Path
 $headerPath = Join-Path $sdkRootPath 'include\wgbooster.h'
 $definitionPath = Join-Path $sdkRootPath 'wgbooster\wgbooster.def'
+$managedSourcePath = Join-Path $PSScriptRoot '..\WireSockUI\Native\WireguardBoosterExports.cs'
 
 if (-not (Test-Path -LiteralPath $headerPath -PathType Leaf)) {
     throw "WireSock SDK header was not found at '$headerPath'."
 }
 if (-not (Test-Path -LiteralPath $definitionPath -PathType Leaf)) {
     throw "WireSock SDK export definition was not found at '$definitionPath'."
+}
+if (-not (Test-Path -LiteralPath $managedSourcePath -PathType Leaf)) {
+    throw "WireSock UI managed SDK declarations were not found at '$managedSourcePath'."
 }
 
 $requiredExports = @(
@@ -44,6 +48,7 @@ $requiredExports = @(
 
 $definition = Get-Content -LiteralPath $definitionPath -Raw
 $header = Get-Content -LiteralPath $headerPath -Raw
+$managedSource = Get-Content -LiteralPath $managedSourcePath -Raw
 $missingExports = @($requiredExports | Where-Object {
     $definition -notmatch "(?m)^\s*$([regex]::Escape($_))(?:\s|$)"
 })
@@ -103,4 +108,25 @@ foreach ($check in $signatureChecks.GetEnumerator()) {
     }
 }
 
-Write-Host "WireSock SDK header/export contract is compatible with WireSock UI ($($requiredExports.Count) exports checked)."
+$missingManagedDeclarations = @($requiredExports | Where-Object {
+    $managedSource -notmatch "(?s)\[DllImport\(\s*`"wgbooster\.dll`"(?:(?!\)\]).)*CallingConvention\s*=\s*CallingConvention\.StdCall(?:(?!\)\]).)*\)\]\s*(?:\[return:\s*MarshalAs\([^]]+\)\]\s*)?public\s+static\s+extern\s+[^;]+\b$([regex]::Escape($_))\s*\("
+})
+if ($missingManagedDeclarations.Count -gt 0) {
+    throw "WireSock UI managed declarations are missing SDK exports: $($missingManagedDeclarations -join ', ')"
+}
+
+$managedChecks = [ordered]@{
+    'WgbLogLevel values' =
+        'enum\s+WgbLogLevel\s*\{[^}]*Error\s*=\s*0[^}]*Warning\s*=\s*1[^}]*Info\s*=\s*2[^}]*Debug\s*=\s*4[^}]*All\s*=\s*255[^}]*\}'
+    'WgbNetworkLockMode values' =
+        'enum\s+WgbNetworkLockMode\s*\{[^}]*Disabled\s*=\s*0[^}]*Enabled\s*=\s*1[^}]*\}'
+    'WgbStats packed layout' =
+        '\[StructLayout\(LayoutKind\.Sequential,\s*Pack\s*=\s*1\)\]\s*public\s+struct\s+WgbStats\s*\{\s*public\s+long\s+\w+\s*;\s*public\s+ulong\s+\w+\s*;\s*public\s+ulong\s+\w+\s*;\s*public\s+float\s+\w+\s*;\s*public\s+int\s+\w+\s*;[^}]*\}'
+}
+foreach ($check in $managedChecks.GetEnumerator()) {
+    if ($managedSource -notmatch $check.Value) {
+        throw "WireSock UI managed contract check failed for $($check.Key)."
+    }
+}
+
+Write-Host "WireSock SDK native and managed contracts are compatible with WireSock UI ($($requiredExports.Count) exports checked)."
