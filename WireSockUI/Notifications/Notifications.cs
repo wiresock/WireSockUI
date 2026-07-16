@@ -230,7 +230,7 @@ namespace WireSockUI.Notifications
                             new XElement("text", body),
                             new XElement("image",
                                 new XAttribute("src", NotificationContent.BuildLocalImageUri(icon)),
-                                new XAttribute("alt", "WireSock UI"),
+                                new XAttribute("alt", Resources.FormMain),
                                 new XAttribute("placement", "appLogoOverride"),
                                 new XAttribute("hint-crop", "circle")))));
 

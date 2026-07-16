@@ -3956,8 +3956,18 @@ namespace WireSockUI.Tests
         {
             var executablePath = Assembly.GetExecutingAssembly().Location;
             string currentUserId;
+            string currentUserName;
             using (var identity = WindowsIdentity.GetCurrent())
+            {
                 currentUserId = identity.User?.Value ?? throw new InvalidOperationException("Current user SID unavailable.");
+                currentUserName = identity.Name;
+            }
+
+            AssertTrue(FrmSettings.IsSameTaskUser(currentUserName, currentUserId),
+                "Expected account names and SID strings for the same user to compare equal.");
+            AssertFalse(FrmSettings.IsSameTaskUser(currentUserId,
+                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value),
+                "Expected different user SIDs not to compare equal.");
 
             using (var taskService = new Microsoft.Win32.TaskScheduler.TaskService())
             using (var definition = taskService.NewTask())
@@ -3989,8 +3999,23 @@ namespace WireSockUI.Tests
                     "Expected an any-user logon trigger not to be accepted.");
                 AssertTrue(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
                     "Expected an older WireSock UI task to remain replaceable during migration.");
+
+                definition.Principal.UserId =
+                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
+                AssertFalse(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
+                    "Expected another user's autorun principal not to be replaceable.");
+
+                definition.Principal.UserId = null;
+                ((Microsoft.Win32.TaskScheduler.LogonTrigger)definition.Triggers[0]).UserId =
+                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
+                AssertFalse(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
+                    "Expected another user's logon trigger not to be replaceable.");
+
+                definition.Principal.UserId = currentUserName;
                 ((Microsoft.Win32.TaskScheduler.LogonTrigger)definition.Triggers[0]).UserId = currentUserId;
                 definition.Settings.ExecutionTimeLimit = TimeSpan.Zero;
+                AssertTrue(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
+                    "Expected a current-user account name and SID trigger to remain replaceable.");
 
                 definition.Actions.Add(new Microsoft.Win32.TaskScheduler.ExecAction("cmd.exe"));
                 AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(

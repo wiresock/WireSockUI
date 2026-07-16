@@ -440,7 +440,12 @@ namespace WireSockUI.Forms
                 !IsSameExecutablePath(execAction.Path, executablePath))
                 return false;
 
-            return definition.Triggers[0] is LogonTrigger logonTrigger && logonTrigger.Enabled;
+            if (!(definition.Triggers[0] is LogonTrigger logonTrigger) || !logonTrigger.Enabled)
+                return false;
+
+            var currentUserId = GetCurrentUserId();
+            return IsTaskUserReplaceable(definition.Principal.UserId, currentUserId) &&
+                   IsTaskUserReplaceable(logonTrigger.UserId, currentUserId);
         }
 
         private static string GetCurrentUserId()
@@ -454,24 +459,39 @@ namespace WireSockUI.Forms
             }
         }
 
-        private static bool IsSameTaskUser(string first, string second)
+        private static bool IsTaskUserReplaceable(string taskUserId, string currentUserId)
+        {
+            return string.IsNullOrWhiteSpace(taskUserId) || IsSameTaskUser(taskUserId, currentUserId);
+        }
+
+        internal static bool IsSameTaskUser(string first, string second)
         {
             if (string.IsNullOrWhiteSpace(first) || string.IsNullOrWhiteSpace(second))
                 return false;
 
+            var firstResolved = TryGetSecurityIdentifier(first, out var firstSid);
+            var secondResolved = TryGetSecurityIdentifier(second, out var secondSid);
+            if (firstResolved && secondResolved)
+                return firstSid.Equals(secondSid);
+
+            return string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool TryGetSecurityIdentifier(string identity, out SecurityIdentifier sid)
+        {
+            sid = null;
             try
             {
-                var firstSid = GetSecurityIdentifier(first);
-                var secondSid = GetSecurityIdentifier(second);
-                return firstSid != null && firstSid.Equals(secondSid);
+                sid = GetSecurityIdentifier(identity);
+                return sid != null;
             }
             catch (IdentityNotMappedException)
             {
-                return string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+                return false;
             }
             catch (SystemException)
             {
-                return string.Equals(first, second, StringComparison.OrdinalIgnoreCase);
+                return false;
             }
         }
 
