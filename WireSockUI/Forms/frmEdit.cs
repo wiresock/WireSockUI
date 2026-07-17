@@ -469,9 +469,7 @@ namespace WireSockUI.Forms
 
             try
             {
-                Global.EnsureConfigsFolderExists();
-                tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
-                File.WriteAllText(tmpProfile, txtEditor.Text);
+                tmpProfile = ProfileFileTransaction.WriteTemporaryProfile(txtEditor.Text);
                 profile = new Profile(tmpProfile);
             }
             catch (Exception ex)
@@ -554,7 +552,7 @@ namespace WireSockUI.Forms
 
             try
             {
-                var originalProfilePath = isRename ? Profile.GetProfilePath(_originalProfileName) : null;
+                var originalProfilePath = isExistingProfile ? Profile.GetProfilePath(_originalProfileName) : null;
                 ProfileFileTransaction.Commit(tmpProfile, profilePath, originalProfilePath);
                 tmpProfile = null;
             }
@@ -583,15 +581,7 @@ namespace WireSockUI.Forms
 
         private static void TryDeleteTemporaryProfile(string tmpProfile)
         {
-            try
-            {
-                if (File.Exists(tmpProfile))
-                    File.Delete(tmpProfile);
-            }
-            catch
-            {
-                // Best-effort cleanup must not hide the original save or validation failure.
-            }
+            ProfileFileTransaction.TryDeleteTemporaryProfile(tmpProfile);
         }
 
         private void OnProfileChanged(object sender, EventArgs e)

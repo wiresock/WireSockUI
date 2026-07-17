@@ -44,6 +44,7 @@ namespace WireSockUI.Forms
         private readonly TunnelLifecycleController _tunnelLifecycle;
         private readonly TunnelMonitor _tunnelMonitor;
         private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
+        private readonly SettingsUpdateCoordinator _settingsUpdateCoordinator;
         private readonly ProfileCatalog _profileCatalog = new ProfileCatalog();
         private readonly UiLogMessageBuffer _uiLogBuffer;
 
@@ -68,6 +69,9 @@ namespace WireSockUI.Forms
                 TryScheduleLogDrain,
                 AppendWireSockLogMessages);
             _tunnelLifecycle = new TunnelLifecycleController(OnWireSockLogMessage);
+            _settingsUpdateCoordinator = new SettingsUpdateCoordinator(
+                ApplyLogLevelSettingAsync,
+                ApplyKillSwitchSettingAsync);
             _tunnelMonitor = new TunnelMonitor(
                 _tunnelLifecycle.GetConnectedAsync,
                 _tunnelLifecycle.GetStateAsync,
@@ -1248,6 +1252,7 @@ namespace WireSockUI.Forms
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to clean up timed-out tunnel connect: {ex.Message}");
+                diagnostic = NativeOperationRecoveryPolicy.AppendDiagnostic(diagnostic, ex.Message);
                 cleanupFailed = true;
             }
             finally
@@ -1833,7 +1838,7 @@ namespace WireSockUI.Forms
                 if (!ProfileScriptWarning.ConfirmIfProfileHasScriptHooks(this, profile))
                     return false;
 
-                File.Move(tmpProfile, destinationPath);
+                ProfileFileTransaction.Commit(tmpProfile, destinationPath);
                 tmpProfile = null;
                 return true;
             }
@@ -1937,36 +1942,12 @@ namespace WireSockUI.Forms
                         var requestedSettings = form.RequestedSettings;
                         var stateBeforeSettingsUpdate = _currentState;
                         var profileBeforeSettingsUpdate = _tunnelLifecycle.ProfileName;
-                        var logLevelChanged = !string.Equals(requestedSettings.LogLevel,
-                            previousSettings.LogLevel, StringComparison.Ordinal);
-                        var killSwitchRequiresNativeUpdate =
-                            requestedSettings.EnableKillSwitch != previousSettings.EnableKillSwitch ||
-                            _tunnelLifecycle.HasTunnelHandle;
-                        var result = await ApplySettingsUpdatesAsync(new[]
-                        {
-                            new CompensatingTransactionStep(
-                                "autorun task",
-                                () => Task.FromResult(form.ApplyAutoRunChange()),
-                                () => Task.FromResult(form.RollbackAutoRunChange())),
-                            new CompensatingTransactionStep(
-                                "native log level",
-                                () => logLevelChanged
-                                    ? ApplyLogLevelSettingAsync(requestedSettings.LogLevel)
-                                    : Task.FromResult(true),
-                                () => logLevelChanged
-                                    ? ApplyLogLevelSettingAsync(previousSettings.LogLevel)
-                                    : Task.FromResult(true)),
-                            new CompensatingTransactionStep(
-                                "settings persistence",
-                                () => PersistSettingsAsync(requestedSettings),
-                                () => PersistSettingsAsync(previousSettings)),
-                            new CompensatingTransactionStep(
-                                "native Kill Switch",
-                                () => ApplyKillSwitchSettingAsync(requestedSettings.EnableKillSwitch,
-                                    killSwitchRequiresNativeUpdate),
-                                () => ApplyKillSwitchSettingAsync(previousSettings.EnableKillSwitch,
-                                    killSwitchRequiresNativeUpdate))
-                        });
+                        var result = await _settingsUpdateCoordinator.ApplyAsync(
+                            previousSettings,
+                            requestedSettings,
+                            _tunnelLifecycle.HasTunnelHandle,
+                            () => Task.FromResult(form.ApplyAutoRunChange()),
+                            () => Task.FromResult(form.RollbackAutoRunChange()));
 
                         if (!result.Succeeded)
                         {
@@ -1989,12 +1970,6 @@ namespace WireSockUI.Forms
             }
         }
 
-        internal static Task<CompensatingTransactionResult> ApplySettingsUpdatesAsync(
-            IReadOnlyList<CompensatingTransactionStep> steps)
-        {
-            return CompensatingTransaction.ApplyAsync(steps);
-        }
-
         private async Task<bool> ApplyLogLevelSettingAsync(string logLevel)
         {
             var stateBeforeUpdate = _currentState;
@@ -2015,7 +1990,7 @@ namespace WireSockUI.Forms
             ConnectionState previousState,
             string profile)
         {
-            if (!IsNativeRecoveryRequired() || SettingsFailureRequiresNativeRecovery(result))
+            if (!IsNativeRecoveryRequired() || SettingsUpdateCoordinator.FailureRequiresNativeRecovery(result))
                 return;
 
             CompleteVerifiedNativeRecovery(
@@ -2040,12 +2015,6 @@ namespace WireSockUI.Forms
             return true;
         }
 
-        private static Task<bool> PersistSettingsAsync(ApplicationSettingsSnapshot settings)
-        {
-            settings.Persist();
-            return Task.FromResult(true);
-        }
-
         private void ShowSettingsTransactionFailure(CompensatingTransactionResult result)
         {
             var diagnostic = result.Exception?.Message ??
@@ -2057,7 +2026,7 @@ namespace WireSockUI.Forms
                                string.Join(", ", result.RollbackFailures));
 
             Trace.TraceError(message);
-            if (SettingsFailureRequiresNativeRecovery(result))
+            if (SettingsUpdateCoordinator.FailureRequiresNativeRecovery(result))
             {
                 Global.NativeRecoveryMarkers.Write("settings rollback failure", message);
                 _tunnelSession.RequireRecovery();
@@ -2065,12 +2034,6 @@ namespace WireSockUI.Forms
             }
 
             MessageBox.Show(message, Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-
-        internal static bool SettingsFailureRequiresNativeRecovery(CompensatingTransactionResult result)
-        {
-            if (result == null) throw new ArgumentNullException(nameof(result));
-            return result.RollbackFailed("native Kill Switch");
         }
 
         private async Task<NativeOperationResult<T>> AwaitTimedOutNativeOperationAsync<T>(

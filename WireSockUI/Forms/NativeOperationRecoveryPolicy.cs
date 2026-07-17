@@ -22,5 +22,15 @@ namespace WireSockUI.Forms
         {
             return operationResult?.TimedOut == true;
         }
+
+        internal static string AppendDiagnostic(string existingDiagnostic, string additionalDiagnostic)
+        {
+            if (string.IsNullOrWhiteSpace(existingDiagnostic))
+                return string.IsNullOrWhiteSpace(additionalDiagnostic) ? null : additionalDiagnostic;
+            if (string.IsNullOrWhiteSpace(additionalDiagnostic))
+                return existingDiagnostic;
+
+            return existingDiagnostic + " " + additionalDiagnostic;
+        }
     }
 }

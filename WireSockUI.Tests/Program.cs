@@ -30,6 +30,36 @@ namespace WireSockUI.Tests
         private static readonly string PublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)2, 32).ToArray());
         private const int SymbolicLinkFlagFile = 0;
         private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
+        private const int TestTimeoutMilliseconds = 120000;
+        private const int MoveFileWriteThrough = 0x8;
+
+        private sealed class TestExecutionResult
+        {
+            private TestExecutionResult(bool timedOut, Exception exception)
+            {
+                TimedOut = timedOut;
+                Exception = exception;
+            }
+
+            internal bool TimedOut { get; }
+            internal Exception Exception { get; }
+
+            internal static TestExecutionResult Success()
+            {
+                return new TestExecutionResult(false, null);
+            }
+
+            internal static TestExecutionResult Timeout()
+            {
+                return new TestExecutionResult(true, null);
+            }
+
+            internal static TestExecutionResult Failure(Exception exception)
+            {
+                return new TestExecutionResult(false,
+                    exception ?? throw new ArgumentNullException(nameof(exception)));
+            }
+        }
 
         private static bool TestKillSwitch
         {
@@ -59,6 +89,10 @@ namespace WireSockUI.Tests
         [return: MarshalAs(UnmanagedType.Bool)]
         private static extern bool CreateHardLink(string newFileName, string existingFileName,
             IntPtr securityAttributes);
+
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool MoveFileEx(string existingFileName, string newFileName, int flags);
 
         private static int Main(string[] args)
         {
@@ -171,6 +205,7 @@ namespace WireSockUI.Tests
                 { "Protected settings recover interrupted saves", ProtectedSettingsRecoverInterruptedSaves },
                 { "Application settings use protected connection values", ApplicationSettingsUseProtectedConnectionValues },
                 { "Settings transaction compensates failures in reverse order", SettingsTransactionCompensatesFailuresInReverseOrder },
+                { "Settings coordinator owns update sequencing", SettingsCoordinatorOwnsUpdateSequencing },
                 { "Settings rollback identifies native recovery requirements", SettingsRollbackIdentifiesNativeRecoveryRequirements },
                 { "Tunnel commands distinguish activation from deactivation", TunnelCommandsDistinguishActivationFromDeactivation },
                 { "Native timeout policy defers cleanup until completion", NativeTimeoutPolicyDefersCleanupUntilCompletion },
@@ -200,6 +235,11 @@ namespace WireSockUI.Tests
                 { "SDK smoke cleans up failed tunnel creation", SdkSmokeCleansUpFailedTunnelCreation },
                 { "SDK smoke runs final cleanup after failures", SdkSmokeRunsFinalCleanupAfterFailures },
                 { "Profile rename commits and rolls back transactionally", ProfileRenameCommitsAndRollsBackTransactionally },
+                { "Profile rename recovery completes interrupted transactions", ProfileRenameRecoveryCompletesInterruptedTransactions },
+                { "Profile rename recovery rejects ambiguous states", ProfileRenameRecoveryRejectsAmbiguousStates },
+                { "Profile rename recovery rejects active XML content", ProfileRenameRecoveryRejectsActiveXmlContent },
+                { "Profile transaction recovery removes orphaned temporary files", ProfileTransactionRecoveryRemovesOrphanedTemporaryFiles },
+                { "Test execution timeout policy is bounded", TestExecutionTimeoutPolicyIsBounded },
                 { "Single-instance event rejects broad access", SingleInstanceEventRejectsBroadAccess },
                 { "Tunnel profile state matches selections case-insensitively", TunnelProfileStateMatchesSelectionsCaseInsensitively },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
@@ -233,19 +273,54 @@ namespace WireSockUI.Tests
             foreach (var test in tests)
             {
                 var stopwatch = Stopwatch.StartNew();
-                try
-                {
-                    test.Value();
-                    Console.WriteLine($"PASS {test.Key} ({stopwatch.ElapsedMilliseconds} ms)");
-                }
-                catch (Exception ex)
+                var result = ExecuteTestWithTimeout(test.Value, TestTimeoutMilliseconds);
+                if (result.TimedOut)
                 {
                     failures++;
-                    Console.WriteLine($"FAIL {test.Key}:{Environment.NewLine}{ex}");
+                    Console.WriteLine(
+                        $"FAIL {test.Key}: exceeded the {TestTimeoutMilliseconds} ms per-test timeout.");
+                    return 1;
                 }
+
+                if (result.Exception != null)
+                {
+                    failures++;
+                    Console.WriteLine($"FAIL {test.Key}:{Environment.NewLine}{result.Exception}");
+                    continue;
+                }
+
+                Console.WriteLine($"PASS {test.Key} ({stopwatch.ElapsedMilliseconds} ms)");
             }
 
             return failures == 0 ? 0 : 1;
+        }
+
+        private static TestExecutionResult ExecuteTestWithTimeout(Action test, int timeoutMilliseconds)
+        {
+            if (test == null) throw new ArgumentNullException(nameof(test));
+            if (timeoutMilliseconds <= 0) throw new ArgumentOutOfRangeException(nameof(timeoutMilliseconds));
+
+            var task = Task.Run(test);
+            try
+            {
+                if (task.Wait(timeoutMilliseconds))
+                    return TestExecutionResult.Success();
+
+                task.ContinueWith(faultedTask =>
+                        GC.KeepAlive(faultedTask.Exception),
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+                return TestExecutionResult.Timeout();
+            }
+            catch (AggregateException ex)
+            {
+                return TestExecutionResult.Failure(ex.GetBaseException());
+            }
+            catch (Exception ex)
+            {
+                return TestExecutionResult.Failure(ex);
+            }
         }
 
         private static string GetCommandLineOption(IReadOnlyList<string> args, string optionName)
@@ -2781,7 +2856,7 @@ namespace WireSockUI.Tests
         private static void SettingsTransactionCompensatesFailuresInReverseOrder()
         {
             var calls = new List<string>();
-            var result = FrmMain.ApplySettingsUpdatesAsync(new[]
+            var result = CompensatingTransaction.ApplyAsync(new[]
                 {
                     new CompensatingTransactionStep("log-level",
                         () =>
@@ -2822,7 +2897,7 @@ namespace WireSockUI.Tests
             AssertEqual("kill-switch", string.Join(",", result.RollbackFailures));
 
             var expectedException = new InvalidOperationException("autorun access denied");
-            var exceptionResult = FrmMain.ApplySettingsUpdatesAsync(new[]
+            var exceptionResult = CompensatingTransaction.ApplyAsync(new[]
                 {
                     new CompensatingTransactionStep("autorun task",
                         () => throw expectedException,
@@ -2835,6 +2910,95 @@ namespace WireSockUI.Tests
                 "Expected the transaction result to retain the actionable autorun exception.");
         }
 
+        private static void SettingsCoordinatorOwnsUpdateSequencing()
+        {
+            var calls = new List<string>();
+            var previous = new ApplicationSettingsSnapshot(false, false, false, false,
+                false, false, false, "Info");
+            var requested = new ApplicationSettingsSnapshot(true, true, true, true,
+                true, true, true, "Debug");
+            var coordinator = new SettingsUpdateCoordinator(
+                logLevel =>
+                {
+                    calls.Add("log:" + logLevel);
+                    return Task.FromResult(true);
+                },
+                (enabled, applyNativeState) =>
+                {
+                    calls.Add($"kill:{enabled}:{applyNativeState}");
+                    return Task.FromResult(true);
+                },
+                settings =>
+                {
+                    calls.Add(ReferenceEquals(settings, requested) ? "persist:requested" : "persist:previous");
+                    return Task.FromResult(true);
+                });
+
+            var result = coordinator.ApplyAsync(
+                    previous,
+                    requested,
+                    true,
+                    () =>
+                    {
+                        calls.Add("autorun:apply");
+                        return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("autorun:rollback");
+                        return Task.FromResult(true);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertTrue(result.Succeeded, "Expected the settings coordinator transaction to succeed.");
+            AssertEqual("autorun:apply,log:Debug,persist:requested,kill:True:True", string.Join(",", calls));
+
+            calls.Clear();
+            var failingCoordinator = new SettingsUpdateCoordinator(
+                logLevel =>
+                {
+                    calls.Add("log:" + logLevel);
+                    return Task.FromResult(true);
+                },
+                (enabled, applyNativeState) =>
+                {
+                    calls.Add($"kill:{enabled}:{applyNativeState}");
+                    return Task.FromResult(true);
+                },
+                settings =>
+                {
+                    calls.Add(ReferenceEquals(settings, requested) ? "persist:requested" : "persist:previous");
+                    if (ReferenceEquals(settings, requested))
+                        throw new IOException("simulated persistence failure");
+                    return Task.FromResult(true);
+                });
+
+            var failedResult = failingCoordinator.ApplyAsync(
+                    previous,
+                    requested,
+                    false,
+                    () =>
+                    {
+                        calls.Add("autorun:apply");
+                        return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("autorun:rollback");
+                        return Task.FromResult(true);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(failedResult.Succeeded,
+                "Expected a synchronous persistence exception to fail the settings transaction.");
+            AssertEqual("settings persistence", failedResult.FailedStep);
+            AssertTrue(failedResult.Exception is IOException,
+                "Expected the settings transaction to retain the synchronous persistence exception.");
+            AssertEqual(
+                "autorun:apply,log:Debug,persist:requested,persist:previous,log:Info,autorun:rollback",
+                string.Join(",", calls));
+        }
+
         private static void SettingsRollbackIdentifiesNativeRecoveryRequirements()
         {
             var noRollbackFailure = new CompensatingTransactionResult(true);
@@ -2843,17 +3007,17 @@ namespace WireSockUI.Tests
 
             var nativeFailure = new CompensatingTransactionResult(false, "native Kill Switch", null,
                 new[] { "native Kill Switch: access denied" });
-            AssertTrue(FrmMain.SettingsFailureRequiresNativeRecovery(nativeFailure),
+            AssertTrue(SettingsUpdateCoordinator.FailureRequiresNativeRecovery(nativeFailure),
                 "Expected a failed native Kill Switch rollback to require recovery.");
 
             var persistenceFailure = new CompensatingTransactionResult(false, "settings persistence", null,
                 new[] { "settings persistence: disk full" });
-            AssertFalse(FrmMain.SettingsFailureRequiresNativeRecovery(persistenceFailure),
+            AssertFalse(SettingsUpdateCoordinator.FailureRequiresNativeRecovery(persistenceFailure),
                 "Expected a non-native rollback failure not to be mislabeled as driver recovery.");
 
             var similarlyNamedFailure = new CompensatingTransactionResult(false, "settings persistence", null,
                 new[] { "native Kill Switch backup: disk full" });
-            AssertFalse(FrmMain.SettingsFailureRequiresNativeRecovery(similarlyNamedFailure),
+            AssertFalse(SettingsUpdateCoordinator.FailureRequiresNativeRecovery(similarlyNamedFailure),
                 "Expected only the exact native Kill Switch transaction step to require driver recovery.");
         }
 
@@ -2891,6 +3055,10 @@ namespace WireSockUI.Tests
                 "Expected a missing late native result to retain recovery state.");
             AssertTrue(missingCompletion.Diagnostic.Contains("completed without a result"),
                 "Expected a missing late native result to provide an actionable diagnostic.");
+            AssertEqual("existing additional",
+                NativeOperationRecoveryPolicy.AppendDiagnostic("existing", "additional"));
+            AssertEqual("additional", NativeOperationRecoveryPolicy.AppendDiagnostic(null, "additional"));
+            AssertEqual("existing", NativeOperationRecoveryPolicy.AppendDiagnostic("existing", null));
         }
 
         private static void AutorunPreservesPersistedStateWhenStatusIsUnknown()
@@ -4264,10 +4432,201 @@ namespace WireSockUI.Tests
                     "Expected temporary-path validation to leave the invalid source untouched.");
                 AssertFalse(File.Exists(invalidDestination),
                     "Expected temporary-path validation to run before mutating the destination.");
+
+                var existingDestination = Path.Combine(directory, "existing.conf");
+                var createTemporary = Path.Combine(directory, "create.tmp");
+                File.WriteAllText(existingDestination, "existing");
+                File.WriteAllText(createTemporary, "replacement");
+                AssertThrows<IOException>(
+                    () => ProfileFileTransaction.Commit(createTemporary, existingDestination),
+                    "already exists");
+                AssertEqual("existing", File.ReadAllText(existingDestination));
+                AssertEqual("replacement", File.ReadAllText(createTemporary));
+
+                var editedProfile = Path.Combine(directory, "edited.conf");
+                var editTemporary = Path.Combine(directory, "edit.tmp");
+                File.WriteAllText(editedProfile, "before edit");
+                File.WriteAllText(editTemporary, "after edit");
+                ProfileFileTransaction.Commit(editTemporary, editedProfile, editedProfile);
+                AssertEqual("after edit", File.ReadAllText(editedProfile));
+                AssertFalse(File.Exists(editTemporary),
+                    "Expected a same-name profile edit to consume its temporary file.");
             }
             finally
             {
                 TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void ProfileRenameRecoveryCompletesInterruptedTransactions()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var original = Profile.GetProfilePath("original");
+                var destination = Profile.GetProfilePath("renamed");
+                File.WriteAllText(original, "old");
+                var temporary = ProfileFileTransaction.WriteTemporaryProfile("new");
+                var journal = ProfileFileTransaction.CreateRenameJournalForTests(original, destination, temporary);
+
+                File.Move(original, destination);
+                ProfileFileTransaction.RecoverInterruptedTransactions();
+
+                AssertFalse(File.Exists(original),
+                    "Expected interrupted rename recovery to keep the original name retired.");
+                AssertEqual("new", File.ReadAllText(destination));
+                AssertFalse(File.Exists(temporary),
+                    "Expected interrupted rename recovery to consume the staged profile.");
+                AssertFalse(File.Exists(journal),
+                    "Expected interrupted rename recovery to remove its journal.");
+
+                var preparedOriginal = Profile.GetProfilePath("prepared");
+                var preparedDestination = Profile.GetProfilePath("prepared-renamed");
+                File.WriteAllText(preparedOriginal, "preserved");
+                var preparedTemporary = ProfileFileTransaction.WriteTemporaryProfile("uncommitted");
+                var preparedJournal = ProfileFileTransaction.CreateRenameJournalForTests(
+                    preparedOriginal, preparedDestination, preparedTemporary);
+
+                ProfileFileTransaction.RecoverInterruptedTransactions();
+
+                AssertEqual("preserved", File.ReadAllText(preparedOriginal));
+                AssertFalse(File.Exists(preparedDestination),
+                    "Expected recovery to abandon a rename that had not moved the original profile.");
+                AssertFalse(File.Exists(preparedTemporary),
+                    "Expected recovery to remove abandoned staged profile contents.");
+                AssertFalse(File.Exists(preparedJournal),
+                    "Expected recovery to remove an abandoned rename journal.");
+
+                var uppercaseActualPath = Path.Combine(Global.ConfigsFolder, "UPPER.CONF");
+                var uppercaseLookupPath = Profile.GetProfilePath("UPPER");
+                var uppercaseDestination = Profile.GetProfilePath("upper-renamed");
+                File.WriteAllText(uppercaseActualPath, "uppercase preserved");
+                var uppercaseTemporary = ProfileFileTransaction.WriteTemporaryProfile("uppercase replacement");
+                var uppercaseJournal = ProfileFileTransaction.CreateRenameJournalForTests(
+                    uppercaseLookupPath, uppercaseDestination, uppercaseTemporary);
+
+                ProfileFileTransaction.RecoverInterruptedTransactions();
+
+                AssertEqual("uppercase preserved", File.ReadAllText(uppercaseActualPath));
+                AssertFalse(File.Exists(uppercaseDestination),
+                    "Expected a prepared uppercase-extension rename to remain uncommitted.");
+                AssertFalse(File.Exists(uppercaseTemporary),
+                    "Expected uppercase-extension recovery to remove abandoned staged contents.");
+                AssertFalse(File.Exists(uppercaseJournal),
+                    "Expected uppercase-extension recovery to remove its journal.");
+
+                var caseOriginal = Profile.GetProfilePath("Office");
+                var caseDestination = Profile.GetProfilePath("office");
+                File.WriteAllText(caseOriginal, "case-old");
+                var caseTemporary = ProfileFileTransaction.WriteTemporaryProfile("case-new");
+                var caseJournal = ProfileFileTransaction.CreateRenameJournalForTests(
+                    caseOriginal, caseDestination, caseTemporary);
+                AssertTrue(MoveFileEx(caseOriginal, caseDestination, MoveFileWriteThrough),
+                    "Expected the test to reach the interrupted case-only rename state.");
+
+                ProfileFileTransaction.RecoverInterruptedTransactions();
+
+                AssertEqual("case-new", File.ReadAllText(caseDestination));
+                AssertEqual("office.conf",
+                    Path.GetFileName(Directory.GetFiles(Global.ConfigsFolder, "office.conf").Single()));
+                AssertFalse(File.Exists(caseJournal),
+                    "Expected case-only rename recovery to remove its journal.");
+            });
+        }
+
+        private static void ProfileRenameRecoveryRejectsAmbiguousStates()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var original = Profile.GetProfilePath("original");
+                var destination = Profile.GetProfilePath("renamed");
+                File.WriteAllText(original, "original");
+                File.WriteAllText(destination, "unrelated destination");
+                var temporary = ProfileFileTransaction.WriteTemporaryProfile("replacement");
+                var journal = ProfileFileTransaction.CreateRenameJournalForTests(original, destination, temporary);
+
+                AssertThrows<InvalidDataException>(
+                    () => ProfileFileTransaction.RecoverInterruptedTransactions(),
+                    "both");
+                AssertEqual("original", File.ReadAllText(original));
+                AssertEqual("unrelated destination", File.ReadAllText(destination));
+                AssertEqual("replacement", File.ReadAllText(temporary));
+                AssertTrue(File.Exists(journal),
+                    "Expected ambiguous recovery to retain its journal for diagnosis.");
+            });
+        }
+
+        private static void ProfileTransactionRecoveryRemovesOrphanedTemporaryFiles()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var managedTemporary = ProfileFileTransaction.WriteTemporaryProfile("orphaned");
+                var legacyTemporary = Path.Combine(Global.ConfigsFolder, Guid.NewGuid().ToString("N") + ".tmp");
+                File.WriteAllText(legacyTemporary, "legacy orphan");
+                File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+
+                ProfileFileTransaction.RecoverInterruptedTransactions();
+                var profiles = Profile.GetProfiles();
+
+                AssertEqual("office", profiles.Single());
+                AssertFalse(File.Exists(managedTemporary),
+                    "Expected startup recovery to remove managed orphaned profile contents.");
+                AssertFalse(File.Exists(legacyTemporary),
+                    "Expected startup recovery to remove temporary files left by older WireSock UI versions.");
+            });
+        }
+
+        private static void ProfileRenameRecoveryRejectsActiveXmlContent()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                Global.EnsureProfileTransactionsFolderExists();
+                var journal = Path.Combine(Global.ProfileTransactionsFolder,
+                    "rename-" + Guid.NewGuid().ToString("N") + ".xml");
+                File.WriteAllText(journal,
+                    "<!DOCTYPE ProfileRename [<!ENTITY source 'original.conf'>]>" +
+                    "<ProfileRename Version='1'><Original>&source;</Original>" +
+                    "<Destination>renamed.conf</Destination><Temporary>" +
+                    Guid.NewGuid().ToString("N") + ".profile.tmp</Temporary></ProfileRename>");
+
+                AssertThrows<XmlException>(
+                    () => ProfileFileTransaction.RecoverInterruptedTransactions(),
+                    "DTD");
+                AssertTrue(File.Exists(journal),
+                    "Expected rejected recovery metadata to remain available for diagnosis.");
+            });
+        }
+
+        private static void TestExecutionTimeoutPolicyIsBounded()
+        {
+            var success = ExecuteTestWithTimeout(() => { }, 1000);
+            AssertFalse(success.TimedOut, "Expected a completed test not to time out.");
+            AssertTrue(success.Exception == null, "Expected a completed test not to report an exception.");
+
+            var failure = ExecuteTestWithTimeout(() => throw new InvalidOperationException("expected"), 1000);
+            AssertFalse(failure.TimedOut, "Expected a failed test not to be mislabeled as timed out.");
+            AssertTrue(failure.Exception is InvalidOperationException,
+                "Expected the timeout wrapper to preserve the original test exception.");
+
+            using (var release = new ManualResetEventSlim(false))
+            using (var finished = new ManualResetEventSlim(false))
+            {
+                var timeout = ExecuteTestWithTimeout(() =>
+                {
+                    try
+                    {
+                        release.Wait();
+                    }
+                    finally
+                    {
+                        finished.Set();
+                    }
+                }, 20);
+
+                AssertTrue(timeout.TimedOut, "Expected a blocked test to hit the configured timeout.");
+                AssertTrue(timeout.Exception == null,
+                    "Expected a timeout not to fabricate an unrelated test exception.");
+                release.Set();
+                AssertTrue(finished.Wait(1000), "Expected the timed-out test worker to finish after release.");
             }
         }
 

@@ -193,7 +193,7 @@ namespace WireSockUI.Native
                         throw new InvalidOperationException(tooLargeMessage);
 
                     using (var destination = new FileStream(destinationPath, FileMode.CreateNew, FileAccess.Write,
-                               FileShare.None))
+                               FileShare.None, 4096, FileOptions.WriteThrough))
                     {
                         destinationCreated = true;
                         var buffer = new byte[81920];
