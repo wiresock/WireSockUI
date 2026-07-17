@@ -75,7 +75,7 @@ namespace WireSockUI.Tests
                 { "Script hook warning preserves and escapes complete commands", ScriptHookWarningPreservesAndEscapesCompleteCommands },
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
                 { "Profile enumeration creates missing overridden config folder", ProfileEnumerationCreatesMissingOverriddenConfigFolder },
-                { "Profile enumeration rejects oversized catalogs", ProfileEnumerationRejectsOversizedCatalogs },
+                { "Profile enumeration rejects oversized folders", ProfileEnumerationRejectsOversizedFolders },
                 { "Profile catalog reports enumeration failures without replacing data", ProfileCatalogReportsEnumerationFailures },
                 { "Profile catalog rejects case-insensitive duplicates", ProfileCatalogRejectsCaseInsensitiveDuplicates },
                 { "Profile rejects oversized installed files", ProfileRejectsOversizedInstalledFiles },
@@ -811,12 +811,12 @@ namespace WireSockUI.Tests
             }
         }
 
-        private static void ProfileEnumerationRejectsOversizedCatalogs()
+        private static void ProfileEnumerationRejectsOversizedFolders()
         {
             WithTemporaryConfigFolder(() =>
             {
                 for (var index = 0; index <= Profile.MaxProfileCatalogEntries; index++)
-                    File.WriteAllText(Path.Combine(Global.ConfigsFolder, $"profile-{index:D4}.conf"), string.Empty);
+                    File.WriteAllText(Path.Combine(Global.ConfigsFolder, $"entry-{index:D4}.tmp"), string.Empty);
 
                 AssertThrows<InvalidDataException>(
                     () => Profile.GetProfiles(),

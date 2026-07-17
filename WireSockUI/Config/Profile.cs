@@ -646,15 +646,15 @@ namespace WireSockUI.Config
             var catalogEntries = 0;
 
             foreach (var file in Directory.EnumerateFiles(
-                         Global.ConfigsFolder, "*.conf", SearchOption.TopDirectoryOnly))
+                         Global.ConfigsFolder, "*", SearchOption.TopDirectoryOnly))
             {
-                if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
                 catalogEntries++;
                 if (catalogEntries > MaxProfileCatalogEntries)
                     throw new InvalidDataException(
-                        $"The profile catalog contains more than {MaxProfileCatalogEntries} configuration files. Remove unused profiles before continuing.");
+                        $"The profile folder contains more than {MaxProfileCatalogEntries} files. Remove unused files before continuing.");
+
+                if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
                 if (!IsLoadableProfileFile(file, out var diagnostic))
                 {
