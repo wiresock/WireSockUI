@@ -2,11 +2,13 @@
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 using WireSockUI.Config;
@@ -584,7 +586,7 @@ namespace WireSockUI
             return true;
         }
 
-        private static bool TryValidateTrustedWireSockCompanionFiles(string directory, string libraryPath,
+        internal static bool TryValidateTrustedWireSockCompanionFiles(string directory, string libraryPath,
             out string diagnostic)
         {
             diagnostic = null;
@@ -621,7 +623,8 @@ namespace WireSockUI
             }
             catch (Exception ex)
             {
-                diagnostic = $"Unable to enumerate WireSock SDK companion files in '{directory}': {ex.Message}";
+                diagnostic =
+                    $"Unable to enumerate WireSock SDK companion files in '{EscapeDiagnosticText(directory)}': {EscapeDiagnosticText(ex.Message)}";
                 return false;
             }
 
@@ -874,7 +877,35 @@ namespace WireSockUI
 
         private static string EscapeDiagnosticText(string value)
         {
-            return (value ?? string.Empty).Replace("\0", "\\0");
+            var builder = new StringBuilder(value?.Length ?? 0);
+            foreach (var character in value ?? string.Empty)
+            {
+                switch (character)
+                {
+                    case '\0':
+                        builder.Append(@"\0");
+                        break;
+                    case '\r':
+                        builder.Append(@"\r");
+                        break;
+                    case '\n':
+                        builder.Append(@"\n");
+                        break;
+                    case '\t':
+                        builder.Append(@"\t");
+                        break;
+                    default:
+                        var category = CharUnicodeInfo.GetUnicodeCategory(character);
+                        if (char.IsControl(character) || category == UnicodeCategory.Format ||
+                            category == UnicodeCategory.LineSeparator || category == UnicodeCategory.ParagraphSeparator)
+                            builder.Append($@"\u{(int)character:X4}");
+                        else
+                            builder.Append(character);
+                        break;
+                }
+            }
+
+            return builder.ToString();
         }
 
         internal static bool IsPotentiallyUserWritableDirectory(string directory)

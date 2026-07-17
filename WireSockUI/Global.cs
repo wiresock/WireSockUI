@@ -241,7 +241,7 @@ namespace WireSockUI
             return security;
         }
 
-        private static void SecureExistingChildren(string path, string excludedDirectory = null, int depth = 0)
+        internal static void SecureExistingChildren(string path, string excludedDirectory = null, int depth = 0)
         {
             var entries = 0;
             SecureExistingChildrenCore(path, excludedDirectory, depth, ref entries);
@@ -317,19 +317,19 @@ namespace WireSockUI
 
             try
             {
-                foreach (var entry in Directory.EnumerateFileSystemEntries(
-                             path, "*", SearchOption.TopDirectoryOnly))
+                var directory = new DirectoryInfo(path);
+                foreach (var entry in directory.EnumerateFileSystemInfos(
+                             "*", SearchOption.TopDirectoryOnly))
                 {
                     entries++;
                     if (entries > MaxSecuredTreeEntries)
                         throw new InvalidDataException(
                             $"The WireSock UI secured data tree contains more than {MaxSecuredTreeEntries} entries. Remove unexpected files or directories before continuing.");
 
-                    var attributes = File.GetAttributes(entry);
-                    if ((attributes & FileAttributes.Directory) != 0)
-                        discoveredDirectories.Add(entry);
+                    if ((entry.Attributes & FileAttributes.Directory) != 0)
+                        discoveredDirectories.Add(entry.FullName);
                     else
-                        discoveredFiles.Add(entry);
+                        discoveredFiles.Add(entry.FullName);
                 }
             }
             catch (InvalidDataException)

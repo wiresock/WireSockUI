@@ -1706,13 +1706,8 @@ namespace WireSockUI.Tests
                     return;
                 }
 
-                var secureChildren = typeof(Global).GetMethod("SecureExistingChildren",
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                if (secureChildren == null)
-                    throw new InvalidOperationException("SecureExistingChildren helper was not found.");
-
-                AssertInvocationThrows<IOException>(
-                    () => secureChildren.Invoke(null, new object[] { root, null, 0 }), "reparse point");
+                AssertThrows<IOException>(
+                    () => Global.SecureExistingChildren(root, null, 0), "reparse point");
             }
             finally
             {
@@ -1734,13 +1729,8 @@ namespace WireSockUI.Tests
                 for (var index = 0; index <= Global.MaxSecuredTreeEntries; index++)
                     File.WriteAllText(Path.Combine(root, $"entry-{index:D5}.txt"), string.Empty);
 
-                var secureChildren = typeof(Global).GetMethod("SecureExistingChildren",
-                    BindingFlags.NonPublic | BindingFlags.Static);
-                if (secureChildren == null)
-                    throw new InvalidOperationException("SecureExistingChildren helper was not found.");
-
-                AssertInvocationThrows<InvalidDataException>(
-                    () => secureChildren.Invoke(null, new object[] { root, null, 0 }), "more than");
+                AssertThrows<InvalidDataException>(
+                    () => Global.SecureExistingChildren(root, null, 0), "more than");
             }
             finally
             {
@@ -1751,24 +1741,17 @@ namespace WireSockUI.Tests
 
         private static void ProgramRejectsUntrustedWireSockCrashHandler()
         {
-            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateTrustedWireSockCompanionFiles",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            if (validate == null)
-                throw new InvalidOperationException("TryValidateTrustedWireSockCompanionFiles helper was not found.");
-
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(directory);
 
             try
             {
                 File.WriteAllText(Path.Combine(directory, "crashpad_handler.exe"), string.Empty);
-                var args = new object[] { directory, Path.Combine(directory, "wgbooster.dll"), null };
-
-                AssertFalse((bool)validate.Invoke(null, args),
+                AssertFalse(WireSockUI.Program.TryValidateTrustedWireSockCompanionFiles(
+                        directory, Path.Combine(directory, "wgbooster.dll"), out var diagnostic),
                     "Expected an explicitly user-writable crash handler to be rejected.");
-                AssertTrue(args[2] is string diagnostic &&
-                           diagnostic.IndexOf("non-administrative", StringComparison.OrdinalIgnoreCase) >= 0,
-                    $"Expected an actionable crash-handler trust diagnostic, got '{args[2]}'.");
+                AssertTrue(diagnostic?.IndexOf("non-administrative", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable crash-handler trust diagnostic, got '{diagnostic}'.");
             }
             finally
             {
@@ -1778,11 +1761,6 @@ namespace WireSockUI.Tests
 
         private static void ProgramBoundsWireSockSdkCompanionEnumeration()
         {
-            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateTrustedWireSockCompanionFiles",
-                BindingFlags.NonPublic | BindingFlags.Static);
-            if (validate == null)
-                throw new InvalidOperationException("TryValidateTrustedWireSockCompanionFiles helper was not found.");
-
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
             var libraryPath = Path.Combine(directory, "wgbooster.dll");
             Directory.CreateDirectory(directory);
@@ -1793,12 +1771,11 @@ namespace WireSockUI.Tests
                 for (var index = 0; index < WireSockUI.Program.MaxWireSockSdkDirectoryEntries; index++)
                     File.WriteAllText(Path.Combine(directory, $"entry-{index:D5}.tmp"), string.Empty);
 
-                var args = new object[] { directory, libraryPath, null };
-                AssertFalse((bool)validate.Invoke(null, args),
+                AssertFalse(WireSockUI.Program.TryValidateTrustedWireSockCompanionFiles(
+                        directory, libraryPath, out var diagnostic),
                     "Expected oversized WireSock SDK companion enumeration to fail closed.");
-                AssertTrue(args[2] is string diagnostic &&
-                           diagnostic.IndexOf("more than", StringComparison.OrdinalIgnoreCase) >= 0,
-                    $"Expected an actionable SDK directory limit diagnostic, got '{args[2]}'.");
+                AssertTrue(diagnostic?.IndexOf("more than", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable SDK directory limit diagnostic, got '{diagnostic}'.");
             }
             finally
             {
@@ -3810,6 +3787,15 @@ namespace WireSockUI.Tests
                 $"Expected payload diagnostics to escape embedded NULs, got '{payloadDiagnostic}'.");
             AssertTrue(payloadDiagnostic.Contains("\\0"),
                 $"Expected payload diagnostics to include the escaped NUL marker, got '{payloadDiagnostic}'.");
+
+            const string sdkDirectory = "sdk\nfolder";
+            AssertFalse(WireSockUI.Program.TryValidateTrustedWireSockCompanionFiles(
+                    sdkDirectory, "wgbooster.dll", out var sdkDiagnostic),
+                "Expected missing SDK directories to fail validation.");
+            AssertFalse(sdkDiagnostic.Contains("\n"),
+                $"Expected SDK diagnostics to escape embedded line breaks, got '{sdkDiagnostic}'.");
+            AssertTrue(sdkDiagnostic.Contains("\\n"),
+                $"Expected SDK diagnostics to include the escaped line-break marker, got '{sdkDiagnostic}'.");
         }
 
         private static void TunnelMonitorPreservesStatisticsQueryTimeouts()
@@ -5132,23 +5118,6 @@ namespace WireSockUI.Tests
             }
 
             throw new Exception($"Expected {typeof(T).Name}.");
-        }
-
-        private static void AssertInvocationThrows<T>(Action action, string messagePart) where T : Exception
-        {
-            try
-            {
-                action();
-            }
-            catch (TargetInvocationException ex) when (ex.InnerException is T inner)
-            {
-                if (messagePart == null || inner.Message.IndexOf(messagePart, StringComparison.OrdinalIgnoreCase) >= 0)
-                    return;
-
-                throw new Exception($"Expected inner exception message to contain '{messagePart}', got '{inner.Message}'.");
-            }
-
-            throw new Exception($"Expected invocation to throw {typeof(T).Name}.");
         }
 
         private static void AssertTrue(bool condition, string message)

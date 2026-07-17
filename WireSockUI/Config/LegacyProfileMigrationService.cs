@@ -105,8 +105,8 @@ namespace WireSockUI.Config
             var matchingSourceFound = false;
             var sourceCandidateFound = false;
             var legacyPaths = Directory.Exists(Global.LegacyConfigsFolder)
-                ? EnumerateProfileFiles(Global.LegacyConfigsFolder, "legacy profile")
-                : Enumerable.Empty<string>();
+                ? EnumerateProfileFiles(Global.LegacyConfigsFolder, "legacy profile").ToArray()
+                : Array.Empty<string>();
             foreach (var legacyPath in legacyPaths)
             {
                 if (!string.Equals(Path.GetFileNameWithoutExtension(legacyPath), originalProfileName,
