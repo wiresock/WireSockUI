@@ -1935,6 +1935,8 @@ namespace WireSockUI.Forms
                     if (form.ShowDialog() == DialogResult.OK)
                     {
                         var requestedSettings = form.RequestedSettings;
+                        var stateBeforeSettingsUpdate = _currentState;
+                        var profileBeforeSettingsUpdate = _tunnelLifecycle.ProfileName;
                         var logLevelChanged = !string.Equals(requestedSettings.LogLevel,
                             previousSettings.LogLevel, StringComparison.Ordinal);
                         var killSwitchRequiresNativeUpdate =
@@ -1968,6 +1970,8 @@ namespace WireSockUI.Forms
 
                         if (!result.Succeeded)
                         {
+                            RestoreRuntimeStateAfterSettingsCompensation(
+                                result, stateBeforeSettingsUpdate, profileBeforeSettingsUpdate);
                             ShowSettingsTransactionFailure(result);
                             return;
                         }
@@ -2004,6 +2008,18 @@ namespace WireSockUI.Forms
                                                     "Unable to update the native log level.");
 
             return true;
+        }
+
+        private void RestoreRuntimeStateAfterSettingsCompensation(
+            CompensatingTransactionResult result,
+            ConnectionState previousState,
+            string profile)
+        {
+            if (!IsNativeRecoveryRequired() || SettingsFailureRequiresNativeRecovery(result))
+                return;
+
+            CompleteVerifiedNativeRecovery(
+                profile, previousState, Global.NativeRecoveryMarkers.Capture());
         }
 
         private async Task<bool> ApplyKillSwitchSettingAsync(bool enableKillSwitch, bool shouldApplyNativeState)
@@ -2155,9 +2171,8 @@ namespace WireSockUI.Forms
                     return;
                 }
 
-                Global.NativeRecoveryMarkers.TryDelete(markerSnapshot);
-                _tunnelSession.ClearRecovery();
-                UpdateState(ConnectionState.Disconnected, false, profile);
+                CompleteVerifiedNativeRecovery(
+                    profile, ConnectionState.Disconnected, markerSnapshot);
 
                 MessageBox.Show(Resources.KillSwitchResetSuccess, Resources.KillSwitchResetTitle,
                     MessageBoxButtons.OK, MessageBoxIcon.Information);
@@ -2193,9 +2208,29 @@ namespace WireSockUI.Forms
             var markerSnapshot = Global.NativeRecoveryMarkers.Capture();
             var recovered = await TryResetNetworkLockAfterNativeCleanupFailureAsync(
                 "preserved network-lock rollback", markerSnapshot, true);
-            if (!recovered)
-                MarkNativeRecoveryRequired(profile,
-                    resetResult.Diagnostic ?? "preserved network-lock rollback failure");
+            if (recovered)
+            {
+                CompleteVerifiedNativeRecovery(
+                    profile, ConnectionState.Disconnected, markerSnapshot);
+                return;
+            }
+
+            MarkNativeRecoveryRequired(profile,
+                resetResult.Diagnostic ?? "preserved network-lock rollback failure");
+        }
+
+        private void CompleteVerifiedNativeRecovery(
+            string profile,
+            ConnectionState restoredState,
+            NativeRecoveryMarkerSnapshot markerSnapshot)
+        {
+            if (markerSnapshot != null && !Global.NativeRecoveryMarkers.TryDelete(markerSnapshot))
+                Trace.TraceWarning(
+                    "Native state was verified, but the previous recovery marker could not be removed. It will be checked again at next startup.");
+
+            _tunnelSession.ClearRecovery();
+            if (!_shutdownComplete && !IsDisposed && !Disposing)
+                UpdateState(restoredState, false, profile);
         }
 
         private async void OnProfileClick(object sender, EventArgs e)

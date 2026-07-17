@@ -2,12 +2,15 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using WireSockUI.Native;
 
 namespace WireSockUI.Config
 {
     internal static class LegacyProfileMigrationService
     {
+        internal const int MaxLegacyCatalogEntries = 1024;
+
         internal static void StageLegacyProfiles()
         {
             if (!Directory.Exists(Global.LegacyConfigsFolder))
@@ -17,7 +20,8 @@ namespace WireSockUI.Config
             {
                 Global.EnsurePendingLegacyProfilesFolderExists();
 
-                foreach (var legacyProfilePath in Directory.GetFiles(Global.LegacyConfigsFolder, "*.conf"))
+                foreach (var legacyProfilePath in EnumerateProfileFiles(
+                             Global.LegacyConfigsFolder, "legacy profile"))
                     StageLegacyProfile(legacyProfilePath);
             }
         }
@@ -29,7 +33,8 @@ namespace WireSockUI.Config
 
             using (SecureFileSystem.OpenDirectory(Global.PendingLegacyProfilesFolder, false))
             {
-                foreach (var path in Directory.GetFiles(Global.PendingLegacyProfilesFolder, "*.conf"))
+                foreach (var path in EnumerateProfileFiles(
+                             Global.PendingLegacyProfilesFolder, "staged legacy profile"))
                 {
                     try
                     {
@@ -51,7 +56,32 @@ namespace WireSockUI.Config
                 }
             }
 
-            return names;
+            return names
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(name => name, StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static IEnumerable<string> EnumerateProfileFiles(string folder, string description)
+        {
+            var entries = 0;
+            foreach (var path in Directory.EnumerateFileSystemEntries(
+                         folder, "*", SearchOption.TopDirectoryOnly))
+            {
+                entries++;
+                if (entries > MaxLegacyCatalogEntries)
+                    throw new InvalidDataException(
+                        $"The {description} folder contains more than {MaxLegacyCatalogEntries} entries. Remove unused files or directories before continuing.");
+
+                if (!path.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (TryGetAttributes(path, out var attributes) &&
+                    (attributes & FileAttributes.Directory) != 0)
+                    continue;
+
+                yield return path;
+            }
         }
 
         internal static string GetPendingProfilePath(string profileName)
@@ -64,10 +94,41 @@ namespace WireSockUI.Config
 
         internal static void CompleteApprovedMigration(string originalProfileName)
         {
-            DeleteRegularFileIfPresent(GetPendingProfilePath(originalProfileName), "staged legacy profile");
-            DeleteRegularFileIfPresent(
-                Path.Combine(Global.LegacyConfigsFolder, originalProfileName + ".conf"),
-                "legacy profile");
+            var pendingPath = GetPendingProfilePath(originalProfileName);
+            if (!TryGetAttributes(pendingPath, out var pendingAttributes))
+                return;
+
+            if ((pendingAttributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                throw new IOException(
+                    $"The staged legacy profile '{pendingPath}' is not a regular file and was not deleted.");
+
+            var matchingSourceFound = false;
+            var sourceCandidateFound = false;
+            var legacyPaths = Directory.Exists(Global.LegacyConfigsFolder)
+                ? EnumerateProfileFiles(Global.LegacyConfigsFolder, "legacy profile").ToArray()
+                : Array.Empty<string>();
+            foreach (var legacyPath in legacyPaths)
+            {
+                if (!string.Equals(Path.GetFileNameWithoutExtension(legacyPath), originalProfileName,
+                        StringComparison.Ordinal))
+                    continue;
+
+                sourceCandidateFound = true;
+                if (!DeleteLegacySourceIfMatchesStagedCopy(legacyPath, pendingPath))
+                {
+                    Trace.TraceWarning(
+                        $"Preserving legacy profile '{legacyPath}' because it differs from the approved staged copy.");
+                    continue;
+                }
+
+                matchingSourceFound = true;
+            }
+
+            if (sourceCandidateFound && !matchingSourceFound)
+                throw new IOException(
+                    "The legacy source no longer matches its staged copy. The staged copy was preserved so the migration can be reviewed again.");
+
+            DeleteRegularFileIfPresent(pendingPath, "staged legacy profile");
         }
 
         private static void StageLegacyProfile(string legacyProfilePath)
@@ -140,31 +201,54 @@ namespace WireSockUI.Config
             {
                 using (var first = RegularFileSource.OpenForRead(firstPath, "legacy profile"))
                 using (var second = RegularFileSource.OpenForRead(secondPath, "staged profile"))
-                {
-                    if (first.Length != second.Length)
-                        return false;
-
-                    var firstBuffer = new byte[81920];
-                    var secondBuffer = new byte[81920];
-                    while (true)
-                    {
-                        var firstBytesRead = ReadBlock(first, firstBuffer);
-                        var secondBytesRead = ReadBlock(second, secondBuffer);
-                        if (firstBytesRead != secondBytesRead)
-                            return false;
-                        if (firstBytesRead == 0)
-                            return true;
-
-                        for (var i = 0; i < firstBytesRead; i++)
-                            if (firstBuffer[i] != secondBuffer[i])
-                                return false;
-                    }
-                }
+                    return StreamsHaveSameContent(first, second);
             }
             catch (Exception ex)
             {
                 Trace.TraceWarning($"Failed to compare legacy profile files: {ex.Message}");
                 return false;
+            }
+        }
+
+        private static bool DeleteLegacySourceIfMatchesStagedCopy(string sourcePath, string pendingPath)
+        {
+            using (var source = SecureFileSystem.OpenFileForBoundedReadAndDelete(
+                       sourcePath, Profile.MaxProfileSizeBytes))
+            using (var pending = SecureFileSystem.OpenFileForBoundedRead(
+                       pendingPath, Profile.MaxProfileSizeBytes))
+            {
+                var contentsMatch = false;
+                source.UseReadStream(sourceStream =>
+                    pending.UseReadStream(pendingStream =>
+                        contentsMatch = StreamsHaveSameContent(sourceStream, pendingStream)));
+
+                if (!contentsMatch)
+                    return false;
+
+                source.Delete();
+                return true;
+            }
+        }
+
+        private static bool StreamsHaveSameContent(Stream first, Stream second)
+        {
+            if (first.Length != second.Length)
+                return false;
+
+            var firstBuffer = new byte[81920];
+            var secondBuffer = new byte[81920];
+            while (true)
+            {
+                var firstBytesRead = ReadBlock(first, firstBuffer);
+                var secondBytesRead = ReadBlock(second, secondBuffer);
+                if (firstBytesRead != secondBytesRead)
+                    return false;
+                if (firstBytesRead == 0)
+                    return true;
+
+                for (var i = 0; i < firstBytesRead; i++)
+                    if (firstBuffer[i] != secondBuffer[i])
+                        return false;
             }
         }
 
