@@ -5,12 +5,6 @@ on:
   schedule:
     - cron: '17 3 * * 1'
   workflow_call:
-    inputs:
-      required:
-        description: Fail when real-SDK runners are not explicitly enabled
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -19,15 +13,17 @@ jobs:
   configuration:
     runs-on: windows-latest
     steps:
-      - name: Require configured SDK runners
-        if: inputs.required && vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED != 'true'
+      - name: Report SDK validation status
         shell: pwsh
-        run: throw 'Real-SDK validation is required for releases. Register both SDK runners and set WIRESOCKUI_SDK_INTEGRATION_ENABLED=true.'
-
-      - name: Report optional SDK validation status
-        if: inputs.required != true && vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED != 'true'
-        shell: pwsh
-        run: Write-Host 'Real-SDK validation is disabled because WIRESOCKUI_SDK_INTEGRATION_ENABLED is not true.'
+        env:
+          SDK_INTEGRATION_ENABLED: ${{ vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED }}
+        run: |
+          if ($env:SDK_INTEGRATION_ENABLED -eq 'true') {
+            Write-Host 'Real-SDK validation is enabled.'
+          }
+          else {
+            Write-Host 'Real-SDK validation is disabled because WIRESOCKUI_SDK_INTEGRATION_ENABLED is not true.'
+          }
 
   elevated-sdk-smoke:
     needs: configuration

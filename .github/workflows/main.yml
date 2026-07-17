@@ -31,10 +31,21 @@ jobs:
       - name: Test
         run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Platform=x64 -p:UseSharedCompilation=false --no-restore
 
+  sdk-integration-configuration:
+    runs-on: windows-latest
+    steps:
+      - name: Require configured SDK runners
+        shell: pwsh
+        env:
+          SDK_INTEGRATION_ENABLED: ${{ vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED }}
+        run: |
+          if ($env:SDK_INTEGRATION_ENABLED -ne 'true') {
+            throw 'Real-SDK validation is required for releases. Register both SDK runners and set WIRESOCKUI_SDK_INTEGRATION_ENABLED=true.'
+          }
+
   sdk-integration:
+    needs: sdk-integration-configuration
     uses: ./.github/workflows/sdk-integration.yml
-    with:
-      required: true
     secrets: inherit
 
   build-and-package:
