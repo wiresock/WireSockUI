@@ -2952,6 +2952,51 @@ namespace WireSockUI.Tests
 
             AssertTrue(result.Succeeded, "Expected the settings coordinator transaction to succeed.");
             AssertEqual("autorun:apply,log:Debug,persist:requested,kill:True:True", string.Join(",", calls));
+
+            calls.Clear();
+            var failingCoordinator = new SettingsUpdateCoordinator(
+                logLevel =>
+                {
+                    calls.Add("log:" + logLevel);
+                    return Task.FromResult(true);
+                },
+                (enabled, applyNativeState) =>
+                {
+                    calls.Add($"kill:{enabled}:{applyNativeState}");
+                    return Task.FromResult(true);
+                },
+                settings =>
+                {
+                    calls.Add(ReferenceEquals(settings, requested) ? "persist:requested" : "persist:previous");
+                    if (ReferenceEquals(settings, requested))
+                        throw new IOException("simulated persistence failure");
+                    return Task.FromResult(true);
+                });
+
+            var failedResult = failingCoordinator.ApplyAsync(
+                    previous,
+                    requested,
+                    false,
+                    () =>
+                    {
+                        calls.Add("autorun:apply");
+                        return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("autorun:rollback");
+                        return Task.FromResult(true);
+                    })
+                .GetAwaiter().GetResult();
+
+            AssertFalse(failedResult.Succeeded,
+                "Expected a synchronous persistence exception to fail the settings transaction.");
+            AssertEqual("settings persistence", failedResult.FailedStep);
+            AssertTrue(failedResult.Exception is IOException,
+                "Expected the settings transaction to retain the synchronous persistence exception.");
+            AssertEqual(
+                "autorun:apply,log:Debug,persist:requested,persist:previous,log:Info,autorun:rollback",
+                string.Join(",", calls));
         }
 
         private static void SettingsRollbackIdentifiesNativeRecoveryRequirements()

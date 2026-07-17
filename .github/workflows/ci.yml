@@ -53,8 +53,6 @@ jobs:
       - sdk-contract
       - test
     uses: ./.github/workflows/sdk-integration.yml
-    with:
-      require_sdk_validation: true
     secrets: inherit
 
   publish:

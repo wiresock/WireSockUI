@@ -34,7 +34,9 @@ jobs:
             Write-Host 'Real-SDK validation is enabled.'
           }
           else {
-            Write-Host 'Real-SDK validation is disabled because WIRESOCKUI_SDK_INTEGRATION_ENABLED is not true.'
+            Write-Warning 'Real-SDK validation is unavailable because WIRESOCKUI_SDK_INTEGRATION_ENABLED is not true.'
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value '### Real-SDK validation unavailable'
+            Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value 'The elevated wgbooster/driver smoke jobs were skipped because `WIRESOCKUI_SDK_INTEGRATION_ENABLED` is not `true`.'
           }
 
   elevated-sdk-smoke:

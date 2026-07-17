@@ -82,11 +82,12 @@ namespace WireSockUI
             try
             {
                 Global.EnsureApplicationFolders();
-                ProfileFileTransaction.RecoverInterruptedTransactions();
                 SecureRollingTraceListener.Initialize();
+                ProfileFileTransaction.RecoverInterruptedTransactions();
             }
             catch (Exception ex)
             {
+                Trace.TraceError($"Unable to initialize secure data and recover profile transactions: {ex}");
                 MessageBox.Show(
                     $"Unable to initialize WireSock UI secure data folders and diagnostics.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
                     Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
