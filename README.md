@@ -84,7 +84,7 @@ dotnet build WireSockUI.sln --configuration Release -p:Platform=x64 -p:UseShared
 dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:UseSharedCompilation=false -m:1
 ```
 
-Use `-- --list-tests` to list test names or `-- --filter "profile catalog"` to run a focused subset with full exception diagnostics. Each focused test has a two-minute timeout, and CI jobs have explicit overall timeouts so a deadlock reports the active test instead of occupying a runner indefinitely.
+Use `-- --list-tests` to list test names or `-- --filter "profile catalog"` to run a focused subset with full exception diagnostics. Each executed test has a two-minute timeout, and CI jobs have explicit overall timeouts so a deadlock reports the active test instead of occupying a runner indefinitely.
 
 The single-node `-m:1` solution build avoids a silent MSBuild failure that can happen when recent .NET SDKs schedule the WinForms app and the test project reference concurrently.
 
