@@ -24,7 +24,7 @@ jobs:
         shell: pwsh
         env:
           SDK_INTEGRATION_ENABLED: ${{ vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED }}
-          SDK_INTEGRATION_REQUIRED: ${{ inputs.require_sdk_validation }}
+          SDK_INTEGRATION_REQUIRED: ${{ inputs.require_sdk_validation == true }}
         run: |
           if ($env:SDK_INTEGRATION_REQUIRED -eq 'true' -and $env:SDK_INTEGRATION_ENABLED -ne 'true') {
             throw 'Real-SDK validation is required. Register both SDK runners and set WIRESOCKUI_SDK_INTEGRATION_ENABLED=true.'

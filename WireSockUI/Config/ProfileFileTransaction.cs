@@ -455,18 +455,39 @@ namespace WireSockUI.Config
         private static IReadOnlyList<string> EnumerateTransactionEntries(string transactionDirectory)
         {
             var entries = new List<string>();
+            var enumeratedEntries = 0;
             foreach (var entry in Directory.EnumerateFileSystemEntries(transactionDirectory, "*",
                          SearchOption.TopDirectoryOnly))
             {
-                entries.Add(entry);
-                if (entries.Count > MaximumTransactionEntries)
+                enumeratedEntries++;
+                if (enumeratedEntries > MaximumTransactionEntries)
                     throw new InvalidDataException(
                         $"The profile transaction folder contains more than {MaximumTransactionEntries} entries.");
 
-                var attributes = File.GetAttributes(entry);
+                FileAttributes attributes;
+                try
+                {
+                    attributes = File.GetAttributes(entry);
+                }
+                catch (FileNotFoundException)
+                {
+                    continue;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    // A vanished entry is harmless, but loss of the secured parent must remain fatal.
+                    using (SecureFileSystem.OpenDirectory(transactionDirectory, false))
+                    {
+                    }
+
+                    continue;
+                }
+
                 if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
                     throw new InvalidDataException(
                         $"The profile transaction entry '{Path.GetFileName(entry)}' is not a regular file.");
+
+                entries.Add(entry);
             }
 
             return entries;
