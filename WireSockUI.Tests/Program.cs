@@ -3796,6 +3796,15 @@ namespace WireSockUI.Tests
                 $"Expected SDK diagnostics to escape embedded line breaks, got '{sdkDiagnostic}'.");
             AssertTrue(sdkDiagnostic.Contains("\\n"),
                 $"Expected SDK diagnostics to include the escaped line-break marker, got '{sdkDiagnostic}'.");
+
+            const string surrogateSdkDirectory = "sdk\uD800folder";
+            AssertFalse(WireSockUI.Program.TryValidateTrustedWireSockCompanionFiles(
+                    surrogateSdkDirectory, "wgbooster.dll", out var surrogateDiagnostic),
+                "Expected malformed SDK directories to fail validation.");
+            AssertFalse(surrogateDiagnostic.Any(char.IsSurrogate),
+                $"Expected SDK diagnostics to escape surrogate code units, got '{surrogateDiagnostic}'.");
+            AssertTrue(surrogateDiagnostic.Contains("\\uD800"),
+                $"Expected SDK diagnostics to include the escaped surrogate marker, got '{surrogateDiagnostic}'.");
         }
 
         private static void TunnelMonitorPreservesStatisticsQueryTimeouts()

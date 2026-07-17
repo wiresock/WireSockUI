@@ -897,7 +897,9 @@ namespace WireSockUI
                     default:
                         var category = CharUnicodeInfo.GetUnicodeCategory(character);
                         if (char.IsControl(character) || category == UnicodeCategory.Format ||
-                            category == UnicodeCategory.LineSeparator || category == UnicodeCategory.ParagraphSeparator)
+                            category == UnicodeCategory.LineSeparator ||
+                            category == UnicodeCategory.ParagraphSeparator ||
+                            category == UnicodeCategory.Surrogate)
                             builder.Append($@"\u{(int)character:X4}");
                         else
                             builder.Append(character);
