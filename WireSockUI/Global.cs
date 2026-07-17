@@ -22,6 +22,8 @@ namespace WireSockUI
 
         public static string ConfigsFolder = Path.Combine(SecureMainFolder, "Configs");
 
+        public static string ProfileTransactionsFolder => Path.Combine(ConfigsFolder, ".transactions");
+
         public static string PendingLegacyProfilesFolder =
             Path.Combine(SecureMainFolder, "PendingLegacyProfiles");
 
@@ -62,6 +64,29 @@ namespace WireSockUI
         public static void EnsureConfigsFolderExists()
         {
             EnsureConfigsFolder(secureExistingChildren: false);
+        }
+
+        public static void EnsureProfileTransactionsFolderExists()
+        {
+            if (!IsSameOrChildPath(ProfileTransactionsFolder, ConfigsFolder))
+                throw new InvalidOperationException(
+                    $"The profile transaction folder '{ProfileTransactionsFolder}' must be inside '{ConfigsFolder}'.");
+
+            EnsureConfigsFolderExists();
+            if (IsSameOrChildPath(ConfigsFolder, SecureMainFolder))
+            {
+                EnsureAdministratorsOnlyDirectory(ProfileTransactionsFolder, false);
+                return;
+            }
+
+            if (!AllowUnsecuredConfigFolderOverrideForTests)
+                throw new InvalidOperationException(
+                    $"WireSock UI profile transactions cannot use the unsecured folder '{ProfileTransactionsFolder}'.");
+
+            Directory.CreateDirectory(ProfileTransactionsFolder);
+            using (SecureFileSystem.OpenDirectory(ProfileTransactionsFolder, false))
+            {
+            }
         }
 
         public static void EnsureSecureMainFolder()

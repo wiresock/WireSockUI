@@ -5,6 +5,12 @@ on:
   schedule:
     - cron: '17 3 * * 1'
   workflow_call:
+    inputs:
+      require_sdk_validation:
+        description: Fail when real-SDK validation is not configured.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,12 +18,18 @@ permissions:
 jobs:
   configuration:
     runs-on: windows-latest
+    timeout-minutes: 5
     steps:
       - name: Report SDK validation status
         shell: pwsh
         env:
           SDK_INTEGRATION_ENABLED: ${{ vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED }}
+          SDK_INTEGRATION_REQUIRED: ${{ inputs.require_sdk_validation }}
         run: |
+          if ($env:SDK_INTEGRATION_REQUIRED -eq 'true' -and $env:SDK_INTEGRATION_ENABLED -ne 'true') {
+            throw 'Real-SDK validation is required. Register both SDK runners and set WIRESOCKUI_SDK_INTEGRATION_ENABLED=true.'
+          }
+
           if ($env:SDK_INTEGRATION_ENABLED -eq 'true') {
             Write-Host 'Real-SDK validation is enabled.'
           }

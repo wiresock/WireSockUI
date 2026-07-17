@@ -11,6 +11,7 @@ on:
 jobs:
   test:
     runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - name: Checkout from GitHub
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -31,21 +32,10 @@ jobs:
       - name: Test
         run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Platform=x64 -p:UseSharedCompilation=false --no-restore
 
-  sdk-integration-configuration:
-    runs-on: windows-latest
-    steps:
-      - name: Require configured SDK runners
-        shell: pwsh
-        env:
-          SDK_INTEGRATION_ENABLED: ${{ vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED }}
-        run: |
-          if ($env:SDK_INTEGRATION_ENABLED -ne 'true') {
-            throw 'Real-SDK validation is required for releases. Register both SDK runners and set WIRESOCKUI_SDK_INTEGRATION_ENABLED=true.'
-          }
-
   sdk-integration:
-    needs: sdk-integration-configuration
     uses: ./.github/workflows/sdk-integration.yml
+    with:
+      require_sdk_validation: true
     secrets: inherit
 
   build-and-package:
@@ -63,6 +53,7 @@ jobs:
           - build_configuration: 'Release UWP'
             uwp_suffix: ''
     runs-on: windows-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       id-token: write

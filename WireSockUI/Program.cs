@@ -82,6 +82,7 @@ namespace WireSockUI
             try
             {
                 Global.EnsureApplicationFolders();
+                ProfileFileTransaction.RecoverInterruptedTransactions();
                 SecureRollingTraceListener.Initialize();
             }
             catch (Exception ex)

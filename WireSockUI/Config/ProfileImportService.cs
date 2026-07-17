@@ -1,6 +1,3 @@
-using System;
-using System.Diagnostics;
-using System.IO;
 using WireSockUI.Native;
 
 namespace WireSockUI.Config
@@ -9,8 +6,7 @@ namespace WireSockUI.Config
     {
         public static string CopyToTemporaryProfileFile(string sourcePath)
         {
-            Global.EnsureConfigsFolderExists();
-            var tmpProfile = Path.Combine(Global.ConfigsFolder, $"{Guid.NewGuid():N}.tmp");
+            var tmpProfile = ProfileFileTransaction.CreateTemporaryProfilePath();
 
             try
             {
@@ -36,15 +32,7 @@ namespace WireSockUI.Config
 
         public static void TryDeleteTemporaryProfile(string tmpProfile)
         {
-            try
-            {
-                if (File.Exists(tmpProfile))
-                    File.Delete(tmpProfile);
-            }
-            catch (Exception ex)
-            {
-                Trace.TraceWarning($"Failed to delete temporary imported profile '{tmpProfile}': {ex.Message}");
-            }
+            ProfileFileTransaction.TryDeleteTemporaryProfile(tmpProfile);
         }
     }
 }
