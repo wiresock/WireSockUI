@@ -766,9 +766,12 @@ namespace WireSockUI.Tests
             WithTemporaryConfigFolder(() =>
             {
                 File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Office.CONF"), string.Empty);
+                File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Archive.config"), string.Empty);
+                File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Backup.conf-old"), string.Empty);
 
                 var profiles = Profile.GetProfiles().ToList();
                 AssertTrue(profiles.Contains("Office"), "Expected .CONF profiles to be listed on Windows.");
+                AssertEqual(1, profiles.Count);
             });
         }
 

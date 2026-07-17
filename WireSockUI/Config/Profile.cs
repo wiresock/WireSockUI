@@ -648,6 +648,9 @@ namespace WireSockUI.Config
             foreach (var file in Directory.EnumerateFiles(
                          Global.ConfigsFolder, "*.conf", SearchOption.TopDirectoryOnly))
             {
+                if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 catalogEntries++;
                 if (catalogEntries > MaxProfileCatalogEntries)
                     throw new InvalidDataException(

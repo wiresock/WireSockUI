@@ -33,6 +33,8 @@ jobs:
 
   sdk-integration:
     uses: ./.github/workflows/sdk-integration.yml
+    with:
+      required: true
     secrets: inherit
 
   build-and-package:
