@@ -75,6 +75,7 @@ namespace WireSockUI.Tests
                 { "Script hook warning preserves and escapes complete commands", ScriptHookWarningPreservesAndEscapesCompleteCommands },
                 { "Profile enumeration accepts uppercase conf extension", ProfileEnumerationAcceptsUppercaseConfExtension },
                 { "Profile enumeration creates missing overridden config folder", ProfileEnumerationCreatesMissingOverriddenConfigFolder },
+                { "Profile enumeration rejects oversized folders", ProfileEnumerationRejectsOversizedFolders },
                 { "Profile catalog reports enumeration failures without replacing data", ProfileCatalogReportsEnumerationFailures },
                 { "Profile catalog rejects case-insensitive duplicates", ProfileCatalogRejectsCaseInsensitiveDuplicates },
                 { "Profile rejects oversized installed files", ProfileRejectsOversizedInstalledFiles },
@@ -146,12 +147,14 @@ namespace WireSockUI.Tests
                 { "Secure filesystem reads text through validated handles", SecureFileSystemReadsTextThroughValidatedHandles },
                 { "Secure filesystem rejects writable hard links", SecureFileSystemRejectsWritableHardLinks },
                 { "Tunnel session coordinator enforces recovery invariants", TunnelSessionCoordinatorEnforcesRecoveryInvariants },
+                { "Tunnel session coordinator waits for pending operations", TunnelSessionCoordinatorWaitsForPendingOperations },
                 { "Tunnel monitor stops after a bounded query timeout", TunnelMonitorStopsAfterBoundedQueryTimeout },
                 { "Tunnel monitor preserves statistics query timeouts", TunnelMonitorPreservesStatisticsQueryTimeouts },
                 { "Tunnel monitor suppresses canceled query updates", TunnelMonitorSuppressesCanceledQueryUpdates },
                 { "Tunnel monitor classifies unexpected statistics failures", TunnelMonitorClassifiesUnexpectedStatisticsFailures },
                 { "Tunnel monitor UI dispatch awaits marshaled updates", TunnelMonitorUiDispatchAwaitsMarshaledUpdates },
                 { "WireSock manager bounds native log backpressure", WireSockManagerBoundsNativeLogBackpressure },
+                { "WireSock manager bounds retained log records", WireSockManagerBoundsRetainedLogRecords },
                 { "UI log buffering coalesces and bounds dispatch", UiLogBufferingCoalescesAndBoundsDispatch },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
@@ -192,6 +195,7 @@ namespace WireSockUI.Tests
                 { "SDK smoke runs final cleanup after failures", SdkSmokeRunsFinalCleanupAfterFailures },
                 { "Profile rename commits and rolls back transactionally", ProfileRenameCommitsAndRollsBackTransactionally },
                 { "Single-instance event rejects broad access", SingleInstanceEventRejectsBroadAccess },
+                { "Tunnel profile state matches selections case-insensitively", TunnelProfileStateMatchesSelectionsCaseInsensitively },
                 { "Network lock enum matches wgbooster ABI", NetworkLockEnumMatchesWgboosterAbi },
                 { "WireSock exports use restricted DLL search", WireSockExportsUseRestrictedDllSearch },
                 { "WireSock handle booleans match the C++ ABI", WireSockHandleBooleansMatchCppAbi },
@@ -762,9 +766,12 @@ namespace WireSockUI.Tests
             WithTemporaryConfigFolder(() =>
             {
                 File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Office.CONF"), string.Empty);
+                File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Archive.config"), string.Empty);
+                File.WriteAllText(Path.Combine(Global.ConfigsFolder, "Backup.conf-old"), string.Empty);
 
                 var profiles = Profile.GetProfiles().ToList();
                 AssertTrue(profiles.Contains("Office"), "Expected .CONF profiles to be listed on Windows.");
+                AssertEqual(1, profiles.Count);
             });
         }
 
@@ -802,6 +809,19 @@ namespace WireSockUI.Tests
                     // Best-effort cleanup must not hide the original test failure.
                 }
             }
+        }
+
+        private static void ProfileEnumerationRejectsOversizedFolders()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                for (var index = 0; index <= Profile.MaxProfileCatalogEntries; index++)
+                    File.WriteAllText(Path.Combine(Global.ConfigsFolder, $"entry-{index:D4}.tmp"), string.Empty);
+
+                AssertThrows<InvalidDataException>(
+                    () => Profile.GetProfiles(),
+                    $"more than {Profile.MaxProfileCatalogEntries}");
+            });
         }
 
         private static void ProfileRejectsReparsePointProfileFiles()
@@ -2904,6 +2924,31 @@ namespace WireSockUI.Tests
             coordinator.EndOperation();
         }
 
+        private static void TunnelSessionCoordinatorWaitsForPendingOperations()
+        {
+            var coordinator = new TunnelSessionCoordinator();
+            AssertTrue(coordinator.TryBeginOperation(out _),
+                "Expected the initial tunnel operation to start.");
+
+            var waitingOperation = coordinator.WaitToBeginOperationAsync(() => false, 1);
+            Thread.Sleep(20);
+            AssertFalse(waitingOperation.IsCompleted,
+                "Expected recovery handling to wait while another tunnel operation owns the coordinator.");
+
+            coordinator.EndOperation();
+            AssertTrue(waitingOperation.Wait(2000),
+                "Expected recovery handling to acquire the coordinator after the pending operation completed.");
+            AssertTrue(waitingOperation.Result,
+                "Expected the waiting tunnel operation to report successful acquisition.");
+            coordinator.EndOperation();
+
+            AssertTrue(coordinator.TryBeginOperation(out _),
+                "Expected a second initial operation to start.");
+            AssertFalse(coordinator.WaitToBeginOperationAsync(() => true, 1).GetAwaiter().GetResult(),
+                "Expected obsolete recovery handling to stop instead of waiting indefinitely.");
+            coordinator.EndOperation();
+        }
+
         private static void DiagnosticLoggingRedactsCredentials()
         {
             var redacted = SecureRollingTraceListener.Redact(
@@ -3833,6 +3878,28 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void WireSockManagerBoundsRetainedLogRecords()
+        {
+            AssertEqual(string.Empty, WireSockManager.BoundLogMessage(null));
+            AssertEqual("short message", WireSockManager.BoundLogMessage("short message"));
+
+            var oversizedMessage = new string('x', WireSockManager.MaximumRetainedLogMessageCharacters + 100);
+            var boundedMessage = WireSockManager.BoundLogMessage(oversizedMessage);
+            AssertEqual(WireSockManager.MaximumRetainedLogMessageCharacters, boundedMessage.Length);
+            AssertTrue(boundedMessage.EndsWith("[truncated]", StringComparison.Ordinal),
+                "Expected oversized native records to carry an explicit truncation diagnostic.");
+
+            const string suffix = " ... [truncated]";
+            var retainedLength = WireSockManager.MaximumRetainedLogMessageCharacters - suffix.Length;
+            var surrogateBoundaryMessage = new string('x', retainedLength - 1) +
+                                           char.ConvertFromUtf32(0x1F600) +
+                                           new string('y', suffix.Length + 10);
+            var surrogateSafeMessage = WireSockManager.BoundLogMessage(surrogateBoundaryMessage);
+            new UTF8Encoding(false, true).GetBytes(surrogateSafeMessage);
+            AssertTrue(surrogateSafeMessage.Length <= WireSockManager.MaximumRetainedLogMessageCharacters,
+                "Expected truncation not to retain a dangling UTF-16 surrogate.");
+        }
+
         private static void UiLogBufferingCoalescesAndBoundsDispatch()
         {
             var scheduled = new Queue<Action>();
@@ -4089,6 +4156,18 @@ namespace WireSockUI.Tests
                 "Expected a globally writable/openable ownership event to be rejected.");
             AssertTrue(diagnostic?.IndexOf("untrusted identity", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected an actionable event ACL diagnostic, got '{diagnostic}'.");
+        }
+
+        private static void TunnelProfileStateMatchesSelectionsCaseInsensitively()
+        {
+            AssertTrue(FrmMain.IsTunnelProfileSelected("Office", "office"),
+                "Expected profile selection matching to follow the case-insensitive Windows filename contract.");
+            AssertFalse(FrmMain.IsTunnelProfileSelected("Home", "office"),
+                "Expected a different selected profile not to display the active tunnel state.");
+            AssertFalse(FrmMain.IsTunnelProfileSelected(null, "office"),
+                "Expected a missing selection not to display the active tunnel state.");
+            AssertFalse(FrmMain.IsTunnelProfileSelected("Office", null),
+                "Expected a missing active profile not to mark a selection as active.");
         }
 
         private static void NetworkLockEnumMatchesWgboosterAbi()

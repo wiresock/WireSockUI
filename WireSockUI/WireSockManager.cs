@@ -46,6 +46,8 @@ namespace WireSockUI
         private readonly IWireSockNativeApi _nativeApi;
 
         private const int MaxQueuedLogMessages = 1000;
+        internal const int MaximumRetainedLogMessageCharacters = 4096;
+        private const string LogMessageTruncationSuffix = " ... [truncated]";
         private const string DroppedHandleDiagnostic =
             "The native tunnel was already dropped, but its handle could not be released. Retry disconnect or restart WireSock UI.";
         private static readonly object NativeOperationSyncRoot = new object();
@@ -433,7 +435,7 @@ namespace WireSockUI
 
             try
             {
-                var logMessage = new LogMessage { Message = message };
+                var logMessage = new LogMessage { Message = BoundLogMessage(message) };
 
                 lock (_logQueueSyncRoot)
                 {
@@ -463,6 +465,18 @@ namespace WireSockUI
             {
                 // The native logger can race with shutdown; dropping late messages is safer than crashing.
             }
+        }
+
+        internal static string BoundLogMessage(string message)
+        {
+            if (string.IsNullOrEmpty(message) || message.Length <= MaximumRetainedLogMessageCharacters)
+                return message ?? string.Empty;
+
+            var retainedLength = MaximumRetainedLogMessageCharacters - LogMessageTruncationSuffix.Length;
+            if (retainedLength > 0 && char.IsHighSurrogate(message[retainedLength - 1]))
+                retainedLength--;
+
+            return message.Substring(0, retainedLength) + LogMessageTruncationSuffix;
         }
 
         /// <summary>

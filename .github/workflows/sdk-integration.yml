@@ -10,7 +10,24 @@ permissions:
   contents: read
 
 jobs:
+  configuration:
+    runs-on: windows-latest
+    steps:
+      - name: Report SDK validation status
+        shell: pwsh
+        env:
+          SDK_INTEGRATION_ENABLED: ${{ vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED }}
+        run: |
+          if ($env:SDK_INTEGRATION_ENABLED -eq 'true') {
+            Write-Host 'Real-SDK validation is enabled.'
+          }
+          else {
+            Write-Host 'Real-SDK validation is disabled because WIRESOCKUI_SDK_INTEGRATION_ENABLED is not true.'
+          }
+
   elevated-sdk-smoke:
+    needs: configuration
+    if: vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED == 'true'
     environment: wiresock-sdk
     timeout-minutes: 10
     strategy:
