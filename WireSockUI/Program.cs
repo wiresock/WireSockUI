@@ -20,6 +20,8 @@ namespace WireSockUI
 {
     internal static class Program
     {
+        internal const int MaxApplicationPayloadEntries = 4096;
+        internal const int MaxWireSockSdkDirectoryEntries = 1024;
         private const uint LoadLibrarySearchDllLoadDir = 0x00000100;
         private const uint LoadLibrarySearchSystem32 = 0x00000800;
         private const uint LoadLibrarySearchUserDirs = 0x00000400;
@@ -199,6 +201,7 @@ namespace WireSockUI
             var pendingDirectories = new Stack<string>();
             var discoveredDirectories = new List<string>();
             var discoveredFiles = new List<string>();
+            var discoveredEntryCount = 0;
             pendingDirectories.Push(normalizedDirectory);
 
             try
@@ -228,11 +231,23 @@ namespace WireSockUI
                     }
 
                     discoveredDirectories.Add(currentDirectory);
-                    discoveredFiles.AddRange(Directory.GetFiles(currentDirectory, "*", SearchOption.TopDirectoryOnly));
-
-                    foreach (var childDirectory in Directory.GetDirectories(
+                    foreach (var entry in Directory.EnumerateFileSystemEntries(
                                  currentDirectory, "*", SearchOption.TopDirectoryOnly))
-                        pendingDirectories.Push(childDirectory);
+                    {
+                        discoveredEntryCount++;
+                        if (discoveredEntryCount > MaxApplicationPayloadEntries)
+                            throw new InvalidDataException(
+                                $"The WireSock UI application payload contains more than {MaxApplicationPayloadEntries} entries.");
+
+                        if (!TryGetExistingAttributes(entry, out var entryAttributes, out var entryDiagnostic))
+                            throw new IOException(entryDiagnostic ??
+                                                  $"Application payload entry '{EscapeDiagnosticText(entry)}' could not be inspected.");
+
+                        if ((entryAttributes & FileAttributes.Directory) != 0)
+                            pendingDirectories.Push(entry);
+                        else
+                            discoveredFiles.Add(entry);
+                    }
                 }
             }
             catch (Exception ex)
@@ -573,31 +588,41 @@ namespace WireSockUI
             out string diagnostic)
         {
             diagnostic = null;
-            string[] files;
 
             try
             {
-                files = Directory.GetFiles(directory);
+                var entryCount = 0;
+                foreach (var entry in Directory.EnumerateFileSystemEntries(
+                             directory, "*", SearchOption.TopDirectoryOnly))
+                {
+                    entryCount++;
+                    if (entryCount > MaxWireSockSdkDirectoryEntries)
+                        throw new InvalidDataException(
+                            $"The WireSock SDK directory contains more than {MaxWireSockSdkDirectoryEntries} entries.");
+
+                    if (!TryGetExistingAttributes(entry, out var attributes, out var attributeDiagnostic))
+                        throw new IOException(attributeDiagnostic ??
+                                              $"WireSock SDK entry '{EscapeDiagnosticText(entry)}' could not be inspected.");
+                    if ((attributes & FileAttributes.Directory) != 0)
+                        continue;
+
+                    var extension = Path.GetExtension(entry);
+                    if (!string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase) &&
+                        !string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (string.Equals(entry, libraryPath, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    if (!TryValidateTrustedFilePath(entry,
+                            $"WireSock SDK companion '{Path.GetFileName(entry)}'", out diagnostic))
+                        return false;
+                }
             }
             catch (Exception ex)
             {
                 diagnostic = $"Unable to enumerate WireSock SDK companion files in '{directory}': {ex.Message}";
                 return false;
-            }
-
-            foreach (var file in files)
-            {
-                var extension = Path.GetExtension(file);
-                if (!string.Equals(extension, ".dll", StringComparison.OrdinalIgnoreCase) &&
-                    !string.Equals(extension, ".exe", StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (string.Equals(file, libraryPath, StringComparison.OrdinalIgnoreCase))
-                    continue;
-
-                if (!TryValidateTrustedFilePath(file,
-                        $"WireSock SDK companion '{Path.GetFileName(file)}'", out diagnostic))
-                    return false;
             }
 
             return true;

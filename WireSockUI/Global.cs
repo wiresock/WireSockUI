@@ -12,6 +12,7 @@ namespace WireSockUI
     internal static class Global
     {
         private const string ApplicationFolderName = "WireSockUI";
+        internal const int MaxSecuredTreeEntries = 4096;
 
         public static string MainFolder =
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ApplicationFolderName);
@@ -242,6 +243,16 @@ namespace WireSockUI
 
         private static void SecureExistingChildren(string path, string excludedDirectory = null, int depth = 0)
         {
+            var entries = 0;
+            SecureExistingChildrenCore(path, excludedDirectory, depth, ref entries);
+        }
+
+        private static void SecureExistingChildrenCore(
+            string path,
+            string excludedDirectory,
+            int depth,
+            ref int entries)
+        {
             const int maximumDepth = 64;
             if (depth > maximumDepth)
                 throw new IOException(
@@ -250,17 +261,7 @@ namespace WireSockUI
             using (var directoryHandle = SecureFileSystem.OpenDirectory(path, true))
             {
                 directoryHandle.SetSecurity(CreateAdministratorsOnlyDirectorySecurity());
-                string[] files;
-
-                try
-                {
-                    files = Directory.GetFiles(path);
-                }
-                catch (Exception ex)
-                {
-                    throw new IOException(
-                        $"Unable to enumerate WireSock UI configuration files in '{path}'.", ex);
-                }
+                EnumerateBoundedChildren(path, ref entries, out var files, out var childDirectories);
 
                 foreach (var file in files)
                 {
@@ -282,17 +283,6 @@ namespace WireSockUI
                     }
                 }
 
-                string[] childDirectories;
-                try
-                {
-                    childDirectories = Directory.GetDirectories(path);
-                }
-                catch (Exception ex)
-                {
-                    throw new IOException(
-                        $"Unable to enumerate WireSock UI configuration directories in '{path}'.", ex);
-                }
-
                 foreach (var childDirectory in childDirectories)
                 {
                     if (!string.IsNullOrWhiteSpace(excludedDirectory) &&
@@ -301,7 +291,7 @@ namespace WireSockUI
 
                     try
                     {
-                        SecureExistingChildren(childDirectory, null, depth + 1);
+                        SecureExistingChildrenCore(childDirectory, null, depth + 1, ref entries);
                     }
                     catch (IOException)
                     {
@@ -314,6 +304,46 @@ namespace WireSockUI
                     }
                 }
             }
+        }
+
+        private static void EnumerateBoundedChildren(
+            string path,
+            ref int entries,
+            out string[] files,
+            out string[] directories)
+        {
+            var discoveredFiles = new List<string>();
+            var discoveredDirectories = new List<string>();
+
+            try
+            {
+                foreach (var entry in Directory.EnumerateFileSystemEntries(
+                             path, "*", SearchOption.TopDirectoryOnly))
+                {
+                    entries++;
+                    if (entries > MaxSecuredTreeEntries)
+                        throw new InvalidDataException(
+                            $"The WireSock UI secured data tree contains more than {MaxSecuredTreeEntries} entries. Remove unexpected files or directories before continuing.");
+
+                    var attributes = File.GetAttributes(entry);
+                    if ((attributes & FileAttributes.Directory) != 0)
+                        discoveredDirectories.Add(entry);
+                    else
+                        discoveredFiles.Add(entry);
+                }
+            }
+            catch (InvalidDataException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new IOException(
+                    $"Unable to enumerate WireSock UI configuration entries in '{path}'.", ex);
+            }
+
+            files = discoveredFiles.ToArray();
+            directories = discoveredDirectories.ToArray();
         }
 
         private static bool IsReparsePoint(string path)

@@ -109,6 +109,7 @@ namespace WireSockUI.Tests
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
                 { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
                 { "Global fails closed on configuration directory reparse points", GlobalFailsClosedOnConfigurationDirectoryReparsePoints },
+                { "Global bounds secured tree enumeration", GlobalBoundsSecuredTreeEnumeration },
                 { "Global removes configuration file reparse points by handle", GlobalRemovesConfigurationFileReparsePointsByHandle },
                 { "Profile rejects user-writable secured files", ProfileRejectsUserWritableSecuredFiles },
                 { "Release version parser handles SemVer tags", ReleaseVersionParserHandlesSemVerTags },
@@ -116,9 +117,11 @@ namespace WireSockUI.Tests
                 { "Program path normalization preserves drive roots", ProgramPathNormalizationPreservesDriveRoots },
                 { "Program rejects untrusted application payloads", ProgramRejectsUntrustedApplicationPayloads },
                 { "Program enumerates nested application payloads", ProgramEnumeratesNestedApplicationPayloads },
+                { "Program bounds application payload enumeration", ProgramBoundsApplicationPayloadEnumeration },
                 { "Program distinguishes x64 and ARM64 PE images", ProgramDistinguishesBinaryArchitectures },
                 { "Program rejects user-writable WireSock library directories", ProgramRejectsUserWritableWireSockLibraryDirectories },
                 { "Program detects user-writable WireSock library files", ProgramDetectsUserWritableWireSockLibraryFiles },
+                { "Program bounds WireSock SDK companion enumeration", ProgramBoundsWireSockSdkCompanionEnumeration },
                 { "Program reports attribute inspection failures", ProgramReportsAttributeInspectionFailures },
                 { "Program rejects an untrusted WireSock crash handler", ProgramRejectsUntrustedWireSockCrashHandler },
                 { "Program distinguishes read-only and writable ACLs", ProgramDistinguishesReadOnlyAndWritableAcls },
@@ -132,6 +135,9 @@ namespace WireSockUI.Tests
                 { "Profile import rejects directory sources", ProfileImportRejectsDirectorySources },
                 { "Profile import reports malformed source paths consistently", ProfileImportReportsMalformedSourcePathsConsistently },
                 { "Legacy migration quarantines valid profiles", LegacyMigrationQuarantinesValidProfiles },
+                { "Legacy migration accepts uppercase conf extensions", LegacyMigrationAcceptsUppercaseConfExtensions },
+                { "Legacy migration bounds catalog enumeration", LegacyMigrationBoundsCatalogEnumeration },
+                { "Legacy migration preserves modified sources on completion", LegacyMigrationPreservesModifiedSourcesOnCompletion },
                 { "Legacy migration preserves approved duplicates", LegacyMigrationPreservesApprovedDuplicates },
                 { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
                 { "Legacy migration rejects reparse point sources", LegacyMigrationRejectsReparsePointSources },
@@ -1492,6 +1498,28 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void ProgramBoundsApplicationPayloadEnumeration()
+        {
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+
+            try
+            {
+                Directory.CreateDirectory(directory);
+                for (var index = 0; index <= WireSockUI.Program.MaxApplicationPayloadEntries; index++)
+                    File.WriteAllText(Path.Combine(directory, $"payload-{index:D5}.txt"), string.Empty);
+
+                AssertFalse(WireSockUI.Program.TryEnumerateApplicationPayloadEntries(
+                        directory, out _, out _, out var diagnostic),
+                    "Expected oversized application payload enumeration to fail closed.");
+                AssertTrue(diagnostic?.IndexOf("more than", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable payload limit diagnostic, got '{diagnostic}'.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
         private static void ProgramDistinguishesBinaryArchitectures()
         {
             var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
@@ -1695,6 +1723,32 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void GlobalBoundsSecuredTreeEnumeration()
+        {
+            var root = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(root);
+
+            try
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = true;
+                for (var index = 0; index <= Global.MaxSecuredTreeEntries; index++)
+                    File.WriteAllText(Path.Combine(root, $"entry-{index:D5}.txt"), string.Empty);
+
+                var secureChildren = typeof(Global).GetMethod("SecureExistingChildren",
+                    BindingFlags.NonPublic | BindingFlags.Static);
+                if (secureChildren == null)
+                    throw new InvalidOperationException("SecureExistingChildren helper was not found.");
+
+                AssertInvocationThrows<InvalidDataException>(
+                    () => secureChildren.Invoke(null, new object[] { root, null, 0 }), "more than");
+            }
+            finally
+            {
+                SecureFileSystem.AllowOwnerWriteFailureForTests = false;
+                TryDeleteDirectory(root, true);
+            }
+        }
+
         private static void ProgramRejectsUntrustedWireSockCrashHandler()
         {
             var validate = typeof(WireSockUI.Program).GetMethod("TryValidateTrustedWireSockCompanionFiles",
@@ -1715,6 +1769,36 @@ namespace WireSockUI.Tests
                 AssertTrue(args[2] is string diagnostic &&
                            diagnostic.IndexOf("non-administrative", StringComparison.OrdinalIgnoreCase) >= 0,
                     $"Expected an actionable crash-handler trust diagnostic, got '{args[2]}'.");
+            }
+            finally
+            {
+                TryDeleteDirectory(directory, true);
+            }
+        }
+
+        private static void ProgramBoundsWireSockSdkCompanionEnumeration()
+        {
+            var validate = typeof(WireSockUI.Program).GetMethod("TryValidateTrustedWireSockCompanionFiles",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            if (validate == null)
+                throw new InvalidOperationException("TryValidateTrustedWireSockCompanionFiles helper was not found.");
+
+            var directory = Path.Combine(Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var libraryPath = Path.Combine(directory, "wgbooster.dll");
+            Directory.CreateDirectory(directory);
+
+            try
+            {
+                File.WriteAllText(libraryPath, string.Empty);
+                for (var index = 0; index < WireSockUI.Program.MaxWireSockSdkDirectoryEntries; index++)
+                    File.WriteAllText(Path.Combine(directory, $"entry-{index:D5}.tmp"), string.Empty);
+
+                var args = new object[] { directory, libraryPath, null };
+                AssertFalse((bool)validate.Invoke(null, args),
+                    "Expected oversized WireSock SDK companion enumeration to fail closed.");
+                AssertTrue(args[2] is string diagnostic &&
+                           diagnostic.IndexOf("more than", StringComparison.OrdinalIgnoreCase) >= 0,
+                    $"Expected an actionable SDK directory limit diagnostic, got '{args[2]}'.");
             }
             finally
             {
@@ -2104,6 +2188,62 @@ namespace WireSockUI.Tests
                     "Expected staging not to delete the user-controlled legacy source before approval.");
                 AssertFalse(File.Exists(Profile.GetProfilePath("office")),
                     "Expected staging not to promote or activate the legacy profile.");
+            });
+        }
+
+        private static void LegacyMigrationAcceptsUppercaseConfExtensions()
+        {
+            WithTemporaryLegacyMigrationFolders((legacyFolder, pendingFolder) =>
+            {
+                var source = Path.Combine(legacyFolder, "office.CONF");
+                File.WriteAllText(source, ValidConfig());
+
+                LegacyProfileMigrationService.StageLegacyProfiles();
+
+                AssertTrue(File.Exists(Path.Combine(pendingFolder, "office.conf")),
+                    "Expected case-insensitive legacy profile extensions to enter quarantine.");
+
+                LegacyProfileMigrationService.CompleteApprovedMigration("office");
+                AssertFalse(File.Exists(source),
+                    "Expected approval to remove the original source with its exact extension casing.");
+            });
+        }
+
+        private static void LegacyMigrationBoundsCatalogEnumeration()
+        {
+            WithTemporaryLegacyMigrationFolders((legacyFolder, pendingFolder) =>
+            {
+                for (var index = 0; index <= LegacyProfileMigrationService.MaxLegacyCatalogEntries; index++)
+                    File.WriteAllText(Path.Combine(legacyFolder, $"entry-{index:D5}.tmp"), string.Empty);
+
+                AssertThrows<InvalidDataException>(
+                    LegacyProfileMigrationService.StageLegacyProfiles, "more than");
+
+                for (var index = 0; index <= LegacyProfileMigrationService.MaxLegacyCatalogEntries; index++)
+                    File.WriteAllText(Path.Combine(pendingFolder, $"entry-{index:D5}.tmp"), string.Empty);
+
+                AssertThrows<InvalidDataException>(
+                    () => LegacyProfileMigrationService.GetPendingProfileNames(), "more than");
+            });
+        }
+
+        private static void LegacyMigrationPreservesModifiedSourcesOnCompletion()
+        {
+            WithTemporaryLegacyMigrationFolders((legacyFolder, pendingFolder) =>
+            {
+                var source = Path.Combine(legacyFolder, "office.conf");
+                var pending = Path.Combine(pendingFolder, "office.conf");
+                File.WriteAllText(source, ValidConfig());
+                LegacyProfileMigrationService.StageLegacyProfiles();
+                File.WriteAllText(source, ValidConfig().Replace("10.0.0.2/32", "10.0.0.3/32"));
+
+                AssertThrows<IOException>(
+                    () => LegacyProfileMigrationService.CompleteApprovedMigration("office"),
+                    "no longer matches");
+                AssertTrue(File.Exists(source),
+                    "Expected a legacy source modified after staging to be preserved.");
+                AssertTrue(File.Exists(pending),
+                    "Expected quarantine metadata to remain available after a source mismatch.");
             });
         }
 
