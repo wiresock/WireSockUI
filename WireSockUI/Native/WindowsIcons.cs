@@ -8,7 +8,7 @@ namespace WireSockUI.Native
     /// <summary>
     ///     Native API class to retrieve specific size icons from icongroups in Windows resources
     /// </summary>
-    internal class WindowsIcons
+    internal static class WindowsIcons
     {
         /*
          * Icons of interest
@@ -45,9 +45,11 @@ namespace WireSockUI.Native
 
         private const int RtGroupIcon = 14;
         private const int RtIcon = 0x00000003;
+        private const uint LoadLibraryAsDataFile = 0x00000002;
+        private const uint LoadLibraryAsImageResource = 0x00000020;
 
-        [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Ansi)]
-        private static extern IntPtr LoadLibrary([MarshalAs(UnmanagedType.LPStr)] string lpFileName);
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr LoadLibraryEx(string fileName, IntPtr file, uint flags);
 
         /// <summary>
         ///     Frees the loaded dynamic-link library (DLL) module and, if necessary, decrements its reference count.
@@ -101,7 +103,10 @@ namespace WireSockUI.Native
             Icon icon = null;
 
             // Load the library containing the icon resource
-            var hLibrary = LoadLibrary(file);
+            var hLibrary = LoadLibraryEx(
+                file,
+                IntPtr.Zero,
+                LoadLibraryAsDataFile | LoadLibraryAsImageResource);
             if (hLibrary == IntPtr.Zero) return null;
 
             try
@@ -115,11 +120,15 @@ namespace WireSockUI.Native
 
                 var lpResourcePtr = LockResource(hMem);
                 var sz = SizeofResource(hLibrary, hResource);
-                var lpResource = new byte[sz];
+                if (lpResourcePtr == IntPtr.Zero || sz == 0 || sz > int.MaxValue)
+                    return null;
+
+                var lpResource = new byte[(int)sz];
                 Marshal.Copy(lpResourcePtr, lpResource, 0, (int)sz);
 
                 // Get the icon ID
                 var nId = LookupIconIdFromDirectoryEx(lpResource, true, size, size, 0x0000);
+                if (nId <= 0) return null;
 
                 // Find and load the icon resource
                 hResource = FindResource(hLibrary, nId, RtIcon);
@@ -130,7 +139,10 @@ namespace WireSockUI.Native
 
                 lpResourcePtr = LockResource(hMem);
                 sz = SizeofResource(hLibrary, hResource);
-                lpResource = new byte[sz];
+                if (lpResourcePtr == IntPtr.Zero || sz == 0 || sz > int.MaxValue)
+                    return null;
+
+                lpResource = new byte[(int)sz];
                 Marshal.Copy(lpResourcePtr, lpResource, 0, (int)sz);
 
                 // Create the icon from the resource
@@ -168,6 +180,8 @@ namespace WireSockUI.Native
         /// <exception cref="FileNotFoundException">Windows ImageRes resource could not be located.</exception>
         public static Icon GetWindowsIcon(Icons icon, int size)
         {
+            if (size <= 0) throw new ArgumentOutOfRangeException(nameof(size));
+
             // Windows 11
             var library = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "SystemResources",
                 "imageres.dll.mun");

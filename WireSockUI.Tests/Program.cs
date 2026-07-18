@@ -9,6 +9,7 @@ using System.Reflection;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
 using System.Security.Principal;
 using System.Text;
 using System.Threading;
@@ -102,7 +103,8 @@ namespace WireSockUI.Tests
             var tests = new Dictionary<string, Action>
             {
                 { "Profile rejects empty required values", ProfileRejectsEmptyRequiredValues },
-                { "Profile rejects empty address list items", ProfileRejectsEmptyAddressListItems },
+                { "Profile matches SDK blank routing list handling", ProfileMatchesSdkBlankRoutingListHandling },
+                { "IP validation rejects malformed values safely", IpValidationRejectsMalformedValuesSafely },
                 { "Profile validates Windows-safe profile names", ProfileValidatesWindowsSafeNames },
                 { "Profile path rejects unsafe names", ProfilePathRejectsUnsafeNames },
                 { "Profile reports configured script hooks", ProfileReportsConfiguredScriptHooks },
@@ -122,7 +124,7 @@ namespace WireSockUI.Tests
                 { "Parser matches SDK last-section-wins behavior", ParserMatchesSdkLastSectionWinsBehavior },
                 { "Parser rejects malformed lines", ParserRejectsMalformedLines },
                 { "Parser matches SDK duplicate-key projection", ParserMatchesSdkDuplicateKeyProjection },
-                { "Parser rejects SDK-incompatible byte-order marks", ParserRejectsSdkIncompatibleByteOrderMarks },
+                { "Parser accepts SDK UTF-8 BOM and rejects incompatible encodings", ParserAcceptsSdkUtf8BomAndRejectsIncompatibleEncodings },
                 { "Parser rejects malformed UTF-8", ParserRejectsMalformedUtf8 },
                 { "Parser rejects keys before sections", ParserRejectsKeysBeforeSections },
                 { "Parser rejects empty section names", ParserRejectsEmptySectionNames },
@@ -241,6 +243,7 @@ namespace WireSockUI.Tests
                 { "Profile rename recovery rejects ambiguous states", ProfileRenameRecoveryRejectsAmbiguousStates },
                 { "Profile rename recovery rejects active XML content", ProfileRenameRecoveryRejectsActiveXmlContent },
                 { "Profile transaction recovery removes orphaned temporary files", ProfileTransactionRecoveryRemovesOrphanedTemporaryFiles },
+                { "Profile transaction recovery bounds all directory entries", ProfileTransactionRecoveryBoundsAllDirectoryEntries },
                 { "Test execution timeout policy is bounded", TestExecutionTimeoutPolicyIsBounded },
                 { "Single-instance event rejects broad access", SingleInstanceEventRejectsBroadAccess },
                 { "Tunnel profile state matches selections case-insensitively", TunnelProfileStateMatchesSelectionsCaseInsensitively },
@@ -697,19 +700,81 @@ namespace WireSockUI.Tests
             AssertThrows<ArgumentException>(() => new Profile(path), "empty \"PrivateKey\"");
         }
 
-        private static void ProfileRejectsEmptyAddressListItems()
+        private static void ProfileMatchesSdkBlankRoutingListHandling()
         {
             var path = WriteConfig(
                 "[Interface]\n" +
                 $"PrivateKey = {PrivateKey}\n" +
-                "Address = 10.0.0.2/32\n" +
+                "Address = 10.0.0.2/32, ,\n" +
                 "\n" +
                 "[Peer]\n" +
                 $"PublicKey = {PublicKey}\n" +
                 "Endpoint = example.com:51820\n" +
-                "AllowedIPs = 0.0.0.0/0,\n");
+                "AllowedIPs = 0.0.0.0/0,\n" +
+                "DisallowedIPs = , 192.168.0.0/16,\n");
 
-            AssertThrows<FormatException>(() => new Profile(path), "AllowedIPs");
+            var profile = new Profile(path);
+            AssertTrue(profile.Address.Contains("10.0.0.2/32"),
+                "Expected a non-empty interface address to remain available.");
+            AssertTrue(profile.AllowedIPs.Contains("0.0.0.0/0"),
+                "Expected a non-empty allowed route to remain available.");
+            AssertTrue(profile.DisallowedIPs.Contains("192.168.0.0/16"),
+                "Expected a non-empty excluded route to remain available.");
+
+            AssertThrows<FormatException>(
+                () => Profile.ValidateAddresses("Interface", "DNS", "8.8.8.8,", IpHelper.IsValidIpAddress),
+                "DNS");
+
+            var emptyAddressPath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = , ,\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+            AssertThrows<FormatException>(() => new Profile(emptyAddressPath), "at least one address");
+
+            var emptyAllowedIpsPath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = , ,\n");
+            AssertThrows<FormatException>(() => new Profile(emptyAllowedIpsPath), "at least one address");
+
+            var emptyDisallowedIpsPath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "DisallowedIPs = , ,\n");
+            AssertTrue(new Profile(emptyDisallowedIpsPath).DisallowedIPs == null,
+                "Expected an optional route list containing only blank items to normalize to null.");
+        }
+
+        private static void IpValidationRejectsMalformedValuesSafely()
+        {
+            AssertFalse(IpHelper.IsValidCidr(null), "Expected a null CIDR to be rejected without throwing.");
+            AssertFalse(IpHelper.IsValidIpAddress(null),
+                "Expected a null IP address to be rejected without throwing.");
+            AssertFalse(IpHelper.IsValidIpNetwork(null),
+                "Expected a null IP network to be rejected without throwing.");
+            AssertFalse(IpHelper.IsValidAddress(null),
+                "Expected a null endpoint address to be rejected without throwing.");
+            AssertFalse(IpHelper.IsValidCidr("10.0.0.0/+24"),
+                "Expected a signed IPv4 prefix to be rejected like the current SDK parser.");
+            AssertFalse(IpHelper.IsValidCidr("10.0.0.0/-1"),
+                "Expected a negative IPv4 prefix to be rejected.");
+            AssertFalse(IpHelper.IsValidCidr("2001:db8::/0x40"),
+                "Expected a hexadecimal IPv6 prefix to be rejected.");
+            AssertTrue(IpHelper.IsValidCidr("10.0.0.0/24"), "Expected a valid IPv4 CIDR to pass.");
+            AssertTrue(IpHelper.IsValidCidr("2001:db8::/64"), "Expected a valid IPv6 CIDR to pass.");
         }
 
         private static void ProfileValidatesWindowsSafeNames()
@@ -898,8 +963,9 @@ namespace WireSockUI.Tests
         {
             WithTemporaryConfigFolder(() =>
             {
-                for (var index = 0; index <= Profile.MaxProfileCatalogEntries; index++)
+                for (var index = 0; index < Profile.MaxProfileCatalogEntries; index++)
                     File.WriteAllText(Path.Combine(Global.ConfigsFolder, $"entry-{index:D4}.tmp"), string.Empty);
+                Directory.CreateDirectory(Path.Combine(Global.ConfigsFolder, "non-profile-directory"));
 
                 AssertThrows<InvalidDataException>(
                     () => Profile.GetProfiles(),
@@ -1157,13 +1223,36 @@ namespace WireSockUI.Tests
             AssertProfileRejectsInterfaceOption("#@ws:Jmin = 10\n#@ws:Jmax = 10", "less than");
         }
 
-        private static void ParserRejectsSdkIncompatibleByteOrderMarks()
+        private static void ParserAcceptsSdkUtf8BomAndRejectsIncompatibleEncodings()
         {
             var path = WriteConfig(string.Empty);
             try
             {
                 File.WriteAllText(path, ValidConfig(), new UTF8Encoding(true));
-                AssertThrows<FormatException>(() => ParseConfig(path), "BOM");
+                AssertTrue(ParseConfig(path).GetSection("Interface") != null,
+                    "Expected the parser to accept a leading UTF-8 BOM like the current SDK.");
+                AssertTrue(new Profile(path).PrivateKey == PrivateKey,
+                    "Expected profile projection to accept a leading UTF-8 BOM.");
+
+                File.WriteAllText(path, ValidConfig(), Encoding.Unicode);
+                AssertThrows<FormatException>(() => ParseConfig(path), "UTF-8");
+
+                File.WriteAllText(path, ValidConfig(), new UTF32Encoding(false, true, true));
+                AssertThrows<FormatException>(() => ParseConfig(path), "UTF-8");
+
+                File.WriteAllText(path, ValidConfig(), new UTF32Encoding(true, true, true));
+                AssertThrows<FormatException>(() => ParseConfig(path), "UTF-8");
+
+                var utf8 = new UTF8Encoding(false, true);
+                var shortReadPayload = new UTF8Encoding(true).GetPreamble()
+                    .Concat(utf8.GetBytes(ValidConfig()))
+                    .ToArray();
+                using (var stream = new ShortReadMemoryStream(shortReadPayload))
+                {
+                    var parser = new WireguardConfigParser.ConfigParser(stream);
+                    AssertTrue(parser.GetSection("Interface") != null,
+                        "Expected BOM detection to tolerate a stream that returns a short read.");
+                }
             }
             finally
             {
@@ -3103,6 +3192,8 @@ namespace WireSockUI.Tests
             AssertEqual(0x80, peerPublicKey[31] & 0x80);
             AssertThrows<ArgumentNullException>(
                 () => Curve25519.GetSharedSecret(privateKey, null), nameof(peerPublicKey));
+            AssertThrows<CryptographicException>(
+                () => Curve25519.GetSharedSecret(privateKey, new byte[Curve25519.KeySize]), "all-zero");
 
             var generatedPrivateKey = Curve25519.CreateRandomPrivateKey();
             AssertEqual(32, generatedPrivateKey.Length);
@@ -4612,6 +4703,20 @@ namespace WireSockUI.Tests
             });
         }
 
+        private static void ProfileTransactionRecoveryBoundsAllDirectoryEntries()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                Global.EnsureProfileTransactionsFolderExists();
+                for (var index = 0; index < Profile.MaxProfileCatalogEntries; index++)
+                    File.WriteAllText(Path.Combine(Global.ConfigsFolder, $"entry-{index:D4}.tmp"), string.Empty);
+
+                AssertThrows<InvalidDataException>(
+                    () => ProfileFileTransaction.RecoverInterruptedTransactions(),
+                    $"more than {Profile.MaxProfileCatalogEntries} entries");
+            });
+        }
+
         private static void ProfileRenameRecoveryRejectsActiveXmlContent()
         {
             WithTemporaryConfigFolder(() =>
@@ -5018,6 +5123,18 @@ namespace WireSockUI.Tests
                 SetLastErrorForTest((uint)NetworkLockModeError);
                 NetworkLockQueryCount++;
                 return NetworkLockMode;
+            }
+        }
+
+        private sealed class ShortReadMemoryStream : MemoryStream
+        {
+            internal ShortReadMemoryStream(byte[] buffer) : base(buffer)
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                return base.Read(buffer, offset, Math.Min(count, 1));
             }
         }
 

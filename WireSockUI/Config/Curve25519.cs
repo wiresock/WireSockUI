@@ -204,6 +204,17 @@ namespace WireSockUI.Config
             try
             {
                 Core(sharedSecret, null, clampedPrivateKey, peerPublicKey);
+                byte combined = 0;
+                foreach (var value in sharedSecret)
+                    combined |= value;
+
+                if (combined == 0)
+                {
+                    Array.Clear(sharedSecret, 0, sharedSecret.Length);
+                    throw new CryptographicException(
+                        "The X25519 peer public key produced an invalid all-zero shared secret.");
+                }
+
                 return sharedSecret;
             }
             finally

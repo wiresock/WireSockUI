@@ -6,7 +6,7 @@ namespace WireSockUI.Native
     /// <summary>
     ///     Native class to validate IPv4, IPv6 and DNS domain addresses & CIDR notations
     /// </summary>
-    internal class IpHelper
+    internal static class IpHelper
     {
         [DllImport("iphlpapi.dll", SetLastError = false, ExactSpelling = true)]
         private static extern uint ParseNetworkString([MarshalAs(UnmanagedType.LPWStr)] string networkString,
@@ -20,6 +20,9 @@ namespace WireSockUI.Native
         /// <returns><c>true</c> if valid, otherwise <c>false</c></returns>
         public static bool IsValidIpNetwork(string ipNetwork)
         {
+            if (string.IsNullOrWhiteSpace(ipNetwork))
+                return false;
+
             return ParseNetworkString(ipNetwork.Trim(), NetString.NetStringIpNetwork) == 0;
         }
 
@@ -35,10 +38,13 @@ namespace WireSockUI.Native
         /// </remarks>
         public static bool IsValidCidr(string cidr)
         {
-            var parts = cidr.Split('/');
+            if (string.IsNullOrWhiteSpace(cidr))
+                return false;
+
+            var parts = cidr.Trim().Split('/');
             if (parts.Length != 2) return false;
 
-            if (!int.TryParse(parts[1], out var prefixLength)) return false;
+            if (!TryParsePrefixLength(parts[1], out var prefixLength)) return false;
 
             if (ParseNetworkString(parts[0], NetString.NetStringIpv4Address) == 0 &&
                 0 <= prefixLength && prefixLength <= 32)
@@ -58,6 +64,9 @@ namespace WireSockUI.Native
         /// <returns><c>true</c> if valid, otherwise <c>false</c></returns>
         public static bool IsValidIpAddress(string ipAddress)
         {
+            if (string.IsNullOrWhiteSpace(ipAddress))
+                return false;
+
             return ParseNetworkString(ipAddress.Trim(), NetString.NetStringIpAddress) == 0;
         }
 
@@ -81,7 +90,33 @@ namespace WireSockUI.Native
         /// <returns><c>true</c> if valid, otherwise <c>false</c></returns>
         public static bool IsValidAddress(string address)
         {
+            if (string.IsNullOrWhiteSpace(address))
+                return false;
+
             return ParseNetworkString(address.Trim(), NetString.NetStringAnyServiceNoScope) == 0;
+        }
+
+        private static bool TryParsePrefixLength(string value, out int prefixLength)
+        {
+            prefixLength = 0;
+            if (value == null)
+                return false;
+
+            var trimmed = value.Trim();
+            if (trimmed.Length == 0)
+                return false;
+
+            foreach (var character in trimmed)
+            {
+                if (character < '0' || character > '9')
+                    return false;
+
+                prefixLength = prefixLength * 10 + character - '0';
+                if (prefixLength > 128)
+                    return false;
+            }
+
+            return true;
         }
 
         [Flags]

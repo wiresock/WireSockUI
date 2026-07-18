@@ -1239,11 +1239,11 @@ namespace WireSockUI.Forms
                         TunnelDisconnectTimeoutMilliseconds).ConfigureAwait(false);
                     if (disconnectResult.TimedOut)
                     {
-                        cleanupDelegated = true;
                         markerLease = WriteOrUpdateNativeRecoveryMarker(markerLease, "tunnel disconnect timeout",
                             $"The native disconnect cleanup for profile '{profile}' did not return within {TunnelDisconnectTimeoutMilliseconds} ms.");
                         ScheduleTimedOutDisconnectCleanup(disconnectResult.PendingCompletion, profile, false,
                             markerLease);
+                        cleanupDelegated = true;
                         return;
                     }
 
@@ -1256,11 +1256,11 @@ namespace WireSockUI.Forms
                         TunnelDisconnectTimeoutMilliseconds).ConfigureAwait(false);
                     if (disconnectResult.TimedOut)
                     {
-                        cleanupDelegated = true;
                         markerLease = WriteOrUpdateNativeRecoveryMarker(markerLease, "tunnel disconnect timeout",
                             $"The native disconnect cleanup for profile '{profile}' did not return within {TunnelDisconnectTimeoutMilliseconds} ms.");
                         ScheduleTimedOutDisconnectCleanup(disconnectResult.PendingCompletion, profile, false,
                             markerLease);
+                        cleanupDelegated = true;
                         return;
                     }
 
@@ -1280,19 +1280,26 @@ namespace WireSockUI.Forms
             }
             finally
             {
-                if (!cleanupDelegated && cleanupFailed)
-                {
-                    await HandleNativeCleanupFailureAsync(profile, "timed-out connect cleanup", diagnostic,
-                            markerLease)
-                        .ConfigureAwait(false);
-                }
-                else if (!cleanupDelegated)
-                {
-                    Global.NativeRecoveryMarkers.TryDelete(markerLease);
-                }
-
                 if (!cleanupDelegated)
-                    EndNativeCleanup(profile);
+                {
+                    try
+                    {
+                        if (cleanupFailed)
+                        {
+                            await HandleNativeCleanupFailureAsync(profile, "timed-out connect cleanup", diagnostic,
+                                    markerLease)
+                                .ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            Global.NativeRecoveryMarkers.TryDelete(markerLease);
+                        }
+                    }
+                    finally
+                    {
+                        EndNativeCleanup(profile);
+                    }
+                }
             }
 
             TryRunOnUiThread(() =>
