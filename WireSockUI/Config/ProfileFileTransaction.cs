@@ -281,13 +281,11 @@ namespace WireSockUI.Config
             var directory = Path.GetDirectoryName(path);
             var expectedFileName = Path.GetFileName(path);
             string match = null;
-            var entries = 0;
-            foreach (var candidate in Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly))
+            foreach (var candidate in EnumerateProfileDirectoryFiles(
+                         directory,
+                         Profile.MaxProfileCatalogEntries,
+                         $"The profile folder contains more than {Profile.MaxProfileCatalogEntries} entries."))
             {
-                entries++;
-                if (entries > Profile.MaxProfileCatalogEntries)
-                    throw new InvalidDataException(
-                        $"The profile folder contains more than {Profile.MaxProfileCatalogEntries} files.");
                 if (!string.Equals(Path.GetFileName(candidate), expectedFileName,
                         StringComparison.OrdinalIgnoreCase))
                     continue;
@@ -392,14 +390,11 @@ namespace WireSockUI.Config
 
         private static void RecoverLegacyTemporaryProfiles(string profileDirectory)
         {
-            var entries = 0;
-            foreach (var path in Directory.EnumerateFiles(profileDirectory, "*", SearchOption.TopDirectoryOnly))
+            foreach (var path in EnumerateProfileDirectoryFiles(
+                         profileDirectory,
+                         Global.MaxSecuredTreeEntries,
+                         $"The profile folder contains more than {Global.MaxSecuredTreeEntries} entries during transaction recovery."))
             {
-                entries++;
-                if (entries > Global.MaxSecuredTreeEntries)
-                    throw new InvalidDataException(
-                        $"The profile folder contains more than {Global.MaxSecuredTreeEntries} files during transaction recovery.");
-
                 if (HasGuidFileName(Path.GetFileName(path), string.Empty, LegacyProfileTemporarySuffix))
                     DeleteRegularFileIfPresent(path);
             }
@@ -496,19 +491,47 @@ namespace WireSockUI.Config
         private static ISet<string> EnumerateExactProfileFileNames(string profileDirectory)
         {
             var names = new HashSet<string>(StringComparer.Ordinal);
-            var entries = 0;
-            foreach (var path in Directory.EnumerateFiles(profileDirectory, "*", SearchOption.TopDirectoryOnly))
+            foreach (var path in EnumerateProfileDirectoryFiles(
+                         profileDirectory,
+                         Profile.MaxProfileCatalogEntries,
+                         $"The profile folder contains more than {Profile.MaxProfileCatalogEntries} entries."))
             {
-                entries++;
-                if (entries > Profile.MaxProfileCatalogEntries)
-                    throw new InvalidDataException(
-                        $"The profile folder contains more than {Profile.MaxProfileCatalogEntries} files.");
-
                 if (path.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
                     names.Add(Path.GetFileName(path));
             }
 
             return names;
+        }
+
+        private static IEnumerable<string> EnumerateProfileDirectoryFiles(
+            string directory,
+            int maximumEntries,
+            string overflowMessage)
+        {
+            var entries = 0;
+            foreach (var path in Directory.EnumerateFileSystemEntries(directory, "*", SearchOption.TopDirectoryOnly))
+            {
+                entries++;
+                if (entries > maximumEntries)
+                    throw new InvalidDataException(overflowMessage);
+
+                FileAttributes attributes;
+                try
+                {
+                    attributes = File.GetAttributes(path);
+                }
+                catch (FileNotFoundException)
+                {
+                    continue;
+                }
+                catch (DirectoryNotFoundException)
+                {
+                    continue;
+                }
+
+                if ((attributes & FileAttributes.Directory) == 0)
+                    yield return path;
+            }
         }
 
         private static RenameJournal LoadJournal(string path)

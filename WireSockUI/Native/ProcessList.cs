@@ -6,8 +6,11 @@ using System.Security.Principal;
 
 namespace WireSockUI.Native
 {
-    internal class ProcessList
+    internal static class ProcessList
     {
+        private const int ErrorInsufficientBuffer = 122;
+        private const int InitialImagePathCapacity = 1024;
+        private const int MaximumImagePathCapacity = 32768;
         private static readonly IntPtr InvalidHandleValue = new IntPtr(-1);
 
         [DllImport("advapi32", SetLastError = true)]
@@ -28,7 +31,7 @@ namespace WireSockUI.Native
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool Process32Next(IntPtr hSnapshot, ref Processentry32 lppe);
 
-        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, [Out] char[] lpExeName,
             [In][Out] ref int lpdwSize);
 
@@ -59,11 +62,21 @@ namespace WireSockUI.Native
 
         private static string GetProcessImage(IntPtr handle)
         {
-            var buffer = new char[1024];
-            var size = 1024;
+            if (handle == IntPtr.Zero)
+                return null;
 
-            if (QueryFullProcessImageName(handle, 0, buffer, ref size))
-                return new string(buffer, 0, size);
+            for (var capacity = InitialImagePathCapacity;
+                 capacity <= MaximumImagePathCapacity;
+                 capacity *= 2)
+            {
+                var buffer = new char[capacity];
+                var size = capacity;
+                if (QueryFullProcessImageName(handle, 0, buffer, ref size))
+                    return new string(buffer, 0, size);
+
+                if (Marshal.GetLastWin32Error() != ErrorInsufficientBuffer)
+                    return null;
+            }
 
             return null;
         }

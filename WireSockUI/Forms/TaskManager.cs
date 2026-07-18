@@ -80,8 +80,8 @@ namespace WireSockUI.Forms
                 return;
 
             _refreshCancellation?.Cancel();
-            _refreshCancellation?.Dispose();
             var refreshCancellation = new CancellationTokenSource();
+            var cancellationToken = refreshCancellation.Token;
             _refreshCancellation = refreshCancellation;
             btnRefresh.Enabled = false;
             checkBoxShowUserProcesses.Enabled = false;
@@ -95,8 +95,8 @@ namespace WireSockUI.Forms
                 var hideOtherUsers = checkBoxShowUserProcesses.Checked;
 
                 result = await Task.Run(
-                    () => BuildProcessRefreshResult(hideOtherUsers, currentUser, refreshCancellation.Token),
-                    refreshCancellation.Token);
+                    () => BuildProcessRefreshResult(hideOtherUsers, currentUser, cancellationToken),
+                    cancellationToken);
 
                 if (refreshCancellation.IsCancellationRequested ||
                     !ReferenceEquals(_refreshCancellation, refreshCancellation) || IsDisposed || Disposing)
@@ -119,7 +119,6 @@ namespace WireSockUI.Forms
                 if (ReferenceEquals(_refreshCancellation, refreshCancellation))
                 {
                     _refreshCancellation = null;
-                    refreshCancellation.Dispose();
 
                     if (!IsDisposed && !Disposing)
                     {
@@ -127,6 +126,8 @@ namespace WireSockUI.Forms
                         checkBoxShowUserProcesses.Enabled = true;
                     }
                 }
+
+                refreshCancellation.Dispose();
             }
         }
 
@@ -301,7 +302,6 @@ namespace WireSockUI.Forms
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             _refreshCancellation?.Cancel();
-            _refreshCancellation?.Dispose();
             _refreshCancellation = null;
             btnRefresh.Image = null;
             _refreshButtonImage?.Dispose();

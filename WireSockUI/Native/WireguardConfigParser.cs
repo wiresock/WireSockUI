@@ -49,29 +49,43 @@ namespace WireSockUI.Native
                     throw new ArgumentException("The configuration stream must be readable and seekable.",
                         nameof(stream));
 
-                RejectUnsupportedByteOrderMark(stream);
+                PrepareUtf8Stream(stream);
                 using (var reader = new StreamReader(stream, new UTF8Encoding(false, true), false, 1024, true))
                 {
                     Parse(reader);
                 }
             }
 
-            private static void RejectUnsupportedByteOrderMark(Stream stream)
+            private static void PrepareUtf8Stream(Stream stream)
             {
                 var prefix = new byte[4];
-                var bytesRead = stream.Read(prefix, 0, prefix.Length);
-                stream.Position = 0;
+                var bytesRead = 0;
+                while (bytesRead < prefix.Length)
+                {
+                    var read = stream.Read(prefix, bytesRead, prefix.Length - bytesRead);
+                    if (read == 0)
+                        break;
+
+                    bytesRead += read;
+                }
 
                 var hasUtf8Bom = bytesRead >= 3 && prefix[0] == 0xef && prefix[1] == 0xbb && prefix[2] == 0xbf;
                 var hasUtf16Bom = bytesRead >= 2 &&
                                   (prefix[0] == 0xff && prefix[1] == 0xfe ||
                                    prefix[0] == 0xfe && prefix[1] == 0xff);
                 var hasUtf32BigEndianBom = bytesRead >= 4 && prefix[0] == 0 && prefix[1] == 0 &&
-                                           prefix[2] == 0xfe && prefix[3] == 0xff;
+                                            prefix[2] == 0xfe && prefix[3] == 0xff;
 
-                if (hasUtf8Bom || hasUtf16Bom || hasUtf32BigEndianBom)
+                if (hasUtf8Bom)
+                {
+                    stream.Position = 3;
+                    return;
+                }
+
+                stream.Position = 0;
+                if (hasUtf16Bom || hasUtf32BigEndianBom)
                     throw new FormatException(
-                        "The current wgbooster.dll parser requires a UTF-8 configuration without a byte-order mark (BOM).");
+                        "The current wgbooster.dll parser requires a UTF-8 configuration. UTF-16 and UTF-32 byte-order marks are not supported.");
             }
 
             private void Parse(TextReader reader)
