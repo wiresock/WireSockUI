@@ -724,6 +724,38 @@ namespace WireSockUI.Tests
             AssertThrows<FormatException>(
                 () => Profile.ValidateAddresses("Interface", "DNS", "8.8.8.8,", IpHelper.IsValidIpAddress),
                 "DNS");
+
+            var emptyAddressPath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = , ,\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+            AssertThrows<FormatException>(() => new Profile(emptyAddressPath), "at least one address");
+
+            var emptyAllowedIpsPath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = , ,\n");
+            AssertThrows<FormatException>(() => new Profile(emptyAllowedIpsPath), "at least one address");
+
+            var emptyDisallowedIpsPath = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "DisallowedIPs = , ,\n");
+            AssertTrue(new Profile(emptyDisallowedIpsPath).DisallowedIPs == null,
+                "Expected an optional route list containing only blank items to normalize to null.");
         }
 
         private static void IpValidationRejectsMalformedValuesSafely()

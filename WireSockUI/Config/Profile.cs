@@ -176,7 +176,11 @@ namespace WireSockUI.Config
             get => _address;
             set
             {
-                ValidateAddresses("Interface", "Address", value, IpHelper.IsValidSubnetOrSingleIpAddress, true);
+                if (!ValidateAddresses("Interface", "Address", value,
+                        IpHelper.IsValidSubnetOrSingleIpAddress, true))
+                    throw new FormatException(
+                        "\"Address\" in \"Interface\" must contain at least one address.");
+
                 _address = value;
             }
         }
@@ -300,7 +304,11 @@ namespace WireSockUI.Config
             get => _allowedIPs;
             set
             {
-                ValidateAddresses("Peer", "AllowedIPs", value, IpHelper.IsValidSubnetOrSingleIpAddress, true);
+                if (!ValidateAddresses("Peer", "AllowedIPs", value,
+                        IpHelper.IsValidSubnetOrSingleIpAddress, true))
+                    throw new FormatException(
+                        "\"AllowedIPs\" in \"Peer\" must contain at least one address.");
+
                 _allowedIPs = value;
             }
         }
@@ -355,8 +363,10 @@ namespace WireSockUI.Config
             get => _disallowedIPs;
             set
             {
-                ValidateAddresses("Peer", "DisallowedIPs", value, IpHelper.IsValidSubnetOrSingleIpAddress, true);
-                _disallowedIPs = string.IsNullOrWhiteSpace(value) ? null : value;
+                _disallowedIPs = ValidateAddresses("Peer", "DisallowedIPs", value,
+                    IpHelper.IsValidSubnetOrSingleIpAddress, true)
+                    ? value
+                    : null;
             }
         }
 
@@ -431,11 +441,12 @@ namespace WireSockUI.Config
                     $"\"{key}\" in \"{section}\", invalid key length, only 256-bit keys are supported.");
         }
 
-        internal static void ValidateAddresses(string section, string key, string keyValue,
+        internal static bool ValidateAddresses(string section, string key, string keyValue,
             Func<string, bool> validator, bool ignoreBlankItems = false)
         {
-            if (string.IsNullOrWhiteSpace(keyValue)) return;
+            if (string.IsNullOrWhiteSpace(keyValue)) return false;
 
+            var hasAddress = false;
             foreach (var value in keyValue.Split(','))
             {
                 var trimmedValue = value.Trim();
@@ -449,7 +460,11 @@ namespace WireSockUI.Config
 
                 if (!validator(trimmedValue))
                     throw new FormatException($"\"{key}\" in \"{section}\", invalid address \"{value}\".");
+
+                hasAddress = true;
             }
+
+            return hasAddress;
         }
 
         internal static void ValidateBool(string section, string key, string keyValue)
