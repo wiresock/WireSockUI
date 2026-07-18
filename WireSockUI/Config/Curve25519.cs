@@ -196,6 +196,8 @@ namespace WireSockUI.Config
         /// <returns>shared secret (needs hashing before use)</returns>
         public static byte[] GetSharedSecret(byte[] privateKey, byte[] peerPublicKey)
         {
+            if (peerPublicKey == null) throw new ArgumentNullException(nameof(peerPublicKey));
+
             var clampedPrivateKey = ClampPrivateKey(privateKey);
             var sharedSecret = new byte[32];
 

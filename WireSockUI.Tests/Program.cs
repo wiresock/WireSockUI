@@ -3101,6 +3101,8 @@ namespace WireSockUI.Tests
             var highBitSharedSecret = Curve25519.GetSharedSecret(privateKey, peerPublicKey);
             AssertEqual(ToHex(sharedSecret), ToHex(highBitSharedSecret));
             AssertEqual(0x80, peerPublicKey[31] & 0x80);
+            AssertThrows<ArgumentNullException>(
+                () => Curve25519.GetSharedSecret(privateKey, null), nameof(peerPublicKey));
 
             var generatedPrivateKey = Curve25519.CreateRandomPrivateKey();
             AssertEqual(32, generatedPrivateKey.Length);
