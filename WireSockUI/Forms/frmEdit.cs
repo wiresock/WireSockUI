@@ -27,6 +27,9 @@ namespace WireSockUI.Forms
         private Font _editorBoldFont;
         private Font _editorItalicFont;
         private Font _editorRegularFont;
+        private Image _processMenuImage;
+        private Image _directoryMenuImage;
+        private Image _fileMenuImage;
         private Timer _highlightTimer;
         private readonly string _originalProfileName;
         private string _targetConfigurationKeyName;
@@ -451,9 +454,12 @@ namespace WireSockUI.Forms
 
             Icon = Resources.ico;
             txtProfileName.SetCueBanner(Resources.EditProfileCue);
-            toolStripMenuItemByProcName.Image = GetWindowsIconBitmap(WindowsIcons.Icons.ProcessList, 16);
-            toolStripMenuItemByDirPath.Image = GetWindowsIconBitmap(WindowsIcons.Icons.OpenTunnel, 16);
-            toolStripMenuItemByFilePath.Image = GetWindowsIconBitmap(WindowsIcons.Icons.NewTunnel, 16);
+            _processMenuImage = GetWindowsIconBitmap(WindowsIcons.Icons.ProcessList, 16);
+            _directoryMenuImage = GetWindowsIconBitmap(WindowsIcons.Icons.OpenTunnel, 16);
+            _fileMenuImage = GetWindowsIconBitmap(WindowsIcons.Icons.NewTunnel, 16);
+            toolStripMenuItemByProcName.Image = _processMenuImage;
+            toolStripMenuItemByDirPath.Image = _directoryMenuImage;
+            toolStripMenuItemByFilePath.Image = _fileMenuImage;
         }
 
         private void OnSaveClick(object sender, EventArgs e)
@@ -657,6 +663,16 @@ namespace WireSockUI.Forms
             _editorRegularFont?.Dispose();
             _editorItalicFont?.Dispose();
             _editorBoldFont?.Dispose();
+
+            toolStripMenuItemByProcName.Image = null;
+            toolStripMenuItemByDirPath.Image = null;
+            toolStripMenuItemByFilePath.Image = null;
+            _processMenuImage?.Dispose();
+            _directoryMenuImage?.Dispose();
+            _fileMenuImage?.Dispose();
+            _processMenuImage = null;
+            _directoryMenuImage = null;
+            _fileMenuImage = null;
 
             base.OnFormClosed(e);
         }

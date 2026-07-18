@@ -47,6 +47,7 @@ namespace WireSockUI.Forms
         private readonly SettingsUpdateCoordinator _settingsUpdateCoordinator;
         private readonly ProfileCatalog _profileCatalog = new ProfileCatalog();
         private readonly UiLogMessageBuffer _uiLogBuffer;
+        private readonly List<Image> _ownedMenuImages = new List<Image>();
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
         private bool _exitRequested;
@@ -88,11 +89,11 @@ namespace WireSockUI.Forms
             SetStatusImage(null, _inactiveStatusImage);
 
             // Populate menu items with Windows supplied icons
-            ddmAddTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Addtunnel, 16);
-            mniImportTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.OpenTunnel, 16);
-            mniNewTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.NewTunnel, 16);
-            mniDeleteTunnel.Image = GetWindowsIconBitmap(WindowsIcons.Icons.DeleteTunnel, 16);
-            mniSettings.Image = GetWindowsIconBitmap(WindowsIcons.Icons.Settings, 16);
+            SetOwnedMenuImage(ddmAddTunnel, WindowsIcons.Icons.Addtunnel);
+            SetOwnedMenuImage(mniImportTunnel, WindowsIcons.Icons.OpenTunnel);
+            SetOwnedMenuImage(mniNewTunnel, WindowsIcons.Icons.NewTunnel);
+            SetOwnedMenuImage(mniDeleteTunnel, WindowsIcons.Icons.DeleteTunnel);
+            SetOwnedMenuImage(mniSettings, WindowsIcons.Icons.Settings);
 
             // Populate profile image list with Windows supplied icons
             imlProfiles.Images.Clear();
@@ -122,6 +123,14 @@ namespace WireSockUI.Forms
             {
                 return windowsIcon?.ToBitmap();
             }
+        }
+
+        private void SetOwnedMenuImage(ToolStripItem item, WindowsIcons.Icons icon)
+        {
+            var image = GetWindowsIconBitmap(icon, 16);
+            item.Image = image;
+            if (image != null)
+                _ownedMenuImages.Add(image);
         }
 
         private void AddProfileIcon(string key, WindowsIcons.Icons icon, int size)
@@ -499,9 +508,23 @@ namespace WireSockUI.Forms
             trayIcon.Visible = false;
             SetTrayIcon(null, false);
             DisposeStatusImages();
+            DisposeMenuImages();
 
             // Keep the global ownership event alive until process termination. This prevents another
             // direct SDK client from starting while a timed-out native cleanup may still be unwinding.
+        }
+
+        private void DisposeMenuImages()
+        {
+            ddmAddTunnel.Image = null;
+            mniImportTunnel.Image = null;
+            mniNewTunnel.Image = null;
+            mniDeleteTunnel.Image = null;
+            mniSettings.Image = null;
+
+            foreach (var image in _ownedMenuImages)
+                image.Dispose();
+            _ownedMenuImages.Clear();
         }
 
         private void DisposeTunnelLifecycleWithTimeout()
@@ -1909,8 +1932,9 @@ namespace WireSockUI.Forms
                 }
 
                 var profilePath = Profile.GetProfilePath(selectedConf);
-                Profile.EnsureRegularProfileFile(profilePath);
-                File.Delete(profilePath);
+                using (var profileFile =
+                       SecureFileSystem.OpenFileForBoundedReadAndDelete(profilePath, Profile.MaxProfileSizeBytes))
+                    profileFile.Delete();
                 LoadProfiles();
             }
             catch (Exception ex)

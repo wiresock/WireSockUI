@@ -16,6 +16,7 @@ namespace WireSockUI.Forms
     {
         private readonly List<ListViewItem> _cachedProcessListItems = new List<ListViewItem>();
         private CancellationTokenSource _refreshCancellation;
+        private Image _refreshButtonImage;
 
         private sealed class ProcessDisplayEntry
         {
@@ -48,7 +49,11 @@ namespace WireSockUI.Forms
             // Safely set the refresh button image
             using (var refreshIcon = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Refresh, 16))
             {
-                if (refreshIcon != null) btnRefresh.Image = refreshIcon.ToBitmap();
+                if (refreshIcon != null)
+                {
+                    _refreshButtonImage = refreshIcon.ToBitmap();
+                    btnRefresh.Image = _refreshButtonImage;
+                }
             }
 
             // Ensure the process list rows fill the entire width, but no scrollbar appears
@@ -298,6 +303,9 @@ namespace WireSockUI.Forms
             _refreshCancellation?.Cancel();
             _refreshCancellation?.Dispose();
             _refreshCancellation = null;
+            btnRefresh.Image = null;
+            _refreshButtonImage?.Dispose();
+            _refreshButtonImage = null;
             base.OnFormClosed(e);
         }
     }
