@@ -129,10 +129,9 @@ namespace WireSockUI.Config
                     $@"publicKey must be 32 bytes long (but was {publicKey.Length} bytes long)",
                     nameof(publicKey));
 
-            if (signingKey == null) throw new ArgumentNullException(nameof(signingKey));
-            if (signingKey.Length != 32)
+            if (signingKey != null && signingKey.Length != 32)
                 throw new ArgumentException(
-                    $@"signingKey must be 32 bytes long (but was {signingKey.Length} bytes long)",
+                    $@"signingKey must be null or 32 bytes long (but was {signingKey.Length} bytes long)",
                     nameof(signingKey));
 
             if (privateKey == null) throw new ArgumentNullException(nameof(privateKey));
@@ -149,28 +148,44 @@ namespace WireSockUI.Config
         }
 
         /// <summary>
-        ///     Generates the public key out of the clamped private key
+        ///     Generates the public key from a private scalar
         /// </summary>
-        /// <param name="privateKey">private key (must use ClampPrivateKey first!)</param>
+        /// <param name="privateKey">private scalar, decoded and clamped according to X25519</param>
         public static byte[] GetPublicKey(byte[] privateKey)
         {
+            var clampedPrivateKey = ClampPrivateKey(privateKey);
             var publicKey = new byte[32];
 
-            Core(publicKey, null, privateKey, null);
-            return publicKey;
+            try
+            {
+                Core(publicKey, null, clampedPrivateKey, null);
+                return publicKey;
+            }
+            finally
+            {
+                Array.Clear(clampedPrivateKey, 0, clampedPrivateKey.Length);
+            }
         }
 
         /// <summary>
-        ///     Generates signing key out of the clamped private key
+        ///     Generates a signing key from a private scalar
         /// </summary>
-        /// <param name="privateKey">private key (must use ClampPrivateKey first!)</param>
+        /// <param name="privateKey">private scalar, decoded and clamped according to X25519</param>
         public static byte[] GetSigningKey(byte[] privateKey)
         {
+            var clampedPrivateKey = ClampPrivateKey(privateKey);
             var signingKey = new byte[32];
             var publicKey = new byte[32];
 
-            Core(publicKey, signingKey, privateKey, null);
-            return signingKey;
+            try
+            {
+                Core(publicKey, signingKey, clampedPrivateKey, null);
+                return signingKey;
+            }
+            finally
+            {
+                Array.Clear(clampedPrivateKey, 0, clampedPrivateKey.Length);
+            }
         }
 
         /// <summary>
@@ -181,10 +196,18 @@ namespace WireSockUI.Config
         /// <returns>shared secret (needs hashing before use)</returns>
         public static byte[] GetSharedSecret(byte[] privateKey, byte[] peerPublicKey)
         {
+            var clampedPrivateKey = ClampPrivateKey(privateKey);
             var sharedSecret = new byte[32];
 
-            Core(sharedSecret, null, privateKey, peerPublicKey);
-            return sharedSecret;
+            try
+            {
+                Core(sharedSecret, null, clampedPrivateKey, peerPublicKey);
+                return sharedSecret;
+            }
+            finally
+            {
+                Array.Clear(clampedPrivateKey, 0, clampedPrivateKey.Length);
+            }
         }
 
         /********************* radix 2^8 math *********************/
@@ -259,10 +282,14 @@ namespace WireSockUI.Config
 
         private static int GetNumSize(byte[] num, int maxSize)
         {
-            for (var i = maxSize; i >= 0; i++)
-                if (num[i] == 0)
-                    return i + 1;
-            return 0;
+            if (num == null) throw new ArgumentNullException(nameof(num));
+            if (maxSize < 0 || maxSize > num.Length)
+                throw new ArgumentOutOfRangeException(nameof(maxSize));
+
+            while (maxSize > 0 && num[maxSize - 1] == 0)
+                maxSize--;
+
+            return maxSize;
         }
 
         /// <summary>
@@ -325,7 +352,7 @@ namespace WireSockUI.Config
             x.N8 = ((m[25] & 0xFF & ~15) >> 4) | ((m[26] & 0xFF) << 4) |
                    ((m[27] & 0xFF) << 12) | ((m[28] & 0xFF & 63) << 20);
             x.N9 = ((m[28] & 0xFF & ~63) >> 6) | ((m[29] & 0xFF) << 2) |
-                   ((m[30] & 0xFF) << 10) | ((m[31] & 0xFF) << 18);
+                   ((m[30] & 0xFF) << 10) | ((m[31] & 0x7F) << 18);
         }
 
         /// <summary>

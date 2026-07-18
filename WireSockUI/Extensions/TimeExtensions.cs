@@ -52,7 +52,7 @@ namespace WireSockUI.Extensions
             }
 
             if (delta < 48 * hour)
-                return "yesterday";
+                return Resources.TimeLapseDay;
 
             if (delta < 30 * day)
                 return Math.Abs(value.Days) + Resources.TimeLapseDays;

@@ -140,6 +140,7 @@ namespace WireSockUI.Tests
                 { "Time formatting uses plural hours", TimeFormattingUsesPluralHours },
                 { "Time formatting uses singular hour for partial second hour", TimeFormattingUsesSingularHourForPartialSecondHour },
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
+                { "Time formatting uses localized day text", TimeFormattingUsesLocalizedDayText },
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
                 { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
                 { "Global fails closed on configuration directory reparse points", GlobalFailsClosedOnConfigurationDirectoryReparsePoints },
@@ -211,6 +212,7 @@ namespace WireSockUI.Tests
                 { "Native timeout policy defers cleanup until completion", NativeTimeoutPolicyDefersCleanupUntilCompletion },
                 { "Autorun preserves persisted state when status is unknown", AutorunPreservesPersistedStateWhenStatusIsUnknown },
                 { "Curve25519 matches RFC 7748 public-key vectors", Curve25519MatchesRfc7748PublicKeyVectors },
+                { "Curve25519 supports optional signing keys", Curve25519SupportsOptionalSigningKeys },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "Editor bounds synchronous syntax highlighting", EditorBoundsSynchronousSyntaxHighlighting },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
@@ -1433,6 +1435,11 @@ namespace WireSockUI.Tests
             AssertTrue(value.Contains("2"), "Expected future two-hour durations to include the absolute hour count.");
             AssertTrue(value.IndexOf("hours", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected future two-hour durations to use a plural hour label, got '{value}'.");
+        }
+
+        private static void TimeFormattingUsesLocalizedDayText()
+        {
+            AssertEqual(WireSockUI.Properties.Resources.TimeLapseDay, TimeSpan.FromHours(36).AsTimeAgo());
         }
 
         private static void GlobalConfigFolderContainmentHandlesDriveRoots()
@@ -3075,17 +3082,45 @@ namespace WireSockUI.Tests
         {
             var privateKey = ParseHex(
                 "77076d0a7318a57d3c16c17251b26645df4c2f87ebc0992ab177fba51db92c2a");
-            Curve25519.ClampPrivateKeyInline(privateKey);
+            var originalPrivateKey = (byte[])privateKey.Clone();
             var publicKey = Curve25519.GetPublicKey(privateKey);
             AssertEqual(
                 "8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a",
                 ToHex(publicKey));
+            AssertEqual(ToHex(originalPrivateKey), ToHex(privateKey));
+
+            var peerPublicKey = ParseHex(
+                "de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f");
+            var sharedSecret = Curve25519.GetSharedSecret(privateKey, peerPublicKey);
+            AssertEqual(
+                "4a5d9d5ba4ce2de1728e3bf480350f25e07e21c947d19e3376f09b3c1e161742",
+                ToHex(sharedSecret));
+            AssertEqual(ToHex(originalPrivateKey), ToHex(privateKey));
+
+            peerPublicKey[31] |= 0x80;
+            var highBitSharedSecret = Curve25519.GetSharedSecret(privateKey, peerPublicKey);
+            AssertEqual(ToHex(sharedSecret), ToHex(highBitSharedSecret));
+            AssertEqual(0x80, peerPublicKey[31] & 0x80);
 
             var generatedPrivateKey = Curve25519.CreateRandomPrivateKey();
             AssertEqual(32, generatedPrivateKey.Length);
             AssertEqual(0, generatedPrivateKey[0] & 7);
             AssertEqual(0x40, generatedPrivateKey[31] & 0x40);
             AssertEqual(0, generatedPrivateKey[31] & 0x80);
+        }
+
+        private static void Curve25519SupportsOptionalSigningKeys()
+        {
+            var publicKey = new byte[Curve25519.KeySize];
+            var privateKey = new byte[Curve25519.KeySize];
+
+            Curve25519.KeyGenInline(publicKey, null, privateKey);
+
+            AssertEqual(ToHex(Curve25519.GetPublicKey(privateKey)), ToHex(publicKey));
+            var signingKey = Curve25519.GetSigningKey(privateKey);
+            AssertEqual(Curve25519.KeySize, signingKey.Length);
+            AssertTrue(signingKey.Any(value => value != 0),
+                "Expected the generated signing key to contain a non-zero value.");
         }
 
         private static void EditorValidatesAmneziaOptions()
