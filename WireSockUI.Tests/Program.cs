@@ -1423,10 +1423,35 @@ namespace WireSockUI.Tests
         private static void ProfileRejectsUnsupportedDirectDllDirectives()
         {
             AssertProfileRejectsInterfaceOption("#@ws:BypassLanTraffic = true", "DisallowedIPs");
+            AssertProfileRejectsInterfaceOption("#@ws:bypasslantraffic = true", "DisallowedIPs");
             AssertProfileRejectsInterfaceOption("Table = auto", "not supported");
-            AssertProfileRejectsInterfaceOption("#@ws:I1 = value", "not supported");
+            AssertProfileRejectsInterfaceOption("table = auto", "\"Table\" is not supported");
+            for (var index = 1; index <= 5; index++)
+            {
+                var canonicalKey = $"I{index}";
+                AssertProfileRejectsInterfaceOption(
+                    $"#@ws:{canonicalKey} = value",
+                    $"\"{canonicalKey}\" is not supported");
+                AssertProfileRejectsInterfaceOption(
+                    $"#@ws:i{index} = value",
+                    $"\"{canonicalKey}\" is not supported");
+            }
 
-            var legacyUsernamePath = WriteConfig(
+            AssertProfileRejectsInterfaceOption(
+                "#@ws:i6 = value",
+                "key \"i6\" in \"Interface\" is not supported");
+
+            AssertProfileRejectsPeerOption(
+                "#@ws:Socks5Username = user",
+                "Socks5ProxyUsername");
+            AssertProfileRejectsPeerOption(
+                "#@ws:socks5username = user",
+                "Socks5ProxyUsername");
+        }
+
+        private static void AssertProfileRejectsPeerOption(string optionLine, string messagePart)
+        {
+            var path = WriteConfig(
                 "[Interface]\n" +
                 $"PrivateKey = {PrivateKey}\n" +
                 "Address = 10.0.0.2/32\n\n" +
@@ -1434,14 +1459,14 @@ namespace WireSockUI.Tests
                 $"PublicKey = {PublicKey}\n" +
                 "Endpoint = example.com:51820\n" +
                 "AllowedIPs = 0.0.0.0/0\n" +
-                "#@ws:Socks5Username = user\n");
+                optionLine + "\n");
             try
             {
-                AssertThrows<FormatException>(() => new Profile(legacyUsernamePath), "Socks5ProxyUsername");
+                AssertThrows<FormatException>(() => new Profile(path), messagePart);
             }
             finally
             {
-                TryDeleteFile(legacyUsernamePath);
+                TryDeleteFile(path);
             }
         }
 

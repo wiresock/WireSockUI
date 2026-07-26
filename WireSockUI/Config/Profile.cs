@@ -28,19 +28,19 @@ namespace WireSockUI.Config
             },
             StringComparer.OrdinalIgnoreCase);
 
-        private static readonly string[] InterfaceKeys =
+        private static readonly string[] SupportedInterfaceKeys =
         {
-            "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "Table", "ScriptExecTimeout", "PreUp",
-            "PostUp", "PreDown", "PostDown", "BypassLanTraffic", "VirtualAdapterMode", "EnableDefaultGateway",
+            "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "ScriptExecTimeout", "PreUp",
+            "PostUp", "PreDown", "PostDown", "VirtualAdapterMode", "EnableDefaultGateway",
             "Jc", "Jmin", "Jmax", "Jd", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "Id", "Ip",
-            "Ib", "I1", "I2", "I3", "I4", "I5"
+            "Ib"
         };
 
-        private static readonly string[] PeerKeys =
+        private static readonly string[] SupportedPeerKeys =
         {
             "PublicKey", "PresharedKey", "AllowedIPs", "Endpoint", "PersistentKeepalive", "AllowedApps",
             "DisallowedApps", "DisallowedIPs", "Socks5Proxy", "Socks5ProxyUsername", "Socks5ProxyPassword",
-            "Socks5ProxyAllTraffic", "Socks5Username"
+            "Socks5ProxyAllTraffic"
         };
 
         private string _address;
@@ -95,8 +95,8 @@ namespace WireSockUI.Config
                     $"Profile {GetProfileDisplayName(profilePath)} does not contain an \"Interface\" section.");
 
             var section = parser.GetSection("Interface");
-            ValidateAllowedKeys("Interface", section, InterfaceKeys);
             ValidateUnsupportedInterfaceDirectives(section);
+            ValidateAllowedKeys("Interface", section, SupportedInterfaceKeys);
 
             PrivateKey = GetRequiredValue(profilePath, "Interface", section, "PrivateKey");
             Address = GetRequiredValue(profilePath, "Interface", section, "Address");
@@ -117,11 +117,8 @@ namespace WireSockUI.Config
 
             ValidateAllowedSections(configESections);
             section = parser.GetSection("Peer");
-            ValidateAllowedKeys("Peer", section, PeerKeys);
-
-            if (section.ContainsKey("Socks5Username"))
-                throw new FormatException(
-                    "\"Socks5Username\" in \"Peer\" is not supported by the current SDK. Use \"Socks5ProxyUsername\".");
+            ValidateUnsupportedPeerDirectives(section);
+            ValidateAllowedKeys("Peer", section, SupportedPeerKeys);
 
             PeerKey = GetRequiredValue(profilePath, "Peer", section, "PublicKey");
             PresharedKey = section.Get("PresharedKey");
@@ -560,22 +557,34 @@ namespace WireSockUI.Config
 
         private static void ValidateUnsupportedInterfaceDirectives(Dictionary<string, string> section)
         {
-            if (section.ContainsKey("BypassLanTraffic"))
+            if (ContainsKeyIgnoringCase(section, "BypassLanTraffic"))
                 throw new FormatException(
                     "\"BypassLanTraffic\" is not supported by direct wgbooster.dll integration. Specify LAN prefixes with \"DisallowedIPs\" in \"Peer\".");
 
-            if (section.ContainsKey("Table"))
+            if (ContainsKeyIgnoringCase(section, "Table"))
                 throw new FormatException(
                     "\"Table\" is not supported by the current wgbooster.dll configuration parser.");
 
             for (var index = 1; index <= 5; index++)
             {
                 var key = $"I{index}";
-                if (section.Keys.Any(existingKey =>
-                        string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase)))
+                if (ContainsKeyIgnoringCase(section, key))
                     throw new FormatException(
                         $"\"{key}\" is not supported by the current wgbooster.dll configuration parser.");
             }
+        }
+
+        private static void ValidateUnsupportedPeerDirectives(Dictionary<string, string> section)
+        {
+            if (ContainsKeyIgnoringCase(section, "Socks5Username"))
+                throw new FormatException(
+                    "\"Socks5Username\" in \"Peer\" is not supported by the current SDK. Use \"Socks5ProxyUsername\".");
+        }
+
+        private static bool ContainsKeyIgnoringCase(Dictionary<string, string> section, string key)
+        {
+            return section.Keys.Any(existingKey =>
+                string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase));
         }
 
         private static void ValidateRequiredPair(Dictionary<string, string> section, string firstKey, string secondKey)
