@@ -43,7 +43,7 @@ namespace WireSockUI.Forms
             var valueCount = 0;
             var truncated = false;
 
-            while (cursor <= input.Length)
+            while (cursor < input.Length)
             {
                 if (valueCount == maximumValues)
                 {

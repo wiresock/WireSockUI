@@ -3466,6 +3466,18 @@ namespace WireSockUI.Tests
             AssertEqual(
                 $"a,b{Environment.NewLine}c,d...",
                 ProfileDisplayFormatter.FormatCommaSeparated("a,b,c,d,e", 4, 2, 128));
+            AssertEqual(
+                "a,b",
+                ProfileDisplayFormatter.FormatCommaSeparated("a,b,", 3, 2, 128));
+            AssertEqual(
+                ",a",
+                ProfileDisplayFormatter.FormatCommaSeparated(",a", 3, 2, 128));
+            AssertEqual(
+                $"a,{Environment.NewLine}b",
+                ProfileDisplayFormatter.FormatCommaSeparated("a,,b", 3, 2, 128));
+            AssertEqual(
+                "a,",
+                ProfileDisplayFormatter.FormatCommaSeparated("a,,", 3, 2, 128));
 
             var oversized = ProfileDisplayFormatter.FormatApplications(new string('x', 10000));
             AssertTrue(oversized.Length <= 4096,
