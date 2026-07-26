@@ -229,6 +229,8 @@ namespace WireSockUI.Tests
                 { "Autorun preserves persisted state when status is unknown", AutorunPreservesPersistedStateWhenStatusIsUnknown },
                 { "Autorun classification covers legacy shortcuts and conflicts", AutorunClassificationCoversLegacyAndConflicts },
                 { "Legacy Startup shortcuts are handled without shell parsing", LegacyStartupShortcutIsHandledWithoutShellParsing },
+                { "Legacy Startup shortcut metadata failures fail closed", LegacyStartupShortcutMetadataFailuresFailClosed },
+                { "Legacy Startup shortcut commit is consent and path bound", LegacyStartupShortcutCommitIsConsentAndPathBound },
                 { "Curve25519 matches RFC 7748 public-key vectors", Curve25519MatchesRfc7748PublicKeyVectors },
                 { "Curve25519 supports optional signing keys", Curve25519SupportsOptionalSigningKeys },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
@@ -4037,6 +4039,138 @@ namespace WireSockUI.Tests
                     File.Delete(legacyShortcut);
                 if (Directory.Exists(testDirectory))
                     Directory.Delete(testDirectory);
+            }
+        }
+
+        private static void LegacyStartupShortcutMetadataFailuresFailClosed()
+        {
+            const string shortcutPath = @"C:\unreadable\WireSockUI.lnk";
+
+            AssertTrue(
+                FrmSettings.InspectLegacyStartupShortcutPath(
+                    shortcutPath,
+                    false,
+                    _ => throw new UnauthorizedAccessException("simulated access denial")) ==
+                FrmSettings.LegacyStartupShortcutStatus.Unknown,
+                "Expected an access-denied metadata inspection to produce an unknown autorun state.");
+            AssertTrue(
+                FrmSettings.InspectLegacyStartupShortcutPath(
+                    shortcutPath,
+                    false,
+                    _ => throw new IOException("simulated metadata failure")) ==
+                FrmSettings.LegacyStartupShortcutStatus.Unknown,
+                "Expected an unreadable shortcut to produce an unknown autorun state.");
+            AssertTrue(
+                FrmSettings.InspectLegacyStartupShortcutPath(
+                    shortcutPath,
+                    false,
+                    _ => throw new Win32Exception(5, "simulated access denial")) ==
+                FrmSettings.LegacyStartupShortcutStatus.Unknown,
+                "Expected a Win32 access-denied result to produce an unknown autorun state.");
+            AssertTrue(
+                FrmSettings.InspectLegacyStartupShortcutPath(
+                    shortcutPath,
+                    false,
+                    _ => throw new FileNotFoundException("simulated removal race")) ==
+                FrmSettings.LegacyStartupShortcutStatus.Absent,
+                "Expected a shortcut that disappeared during inspection to remain classified as absent.");
+            AssertTrue(
+                FrmSettings.InspectLegacyStartupShortcutPath(
+                    shortcutPath,
+                    false,
+                    _ => throw new Win32Exception(3, "simulated missing parent")) ==
+                FrmSettings.LegacyStartupShortcutStatus.Absent,
+                "Expected a missing-parent Win32 result to remain classified as absent.");
+
+            AssertThrows<IOException>(
+                () => FrmSettings.EnsureLegacyStartupShortcutCleanupCompleted(
+                    FrmSettings.LegacyStartupShortcutStatus.Unknown,
+                    shortcutPath),
+                "could not be inspected");
+            var unknownDiagnostic = FrmSettings.GetLegacyStartupShortcutDiagnostic(
+                FrmSettings.LegacyStartupShortcutStatus.Unknown,
+                shortcutPath);
+            AssertTrue(
+                unknownDiagnostic.IndexOf(shortcutPath, StringComparison.OrdinalIgnoreCase) >= 0 &&
+                unknownDiagnostic.IndexOf("left unchanged", StringComparison.OrdinalIgnoreCase) >= 0 &&
+                unknownDiagnostic.IndexOf("reopen Settings", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Expected unknown metadata failures to produce an actionable autorun diagnostic.");
+            AssertFalse(
+                FrmSettings.RequiresLegacyStartupShortcutMigrationConsent(
+                    FrmSettings.LegacyStartupShortcutStatus.Unknown),
+                "Expected unreadable metadata not to be mistaken for an unverified regular file or cleanup consent.");
+            AssertThrows<InvalidOperationException>(
+                () => FrmSettings.InspectLegacyStartupShortcutPath(
+                    shortcutPath,
+                    false,
+                    _ => throw new InvalidOperationException("simulated programming failure")),
+                "simulated programming failure");
+        }
+
+        private static void LegacyStartupShortcutCommitIsConsentAndPathBound()
+        {
+            var testDirectory = Path.Combine(
+                Path.GetTempPath(),
+                $"wiresockui-legacy-commit-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(testDirectory);
+            var inspectedShortcutPath = Path.Combine(testDirectory, "inspected", "WireSockUI.lnk");
+            var changedKnownFolderPath = Path.Combine(testDirectory, "changed", "WireSockUI.lnk");
+            var lateShortcutPath = Path.Combine(testDirectory, "late", "WireSockUI.lnk");
+            try
+            {
+                AssertEqual(
+                    inspectedShortcutPath,
+                    FrmSettings.GetLegacyStartupShortcutPathForCommit(
+                        true,
+                        true,
+                        inspectedShortcutPath));
+                AssertFalse(
+                    string.Equals(
+                        changedKnownFolderPath,
+                        FrmSettings.GetLegacyStartupShortcutPathForCommit(
+                            true,
+                            true,
+                            inspectedShortcutPath),
+                        StringComparison.OrdinalIgnoreCase),
+                    "Expected commit to retain the exact inspected path rather than use a later known-folder value.");
+                AssertEqual(
+                    null,
+                    FrmSettings.GetLegacyStartupShortcutPathForCommit(
+                        true,
+                        false,
+                        inspectedShortcutPath));
+
+                Directory.CreateDirectory(Path.GetDirectoryName(lateShortcutPath));
+                File.WriteAllText(lateShortcutPath, "arrived after inspection");
+                AssertEqual(
+                    null,
+                    FrmSettings.GetLegacyStartupShortcutPathForCommit(
+                        false,
+                        true,
+                        lateShortcutPath));
+                AssertTrue(
+                    File.Exists(lateShortcutPath),
+                    "Expected a shortcut that appeared after an absent inspection to remain untouched.");
+
+                AssertThrows<InvalidOperationException>(
+                    () => FrmSettings.GetLegacyStartupShortcutPathForCommit(
+                        true,
+                        true,
+                        @"relative\WireSockUI.lnk"),
+                    "not absolute");
+                AssertThrows<InvalidOperationException>(
+                    () => FrmSettings.GetLegacyStartupShortcutPathForCommit(
+                        true,
+                        true,
+                        null),
+                    "no inspected path");
+            }
+            finally
+            {
+                if (File.Exists(lateShortcutPath))
+                    File.Delete(lateShortcutPath);
+                if (Directory.Exists(testDirectory))
+                    Directory.Delete(testDirectory, true);
             }
         }
 

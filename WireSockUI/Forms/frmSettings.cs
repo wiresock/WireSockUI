@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
+using System.Security;
 using System.Security.AccessControl;
 using System.Security.Cryptography;
 using System.Security.Principal;
@@ -26,6 +27,7 @@ namespace WireSockUI.Forms
         private bool _initialAutoRunUsesPathScopedTask;
         private bool _hasUnverifiedLegacyShortcut;
         private bool _legacyShortcutMigrationApproved;
+        private string _legacyStartupShortcutPath;
         private System.Threading.Tasks.Task<AutoRunInspection> _autoRunInspectionTask;
 
         internal enum AutoRunStatus
@@ -52,17 +54,20 @@ namespace WireSockUI.Forms
                 AutoRunStatus status,
                 bool usesPathScopedTask,
                 bool hasUnverifiedLegacyShortcut,
+                string legacyStartupShortcutPath,
                 string diagnostic = null)
             {
                 Status = status;
                 UsesPathScopedTask = usesPathScopedTask;
                 HasUnverifiedLegacyShortcut = hasUnverifiedLegacyShortcut;
+                LegacyStartupShortcutPath = legacyStartupShortcutPath;
                 Diagnostic = diagnostic;
             }
 
             internal AutoRunStatus Status { get; }
             internal bool UsesPathScopedTask { get; }
             internal bool HasUnverifiedLegacyShortcut { get; }
+            internal string LegacyStartupShortcutPath { get; }
             internal string Diagnostic { get; }
         }
 
@@ -133,6 +138,7 @@ namespace WireSockUI.Forms
                 _initialAutoRunStatus = inspection.Status;
                 _initialAutoRunUsesPathScopedTask = inspection.UsesPathScopedTask;
                 _hasUnverifiedLegacyShortcut = inspection.HasUnverifiedLegacyShortcut;
+                _legacyStartupShortcutPath = inspection.LegacyStartupShortcutPath;
                 chkAutorun.Checked = ResolveRequestedAutoRun(
                     _initialAutoRunStatus,
                     IsEnabledAutoRunStatus(_initialAutoRunStatus),
@@ -144,6 +150,11 @@ namespace WireSockUI.Forms
                         Resources.SettingsAutoRunCheckAdminError,
                         new InvalidOperationException(inspection.Diagnostic ??
                                                       "Conflicting autorun entries were found."));
+                else if (_initialAutoRunStatus == AutoRunStatus.Unknown)
+                    ShowSettingsError(
+                        Resources.SettingsAutoRunCheckAdminError,
+                        new IOException(inspection.Diagnostic ??
+                                        "Autorun status could not be determined. Autorun was left unchanged."));
                 else if (_hasUnverifiedLegacyShortcut)
                     MessageBox.Show(
                         inspection.Diagnostic ??
@@ -206,9 +217,10 @@ namespace WireSockUI.Forms
         private static string GetLegacyStartupShortcutPath()
         {
             var startupFolderPath = Environment.GetFolderPath(Environment.SpecialFolder.Startup);
-            if (string.IsNullOrWhiteSpace(startupFolderPath))
-                throw new DirectoryNotFoundException("The current user's Startup folder is unavailable.");
-            return Path.Combine(startupFolderPath, $"{GetAppName()}.lnk");
+            var absoluteStartupFolderPath = Global.RequireAbsoluteSpecialFolderRoot(
+                startupFolderPath,
+                "the current user's Startup folder");
+            return Path.Combine(absoluteStartupFolderPath, $"{GetAppName()}.lnk");
         }
 
         private static string GetAutoRunTaskName()
@@ -253,38 +265,62 @@ namespace WireSockUI.Forms
             return $"{GetAppName()}-{WindowsApplicationContext.BuildPathSeed(executablePath)}";
         }
 
-        private static void DeleteLegacyStartupShortcutIfPresent()
+        private static void DeleteLegacyStartupShortcutIfPresent(string shortcutPath)
         {
-            var shortcutStatus = InspectLegacyStartupShortcut(true);
-            if (shortcutStatus == LegacyStartupShortcutStatus.Foreign)
+            if (string.IsNullOrWhiteSpace(shortcutPath))
                 throw new InvalidOperationException(
-                    $"The reserved legacy Startup shortcut path '{GetLegacyStartupShortcutPath()}' is a directory or reparse point and cannot be removed safely.");
+                    "The inspected legacy Startup shortcut path is unavailable.");
+
+            var shortcutStatus = InspectLegacyStartupShortcutPath(shortcutPath, true);
+            EnsureLegacyStartupShortcutCleanupCompleted(
+                shortcutStatus,
+                shortcutPath);
         }
 
-        private static LegacyStartupShortcutStatus InspectLegacyStartupShortcut(bool deleteIfOwned)
+        internal static void EnsureLegacyStartupShortcutCleanupCompleted(
+            LegacyStartupShortcutStatus shortcutStatus,
+            string shortcutPath)
         {
-            var shortcutPath = GetLegacyStartupShortcutPath();
-            if (string.IsNullOrWhiteSpace(shortcutPath))
-                throw new DirectoryNotFoundException("The current user's Startup folder is unavailable.");
-
-            return InspectLegacyStartupShortcutPath(shortcutPath, deleteIfOwned);
+            if (shortcutStatus == LegacyStartupShortcutStatus.Foreign)
+                throw new InvalidOperationException(
+                    $"The reserved legacy Startup shortcut path '{shortcutPath}' is a directory or reparse point and cannot be removed safely.");
+            if (shortcutStatus == LegacyStartupShortcutStatus.Unknown)
+                throw new IOException(
+                    $"The reserved legacy Startup shortcut path '{shortcutPath}' could not be inspected and cannot be removed safely.");
         }
 
         internal static LegacyStartupShortcutStatus InspectLegacyStartupShortcutPath(
             string shortcutPath,
             bool deleteIfOwned)
         {
+            return InspectLegacyStartupShortcutPath(
+                shortcutPath,
+                deleteIfOwned,
+                File.GetAttributes);
+        }
+
+        internal static LegacyStartupShortcutStatus InspectLegacyStartupShortcutPath(
+            string shortcutPath,
+            bool deleteIfOwned,
+            Func<string, FileAttributes> getAttributes)
+        {
             if (string.IsNullOrWhiteSpace(shortcutPath))
                 throw new ArgumentException("A legacy Startup shortcut path is required.", nameof(shortcutPath));
+            if (getAttributes == null)
+                throw new ArgumentNullException(nameof(getAttributes));
 
             FileAttributes attributes;
             try
             {
-                attributes = File.GetAttributes(shortcutPath);
+                attributes = getAttributes(shortcutPath);
             }
             catch (Exception ex) when (IsMissingShortcutException(ex))
             {
                 return LegacyStartupShortcutStatus.Absent;
+            }
+            catch (Exception ex) when (IsShortcutMetadataInspectionException(ex))
+            {
+                return LegacyStartupShortcutStatus.Unknown;
             }
 
             if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
@@ -317,8 +353,17 @@ namespace WireSockUI.Forms
                    (win32Exception.NativeErrorCode == 2 || win32Exception.NativeErrorCode == 3);
         }
 
+        private static bool IsShortcutMetadataInspectionException(Exception exception)
+        {
+            return exception is UnauthorizedAccessException ||
+                   exception is IOException ||
+                   exception is SecurityException ||
+                   exception is Win32Exception;
+        }
+
         private static AutoRunInspection InspectAutoRun()
         {
+            var legacyStartupShortcutPath = GetLegacyStartupShortcutPath();
             using (var taskService = new TaskService())
             {
                 AutoRunTaskInspection pathScopedInspection;
@@ -334,7 +379,9 @@ namespace WireSockUI.Forms
                 using (var legacyTask = FindRootAutoRunTask(taskService, GetLegacyAutoRunTaskName()))
                     legacyInspection = InspectAutoRunTask(legacyTask, false, true);
 
-                var shortcutStatus = InspectLegacyStartupShortcut(false);
+                var shortcutStatus = InspectLegacyStartupShortcutPath(
+                    legacyStartupShortcutPath,
+                    false);
                 var status = ClassifyAutoRunStatus(
                     pathScopedInspection.EnabledForCurrentExecutable,
                     pathScopedInspection.Canonical,
@@ -349,16 +396,38 @@ namespace WireSockUI.Forms
                 if (status == AutoRunStatus.Conflict)
                     diagnostic =
                         "An autorun task or Startup shortcut with WireSock UI's name belongs to a different executable or has an unsafe definition. It was left unchanged.";
-                else if (shortcutStatus == LegacyStartupShortcutStatus.Unverified)
-                    diagnostic =
-                        $"An unauthenticated regular file exists at the reserved legacy Startup path '{GetLegacyStartupShortcutPath()}'. " +
-                        "WireSock UI will not infer elevated-autorun consent from or delete that user-writable file without explicit cleanup or migration confirmation.";
+                else
+                    diagnostic = GetLegacyStartupShortcutDiagnostic(
+                        shortcutStatus,
+                        legacyStartupShortcutPath);
                 return new AutoRunInspection(
                     status,
                     usesPathScopedTask,
-                    shortcutStatus == LegacyStartupShortcutStatus.Unverified,
+                    RequiresLegacyStartupShortcutMigrationConsent(shortcutStatus),
+                    legacyStartupShortcutPath,
                     diagnostic);
             }
+        }
+
+        internal static string GetLegacyStartupShortcutDiagnostic(
+            LegacyStartupShortcutStatus shortcutStatus,
+            string shortcutPath)
+        {
+            if (shortcutStatus == LegacyStartupShortcutStatus.Unverified)
+                return
+                    $"An unauthenticated regular file exists at the reserved legacy Startup path '{shortcutPath}'. " +
+                    "WireSock UI will not infer elevated-autorun consent from or delete that user-writable file without explicit cleanup or migration confirmation.";
+            if (shortcutStatus == LegacyStartupShortcutStatus.Unknown)
+                return
+                    $"WireSock UI could not inspect metadata for the reserved legacy Startup path '{shortcutPath}'. " +
+                    "Autorun was left unchanged. Check that the path is accessible and not blocked by filesystem permissions, then reopen Settings.";
+            return null;
+        }
+
+        internal static bool RequiresLegacyStartupShortcutMigrationConsent(
+            LegacyStartupShortcutStatus shortcutStatus)
+        {
+            return shortcutStatus == LegacyStartupShortcutStatus.Unverified;
         }
 
         private static AutoRunTaskInspection InspectAutoRunTask(
@@ -468,7 +537,7 @@ namespace WireSockUI.Forms
         ///     switches to battery power, to wake the computer if needed, and to not stop when the computer ceases to be idle.
         ///     If an error occurs while enabling auto-run, a contextual exception is propagated to the settings transaction.
         /// </remarks>
-        private static void EnableAutoRun(bool deleteLegacyStartupShortcut)
+        private static void EnableAutoRun()
         {
             var registrationCompleted = false;
             var pathScopedTaskExisted = false;
@@ -549,8 +618,6 @@ namespace WireSockUI.Forms
                                 "Task Scheduler did not preserve the protected WireSock UI autorun definition.");
                     }
                     legacyCleanupStarted = true;
-                    if (deleteLegacyStartupShortcut)
-                        DeleteLegacyStartupShortcutIfPresent();
                     DeleteAutoRunTaskIfReplaceable(ts, GetLegacyPathScopedAutoRunTaskName(), true);
                     DeleteAutoRunTaskIfReplaceable(ts, GetLegacyAutoRunTaskName(), true);
                 }
@@ -578,7 +645,7 @@ namespace WireSockUI.Forms
         ///     This method deletes only tasks that point to the current executable.
         ///     If an error occurs while disabling auto-run, a contextual exception is propagated to the settings transaction.
         /// </remarks>
-        private static void DisableAutoRun(bool deleteLegacyStartupShortcut)
+        private static void DisableAutoRun()
         {
             try
             {
@@ -588,9 +655,6 @@ namespace WireSockUI.Forms
                     DeleteAutoRunTaskIfReplaceable(ts, GetLegacyPathScopedAutoRunTaskName(), true);
                     DeleteAutoRunTaskIfReplaceable(ts, GetLegacyAutoRunTaskName(), true);
                 }
-
-                if (deleteLegacyStartupShortcut)
-                    DeleteLegacyStartupShortcutIfPresent();
             }
             catch (Exception ex)
             {
@@ -1001,7 +1065,7 @@ namespace WireSockUI.Forms
             if (!TryCaptureAutoRunChange(out _, out var requestedAutoRun))
                 return true;
 
-            return SetAutoRun(requestedAutoRun, ShouldPreserveLegacyShortcutUntilCommit());
+            return SetAutoRun(requestedAutoRun);
         }
 
         internal System.Threading.Tasks.Task<bool> ApplyAutoRunChangeAsync()
@@ -1010,7 +1074,7 @@ namespace WireSockUI.Forms
                 return System.Threading.Tasks.Task.FromResult(true);
 
             return RunSerializedAutoRunOperationAsync(
-                () => SetAutoRun(requestedAutoRun, ShouldPreserveLegacyShortcutUntilCommit()));
+                () => SetAutoRun(requestedAutoRun));
         }
 
         internal bool RollbackAutoRunChange()
@@ -1018,7 +1082,7 @@ namespace WireSockUI.Forms
             if (!TryCaptureAutoRunChange(out var initialAutoRun, out _))
                 return true;
 
-            return SetAutoRun(initialAutoRun, ShouldPreserveLegacyShortcutUntilCommit());
+            return SetAutoRun(initialAutoRun);
         }
 
         internal System.Threading.Tasks.Task<bool> RollbackAutoRunChangeAsync()
@@ -1027,26 +1091,23 @@ namespace WireSockUI.Forms
                 return System.Threading.Tasks.Task.FromResult(true);
 
             return RunSerializedAutoRunOperationAsync(
-                () => SetAutoRun(initialAutoRun, ShouldPreserveLegacyShortcutUntilCommit()));
+                () => SetAutoRun(initialAutoRun));
         }
 
         internal System.Threading.Tasks.Task<bool> CommitAutoRunChangeAsync()
         {
-            if (!ShouldPreserveLegacyShortcutUntilCommit())
+            var shortcutPath = GetLegacyStartupShortcutPathForCommit(
+                _hasUnverifiedLegacyShortcut,
+                _legacyShortcutMigrationApproved,
+                _legacyStartupShortcutPath);
+            if (shortcutPath == null)
                 return System.Threading.Tasks.Task.FromResult(true);
 
             return RunSerializedAutoRunOperationAsync(() =>
             {
-                DeleteLegacyStartupShortcutIfPresent();
+                DeleteLegacyStartupShortcutIfPresent(shortcutPath);
                 return true;
             });
-        }
-
-        private bool ShouldPreserveLegacyShortcutUntilCommit()
-        {
-            return ShouldPreserveLegacyShortcutUntilCommit(
-                _hasUnverifiedLegacyShortcut,
-                _legacyShortcutMigrationApproved);
         }
 
         internal static bool ShouldPreserveLegacyShortcutUntilCommit(
@@ -1054,6 +1115,43 @@ namespace WireSockUI.Forms
             bool migrationApproved)
         {
             return hasUnverifiedLegacyShortcut && migrationApproved;
+        }
+
+        internal static string GetLegacyStartupShortcutPathForCommit(
+            bool hasUnverifiedLegacyShortcut,
+            bool migrationApproved,
+            string inspectedShortcutPath)
+        {
+            if (!ShouldPreserveLegacyShortcutUntilCommit(
+                    hasUnverifiedLegacyShortcut,
+                    migrationApproved))
+                return null;
+            if (string.IsNullOrWhiteSpace(inspectedShortcutPath))
+                throw new InvalidOperationException(
+                    "The approved legacy Startup shortcut cleanup has no inspected path.");
+
+            string absolutePath;
+            try
+            {
+                absolutePath = Path.GetFullPath(inspectedShortcutPath);
+            }
+            catch (Exception ex) when (ex is ArgumentException ||
+                                       ex is NotSupportedException ||
+                                       ex is PathTooLongException)
+            {
+                throw new InvalidOperationException(
+                    "The approved legacy Startup shortcut cleanup path is invalid.",
+                    ex);
+            }
+
+            if (!string.Equals(
+                    inspectedShortcutPath,
+                    absolutePath,
+                    StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException(
+                    "The approved legacy Startup shortcut cleanup path is not absolute.");
+
+            return inspectedShortcutPath;
         }
 
         private bool TryCaptureAutoRunChange(out bool initialAutoRun, out bool requestedAutoRun)
@@ -1084,12 +1182,12 @@ namespace WireSockUI.Forms
                    requestedAutoRun && !initialUsesPathScopedTask;
         }
 
-        private static bool SetAutoRun(bool enabled, bool preserveLegacyShortcut)
+        private static bool SetAutoRun(bool enabled)
         {
             if (enabled)
-                EnableAutoRun(!preserveLegacyShortcut);
+                EnableAutoRun();
             else
-                DisableAutoRun(!preserveLegacyShortcut);
+                DisableAutoRun();
 
             return true;
         }
