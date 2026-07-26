@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Security.Principal;
+using System.Threading;
 
 namespace WireSockUI.Native
 {
@@ -32,7 +33,7 @@ namespace WireSockUI.Native
         private static extern bool QueryFullProcessImageName(IntPtr hProcess, uint dwFlags, [Out] char[] lpExeName,
             [In][Out] ref int lpdwSize);
 
-        private static string GetProcessUser(IntPtr handle)
+        private static string GetProcessUserSid(IntPtr handle)
         {
             const int tokenQuery = 0x0008;
 
@@ -47,7 +48,9 @@ namespace WireSockUI.Native
             {
                 using (var wi = new WindowsIdentity(tokenHandle))
                 {
-                    return wi.Name;
+                    // Reading WindowsIdentity.Name can synchronously contact an account provider for every
+                    // process. A SID is already present in the token and can be compared without translation.
+                    return wi.User?.Value;
                 }
             }
             finally
@@ -74,9 +77,15 @@ namespace WireSockUI.Native
         /// <returns>Lis of <see cref="ProcessEntry" /></returns>
         public static IEnumerable<ProcessEntry> GetProcessList()
         {
+            return GetProcessList(CancellationToken.None);
+        }
+
+        internal static IEnumerable<ProcessEntry> GetProcessList(CancellationToken cancellationToken)
+        {
             const int th32CsSnapprocess = 2;
             const int processQueryLimitedInformation = 0x00001000;
 
+            cancellationToken.ThrowIfCancellationRequested();
             var snap = CreateToolhelp32Snapshot(th32CsSnapprocess, 0);
             if (snap == IntPtr.Zero || snap == InvalidHandleValue)
                 yield break;
@@ -88,6 +97,7 @@ namespace WireSockUI.Native
                 if (Process32First(snap, ref entry))
                     do
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         var handle = OpenProcess(processQueryLimitedInformation, false, entry.th32ProcessID);
                         ProcessEntry processEntry;
 
@@ -97,7 +107,7 @@ namespace WireSockUI.Native
                                 entry.th32ProcessID,
                                 entry.szExeFile,
                                 GetProcessImage(handle),
-                                GetProcessUser(handle));
+                                GetProcessUserSid(handle));
                         }
                         catch (Exception ex)
                         {

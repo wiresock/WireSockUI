@@ -1,9 +1,11 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Management;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using WireSockUI.Config;
 using WireSockUI.Native;
 using WireSockUI.Properties;
@@ -11,11 +13,156 @@ using static WireSockUI.Native.WireguardBoosterExports;
 
 namespace WireSockUI
 {
+    internal interface IVirtualAdapterRenamer
+    {
+        void Rename(string adapterFriendlyName, string newName, Func<bool> shouldContinue);
+    }
+
+    internal sealed class WmiVirtualAdapterRenamer : IVirtualAdapterRenamer
+    {
+        internal enum CandidateReadiness
+        {
+            Missing,
+            NotReady,
+            Ready,
+            Ambiguous
+        }
+
+        private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(1);
+        private static readonly TimeSpan ReadinessTimeout = TimeSpan.FromSeconds(4);
+        private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(200);
+
+        public void Rename(string adapterFriendlyName, string newName, Func<bool> shouldContinue)
+        {
+            if (shouldContinue == null) throw new ArgumentNullException(nameof(shouldContinue));
+
+            var stopwatch = Stopwatch.StartNew();
+            do
+            {
+                if (!shouldContinue())
+                    return;
+                if (TryRenameOnce(adapterFriendlyName, newName, shouldContinue))
+                    return;
+
+                var remaining = ReadinessTimeout - stopwatch.Elapsed;
+                if (remaining <= TimeSpan.Zero)
+                    break;
+                Thread.Sleep(remaining < RetryDelay ? remaining : RetryDelay);
+            } while (stopwatch.Elapsed < ReadinessTimeout);
+
+            throw new TimeoutException(
+                $"The virtual adapter '{adapterFriendlyName}' was not ready for renaming within {ReadinessTimeout.TotalSeconds:0} seconds.");
+        }
+
+        private static bool TryRenameOnce(
+            string adapterFriendlyName,
+            string newName,
+            Func<bool> shouldContinue)
+        {
+            var query = new SelectQuery("Win32_NetworkAdapter",
+                $"Name = '{EscapeWqlString(adapterFriendlyName)}'");
+            using (var searcher = new ManagementObjectSearcher(query))
+            {
+                searcher.Options.ReturnImmediately = false;
+                searcher.Options.Timeout = OperationTimeout;
+                using (var results = searcher.Get())
+                {
+                    ManagementObject candidate = null;
+                    var candidateCount = 0;
+                    try
+                    {
+                        foreach (ManagementObject adapter in results)
+                        {
+                            var retainCandidate = false;
+                            try
+                            {
+                                candidateCount++;
+                                if (candidateCount == 1)
+                                {
+                                    candidate = adapter;
+                                    retainCandidate = true;
+                                }
+                            }
+                            finally
+                            {
+                                if (!retainCandidate)
+                                    adapter.Dispose();
+                            }
+                        }
+
+                        var connectionId = candidate?["NetConnectionID"]?.ToString();
+                        switch (ClassifyCandidates(candidateCount, connectionId))
+                        {
+                            case CandidateReadiness.Missing:
+                            case CandidateReadiness.NotReady:
+                                return false;
+                            case CandidateReadiness.Ambiguous:
+                                throw new InvalidOperationException(
+                                    $"Found {candidateCount} adapters named '{adapterFriendlyName}'. " +
+                                    "The SDK does not expose the created adapter identifier, so WireSock UI did not rename an ambiguous adapter.");
+                        }
+
+                        if (!shouldContinue())
+                            return true;
+
+                        candidate["NetConnectionID"] = newName;
+                        candidate.Put(new PutOptions { Timeout = OperationTimeout });
+                        if (!shouldContinue())
+                        {
+                            // WMI Put is not cancelable once dispatched. Restore the value
+                            // observed by this generation; any queued newer generation then
+                            // applies its own profile name.
+                            candidate["NetConnectionID"] = connectionId;
+                            candidate.Put(new PutOptions { Timeout = OperationTimeout });
+                            throw new OperationCanceledException(
+                                "The tunnel connection changed while the virtual-adapter rename was committing.");
+                        }
+                        return true;
+                    }
+                    finally
+                    {
+                        candidate?.Dispose();
+                    }
+                }
+            }
+        }
+
+        internal static CandidateReadiness ClassifyCandidates(int candidateCount, string connectionId)
+        {
+            if (candidateCount < 0)
+                throw new ArgumentOutOfRangeException(nameof(candidateCount));
+            if (candidateCount == 0)
+                return CandidateReadiness.Missing;
+            if (candidateCount > 1)
+                return CandidateReadiness.Ambiguous;
+            return string.IsNullOrWhiteSpace(connectionId)
+                ? CandidateReadiness.NotReady
+                : CandidateReadiness.Ready;
+        }
+
+        private static string EscapeWqlString(string value)
+        {
+            return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "''");
+        }
+    }
+
     /// <summary>
     ///     Manages the Wireguard tunnel using the Wireguard Booster library.
     /// </summary>
     internal class WireSockManager : IDisposable
     {
+        private sealed class AdapterRenameRequest
+        {
+            internal AdapterRenameRequest(string profile, long connectionSequence)
+            {
+                Profile = profile;
+                ConnectionSequence = connectionSequence;
+            }
+
+            internal string Profile { get; }
+            internal long ConnectionSequence { get; }
+        }
+
         /// <summary>
         ///     LogMessage function delegate
         /// </summary>
@@ -44,8 +191,10 @@ namespace WireSockUI
 
         private readonly LogPrinter _logPrinter;
         private readonly IWireSockNativeApi _nativeApi;
+        private readonly IVirtualAdapterRenamer _virtualAdapterRenamer;
 
         private const int MaxQueuedLogMessages = 1000;
+        private const int DefaultAdapterRenameTimeoutMilliseconds = 6000;
         internal const int MaximumRetainedLogMessageCharacters = 4096;
         private const string LogMessageTruncationSuffix = " ... [truncated]";
         private const string DroppedHandleDiagnostic =
@@ -54,8 +203,14 @@ namespace WireSockUI
         private readonly BlockingCollection<LogMessage> _logQueue;
         private readonly object _logQueueSyncRoot = new object();
         private readonly BackgroundWorker _logWorker;
+        private readonly object _adapterRenameQueueSyncRoot = new object();
+        private readonly object _connectSyncRoot = new object();
         private readonly object _syncRoot = new object();
+        private readonly int _adapterRenameTimeoutMilliseconds;
 
+        private AdapterRenameRequest _pendingAdapterRename;
+        private bool _adapterRenameOperationHung;
+        private bool _adapterRenameWorkerRunning;
         private volatile IntPtr _handle = IntPtr.Zero;
         private WgbLogLevel _logLevel;
         private GCHandle _logPrinterHandle;
@@ -78,8 +233,20 @@ namespace WireSockUI
         }
 
         internal WireSockManager(IWireSockNativeApi nativeApi, LogMessageCallback logMessageCallback = null)
+            : this(nativeApi, new WmiVirtualAdapterRenamer(), logMessageCallback)
+        {
+        }
+
+        internal WireSockManager(IWireSockNativeApi nativeApi, IVirtualAdapterRenamer virtualAdapterRenamer,
+            LogMessageCallback logMessageCallback,
+            int adapterRenameTimeoutMilliseconds = DefaultAdapterRenameTimeoutMilliseconds)
         {
             _nativeApi = nativeApi ?? throw new ArgumentNullException(nameof(nativeApi));
+            _virtualAdapterRenamer =
+                virtualAdapterRenamer ?? throw new ArgumentNullException(nameof(virtualAdapterRenamer));
+            if (adapterRenameTimeoutMilliseconds <= 0)
+                throw new ArgumentOutOfRangeException(nameof(adapterRenameTimeoutMilliseconds));
+            _adapterRenameTimeoutMilliseconds = adapterRenameTimeoutMilliseconds;
             _logQueue = new BlockingCollection<LogMessage>(
                 new ConcurrentQueue<LogMessage>(),
                 MaxQueuedLogMessages);
@@ -389,6 +556,8 @@ namespace WireSockUI
                         "The native tunnel handle could not be released. Its logging callback will remain rooted until process exit.");
 
                 _disposed = true;
+                lock (_adapterRenameQueueSyncRoot)
+                    _pendingAdapterRename = null;
 
                 if (disposing)
                 {
@@ -577,62 +746,32 @@ namespace WireSockUI
         }
 
         /// <summary>
-        ///     Changes the NetConnectionID of a network adapter identified by its friendly name.
-        /// </summary>
-        /// <remarks>
-        ///     This function uses Windows Management Instrumentation (WMI) to locate a network adapter based on its friendly name.
-        ///     Once found, it changes the adapter's NetConnectionID to the specified new name. This is particularly useful for
-        ///     managing and identifying network connections programmatically. The function iterates through all matching network
-        ///     adapters and updates their NetConnectionID, if it is not null or empty.
-        /// </remarks>
-        /// <param name="adapterFriendlyName">The friendly name of the network adapter whose NetConnectionID is to be changed.</param>
-        /// <param name="newName">The new NetConnectionID to be assigned to the network adapter.</param>
-        /// <example>
-        ///     <code>
-        /// ChangeNetConnectionIdByAdapterName("Ethernet", "NewEthernetConnection");
-        /// </code>
-        /// </example>
-        private static void ChangeNetConnectionIdByAdapterName(string adapterFriendlyName, string newName)
-        {
-            var query = new SelectQuery("Win32_NetworkAdapter", $"Name = '{EscapeWqlString(adapterFriendlyName)}'");
-            using (var searcher = new ManagementObjectSearcher(query))
-            using (var results = searcher.Get())
-            {
-                foreach (ManagementObject obj in results)
-                {
-                    using (obj)
-                    {
-                        // Check if NetConnectionID is not null or empty
-                        if (obj["NetConnectionID"] != null && !string.IsNullOrEmpty(obj["NetConnectionID"].ToString()))
-                        {
-                            obj["NetConnectionID"] = newName;
-                            obj.Put(); // Save changes
-                        }
-                    }
-                }
-            }
-        }
-
-        private static string EscapeWqlString(string value)
-        {
-            return (value ?? string.Empty).Replace("\\", "\\\\").Replace("'", "''");
-        }
-
-        /// <summary>
         ///     Create a Wireguard tunnel using the specified configuration file.
         /// </summary>
         /// <param name="profile">Profile identifier</param>
         public bool Connect(string profile)
         {
             var profilePath = Profile.GetProfilePath(profile);
-
-            lock (_syncRoot)
+            bool connected;
+            Mode connectedMode;
+            long connectedSequence;
+            lock (_connectSyncRoot)
             {
-                lock (NativeOperationSyncRoot)
+                lock (_syncRoot)
                 {
-                    return ConnectLocked(profile, profilePath);
+                    lock (NativeOperationSyncRoot)
+                    {
+                        connected = ConnectLocked(profile, profilePath);
+                        connectedMode = _adapterMode;
+                        connectedSequence = connected ? _connectionSequence : 0;
+                    }
                 }
             }
+
+            if (connected && connectedMode == Mode.VirtualAdapter)
+                QueueVirtualAdapterRename(profile, connectedSequence);
+
+            return connected;
         }
 
         private bool ConnectLocked(string profile, string profilePath)
@@ -682,17 +821,6 @@ namespace WireSockUI
                     return false;
                 }
 
-                if (_adapterMode == Mode.VirtualAdapter)
-                {
-                    try
-                    {
-                        ChangeNetConnectionIdByAdapterName("Wiresock Virtual Adapter", profile);
-                    }
-                    catch (Exception ex)
-                    {
-                        PrintLog($"Tunnel is active, but WireSock UI could not rename the virtual adapter: {ex.Message}");
-                    }
-                }
             }
             catch (DllNotFoundException ex)
             {
@@ -719,6 +847,183 @@ namespace WireSockUI
             _connectionSequence++;
 
             return true;
+        }
+
+        private void QueueVirtualAdapterRename(string profile, long connectionSequence)
+        {
+            var startWorker = false;
+            lock (_adapterRenameQueueSyncRoot)
+            {
+                if (_disposed)
+                    return;
+
+                // Connect releases lifecycle locks before enqueueing, so concurrent callers can arrive
+                // here out of sequence. Capacity one must retain the highest observed generation.
+                if (_pendingAdapterRename != null &&
+                    _pendingAdapterRename.ConnectionSequence >= connectionSequence)
+                    return;
+
+                _pendingAdapterRename = new AdapterRenameRequest(profile, connectionSequence);
+                if (!_adapterRenameWorkerRunning && !_adapterRenameOperationHung)
+                {
+                    _adapterRenameWorkerRunning = true;
+                    startWorker = true;
+                }
+            }
+
+            if (!startWorker || TryQueueAdapterRenameWorker())
+                return;
+
+            PrintLog("Tunnel is active, but WireSock UI could not queue the virtual-adapter rename.");
+        }
+
+        private bool TryQueueAdapterRenameWorker()
+        {
+            if (ThreadPool.QueueUserWorkItem(_ => ProcessAdapterRenameQueue()))
+                return true;
+
+            lock (_adapterRenameQueueSyncRoot)
+            {
+                _adapterRenameWorkerRunning = false;
+                _pendingAdapterRename = null;
+            }
+
+            return false;
+        }
+
+        private void ProcessAdapterRenameQueue()
+        {
+            while (true)
+            {
+                AdapterRenameRequest request;
+                lock (_adapterRenameQueueSyncRoot)
+                {
+                    if (_disposed)
+                    {
+                        _pendingAdapterRename = null;
+                        _adapterRenameWorkerRunning = false;
+                        return;
+                    }
+
+                    request = _pendingAdapterRename;
+                    _pendingAdapterRename = null;
+                    if (request == null)
+                    {
+                        _adapterRenameWorkerRunning = false;
+                        return;
+                    }
+                }
+
+                if (!IsCurrentVirtualAdapterConnection(request.Profile, request.ConnectionSequence))
+                    continue;
+
+                try
+                {
+                    if (TryRunVirtualAdapterRenameWithTimeout(request, out var timedOutOperation))
+                        continue;
+
+                    SuspendAdapterRenameQueueUntilCompletion(timedOutOperation);
+                    PrintLog(
+                        $"Tunnel is active, but the virtual-adapter rename exceeded {_adapterRenameTimeoutMilliseconds} ms. " +
+                        "Further rename attempts are coalesced until the provider returns.");
+                    return;
+                }
+                catch (OperationCanceledException)
+                {
+                    // A disconnect or newer connection invalidated this request.
+                }
+                catch (Exception ex)
+                {
+                    PrintLog($"Tunnel is active, but WireSock UI could not rename the virtual adapter: {ex.Message}");
+                }
+            }
+        }
+
+        private bool TryRunVirtualAdapterRenameWithTimeout(
+            AdapterRenameRequest request,
+            out Task timedOutOperation)
+        {
+            var canceled = 0;
+            var operation = Task.Run(() => _virtualAdapterRenamer.Rename(
+                "Wiresock Virtual Adapter",
+                request.Profile,
+                () => Volatile.Read(ref canceled) == 0 &&
+                      IsCurrentVirtualAdapterConnection(request.Profile, request.ConnectionSequence)));
+
+            try
+            {
+                if (operation.Wait(_adapterRenameTimeoutMilliseconds))
+                {
+                    timedOutOperation = null;
+                    return true;
+                }
+            }
+            catch (AggregateException ex)
+            {
+                throw ex.GetBaseException();
+            }
+
+            Interlocked.Exchange(ref canceled, 1);
+            timedOutOperation = operation;
+            return false;
+        }
+
+        private void SuspendAdapterRenameQueueUntilCompletion(Task timedOutOperation)
+        {
+            lock (_adapterRenameQueueSyncRoot)
+            {
+                _adapterRenameOperationHung = true;
+                _adapterRenameWorkerRunning = false;
+            }
+
+            timedOutOperation.ContinueWith(
+                CompleteTimedOutAdapterRename,
+                CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+        }
+
+        private void CompleteTimedOutAdapterRename(Task operation)
+        {
+            var lateException = operation.Exception?.GetBaseException();
+            var restartWorker = false;
+            lock (_adapterRenameQueueSyncRoot)
+            {
+                _adapterRenameOperationHung = false;
+                if (!_disposed && _pendingAdapterRename != null && !_adapterRenameWorkerRunning)
+                {
+                    _adapterRenameWorkerRunning = true;
+                    restartWorker = true;
+                }
+            }
+
+            if (lateException != null && !(lateException is OperationCanceledException))
+                PrintLog($"The timed-out virtual-adapter rename later failed: {lateException.Message}");
+
+            if (restartWorker && !TryQueueAdapterRenameWorker())
+                PrintLog("WireSock UI could not resume the queued virtual-adapter rename.");
+        }
+
+        internal bool AdapterRenameOperationHungForTests
+        {
+            get
+            {
+                lock (_adapterRenameQueueSyncRoot)
+                    return _adapterRenameOperationHung;
+            }
+        }
+
+        private bool IsCurrentVirtualAdapterConnection(string profile, long connectionSequence)
+        {
+            lock (_syncRoot)
+            {
+                return !_disposed &&
+                       _handle != IntPtr.Zero &&
+                       !_handleTunnelDropped &&
+                       _adapterMode == Mode.VirtualAdapter &&
+                       _connectionSequence == connectionSequence &&
+                       string.Equals(_profileName, profile, StringComparison.OrdinalIgnoreCase);
+            }
         }
 
         public bool DisconnectIfConnectionSequence(long connectionSequence, bool preserveNetworkLock = false)

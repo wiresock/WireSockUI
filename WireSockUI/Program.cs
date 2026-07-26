@@ -45,6 +45,24 @@ namespace WireSockUI
         [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr LoadLibraryEx(string fileName, IntPtr file, uint flags);
 
+        [DllImport("wtsapi32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool WTSQuerySessionInformation(
+            IntPtr serverHandle,
+            int sessionId,
+            WtsInfoClass infoClass,
+            out IntPtr buffer,
+            out int bytesReturned);
+
+        [DllImport("wtsapi32.dll")]
+        private static extern void WTSFreeMemory(IntPtr memory);
+
+        private enum WtsInfoClass
+        {
+            UserName = 5,
+            DomainName = 7
+        }
+
         [STAThread]
         private static void Main()
         {
@@ -52,6 +70,30 @@ namespace WireSockUI
             {
                 MessageBox.Show(
                     $"WireSock UI cannot run safely from its current location.{Environment.NewLine}{Environment.NewLine}{payloadDiagnostic}{Environment.NewLine}{Environment.NewLine}Install WireSock UI in an administrator-owned directory and retry.",
+                    "WireSock UI startup error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+                return;
+            }
+
+            if (!TryValidateInteractiveUserMatchesProcessUser(out var identityDiagnostic))
+            {
+                MessageBox.Show(
+                    $"WireSock UI cannot safely use credentials from a different Windows account." +
+                    $"{Environment.NewLine}{Environment.NewLine}{identityDiagnostic}" +
+                    $"{Environment.NewLine}{Environment.NewLine}Sign in with an administrator account and start WireSock UI again.",
+                    "WireSock UI startup error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Environment.Exit(1);
+                return;
+            }
+
+            try
+            {
+                Global.ValidateSpecialFolderRoots();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    $"WireSock UI cannot resolve its required Windows data folders.{Environment.NewLine}{Environment.NewLine}{ex.Message}",
                     "WireSock UI startup error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 Environment.Exit(1);
                 return;
@@ -138,6 +180,122 @@ namespace WireSockUI
             }
 
             Application.Run(new FrmMain());
+        }
+
+        private static bool TryValidateInteractiveUserMatchesProcessUser(out string diagnostic)
+        {
+            diagnostic = null;
+            try
+            {
+                SecurityIdentifier processUserSid;
+                using (var identity = WindowsIdentity.GetCurrent(TokenAccessLevels.Query))
+                    processUserSid = identity.User;
+
+                int sessionId;
+                using (var process = Process.GetCurrentProcess())
+                    sessionId = process.SessionId;
+
+                if (!TryQuerySessionIdentity(sessionId, out var interactiveUserSid, out diagnostic))
+                    return false;
+
+                return ValidateInteractiveUserIdentity(processUserSid, interactiveUserSid, out diagnostic);
+            }
+            catch (Exception ex)
+            {
+                diagnostic = $"The signed-in Windows account could not be verified: {ex.Message}";
+                return false;
+            }
+        }
+
+        private static bool TryQuerySessionIdentity(
+            int sessionId,
+            out SecurityIdentifier userSid,
+            out string diagnostic)
+        {
+            userSid = null;
+            diagnostic = null;
+            if (!TryQuerySessionString(sessionId, WtsInfoClass.UserName, out var userName, out diagnostic))
+                return false;
+            if (!TryQuerySessionString(sessionId, WtsInfoClass.DomainName, out var domainName, out diagnostic))
+                return false;
+            if (string.IsNullOrWhiteSpace(userName))
+            {
+                diagnostic = "Windows did not report a signed-in user for this desktop session.";
+                return false;
+            }
+
+            try
+            {
+                var account = string.IsNullOrWhiteSpace(domainName)
+                    ? new NTAccount(userName)
+                    : new NTAccount(domainName, userName);
+                userSid = (SecurityIdentifier)account.Translate(typeof(SecurityIdentifier));
+                return true;
+            }
+            catch (IdentityNotMappedException ex)
+            {
+                diagnostic = $"The signed-in Windows account could not be resolved to a security identifier: {ex.Message}";
+                return false;
+            }
+        }
+
+        private static bool TryQuerySessionString(
+            int sessionId,
+            WtsInfoClass infoClass,
+            out string value,
+            out string diagnostic)
+        {
+            value = null;
+            diagnostic = null;
+            if (!WTSQuerySessionInformation(
+                    IntPtr.Zero,
+                    sessionId,
+                    infoClass,
+                    out var buffer,
+                    out var bytesReturned))
+            {
+                diagnostic =
+                    $"Windows session identity query failed: {new Win32Exception(Marshal.GetLastWin32Error()).Message}";
+                return false;
+            }
+
+            try
+            {
+                if (buffer == IntPtr.Zero || bytesReturned < sizeof(char))
+                {
+                    diagnostic = "Windows returned an invalid desktop-session identity.";
+                    return false;
+                }
+
+                value = Marshal.PtrToStringUni(buffer)?.TrimEnd('\0');
+                return true;
+            }
+            finally
+            {
+                if (buffer != IntPtr.Zero)
+                    WTSFreeMemory(buffer);
+            }
+        }
+
+        internal static bool ValidateInteractiveUserIdentity(
+            SecurityIdentifier processUserSid,
+            SecurityIdentifier interactiveUserSid,
+            out string diagnostic)
+        {
+            diagnostic = null;
+            if (processUserSid == null || interactiveUserSid == null)
+            {
+                diagnostic = "The process or signed-in Windows account has no verifiable security identifier.";
+                return false;
+            }
+
+            if (processUserSid.Equals(interactiveUserSid))
+                return true;
+
+            diagnostic =
+                "The elevated process belongs to a different account than the user signed in to this desktop session. " +
+                "Using another administrator's credentials at the UAC prompt would redirect per-user autorun and notification state to that administrator.";
+            return false;
         }
 
         internal static bool TryValidateApplicationPayload(string executablePath, out string diagnostic)

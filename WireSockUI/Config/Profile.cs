@@ -33,7 +33,7 @@ namespace WireSockUI.Config
             "PrivateKey", "Address", "DNS", "MTU", "ListenPort", "Table", "ScriptExecTimeout", "PreUp",
             "PostUp", "PreDown", "PostDown", "BypassLanTraffic", "VirtualAdapterMode", "EnableDefaultGateway",
             "Jc", "Jmin", "Jmax", "Jd", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4", "Id", "Ip",
-            "Ib"
+            "Ib", "I1", "I2", "I3", "I4", "I5"
         };
 
         private static readonly string[] PeerKeys =
@@ -95,7 +95,7 @@ namespace WireSockUI.Config
                     $"Profile {GetProfileDisplayName(profilePath)} does not contain an \"Interface\" section.");
 
             var section = parser.GetSection("Interface");
-            ValidateKnownKeyCasing(section, InterfaceKeys);
+            ValidateAllowedKeys("Interface", section, InterfaceKeys);
             ValidateUnsupportedInterfaceDirectives(section);
 
             PrivateKey = GetRequiredValue(profilePath, "Interface", section, "PrivateKey");
@@ -115,8 +115,9 @@ namespace WireSockUI.Config
                 throw new ArgumentException(
                     $"Profile {GetProfileDisplayName(profilePath)} does not contain a \"Peer\" section.");
 
+            ValidateAllowedSections(configESections);
             section = parser.GetSection("Peer");
-            ValidateKnownKeyCasing(section, PeerKeys);
+            ValidateAllowedKeys("Peer", section, PeerKeys);
 
             if (section.ContainsKey("Socks5Username"))
                 throw new FormatException(
@@ -440,7 +441,8 @@ namespace WireSockUI.Config
             {
                 var trimmedValue = value.Trim();
                 if (string.IsNullOrWhiteSpace(trimmedValue) || !validator(trimmedValue))
-                    throw new FormatException($"\"{key}\" in \"{section}\", invalid address \"{value}\".");
+                    throw new FormatException(
+                        $"\"{key}\" in \"{section}\", invalid address \"{EscapeDiagnosticToken(value)}\".");
             }
         }
 
@@ -499,15 +501,36 @@ namespace WireSockUI.Config
                     $"\"{key}\" in \"{section}\", invalid value. Expected {minValue}...{maxValue}.");
         }
 
-        private static void ValidateKnownKeyCasing(Dictionary<string, string> section, IEnumerable<string> knownKeys)
+        private static void ValidateAllowedSections(IEnumerable<string> sectionNames)
         {
-            var canonicalKeys = knownKeys.ToDictionary(key => key, key => key, StringComparer.OrdinalIgnoreCase);
+            foreach (var sectionName in sectionNames)
+            {
+                if (string.Equals(sectionName, "Interface", StringComparison.Ordinal) ||
+                    string.Equals(sectionName, "Peer", StringComparison.Ordinal))
+                    continue;
+
+                throw new FormatException(
+                    $"Configuration section \"{EscapeDiagnosticToken(sectionName)}\" is not supported and will not be passed to the elevated WireSock engine. " +
+                    "Remove it or upgrade WireSock UI and the WireSock SDK together if the section is required.");
+            }
+        }
+
+        private static void ValidateAllowedKeys(
+            string sectionName,
+            Dictionary<string, string> section,
+            IEnumerable<string> allowedKeys)
+        {
+            var canonicalKeys = allowedKeys.ToDictionary(key => key, key => key, StringComparer.OrdinalIgnoreCase);
             foreach (var key in section.Keys)
             {
-                if (canonicalKeys.TryGetValue(key, out var canonicalKey) &&
-                    !string.Equals(key, canonicalKey, StringComparison.Ordinal))
+                if (!canonicalKeys.TryGetValue(key, out var canonicalKey))
                     throw new FormatException(
-                        $"Configuration key \"{key}\" has invalid casing. The current SDK expects \"{canonicalKey}\".");
+                        $"Configuration key \"{EscapeDiagnosticToken(key)}\" in \"{EscapeDiagnosticToken(sectionName)}\" is not supported and will not be passed to the elevated WireSock engine. " +
+                        "Remove it or upgrade WireSock UI and the WireSock SDK together if the directive is required.");
+
+                if (!string.Equals(key, canonicalKey, StringComparison.Ordinal))
+                    throw new FormatException(
+                        $"Configuration key \"{EscapeDiagnosticToken(key)}\" has invalid casing. The current SDK expects \"{EscapeDiagnosticToken(canonicalKey)}\".");
             }
         }
 

@@ -47,6 +47,8 @@ namespace WireSockUI.Forms
         private readonly SettingsUpdateCoordinator _settingsUpdateCoordinator;
         private readonly ProfileCatalog _profileCatalog = new ProfileCatalog();
         private readonly UiLogMessageBuffer _uiLogBuffer;
+        private readonly BoundedRingBuffer<WireSockManager.LogMessage> _visibleLogMessages =
+            new BoundedRingBuffer<WireSockManager.LogMessage>(MaxVisibleLogMessages);
         private readonly List<Image> _ownedMenuImages = new List<Image>();
 
         private ConnectionState _currentState = ConnectionState.Disconnected;
@@ -64,6 +66,8 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
+            lstLog.RetrieveVirtualItem += OnRetrieveVirtualLogItem;
+            lstLog.VirtualMode = true;
             _uiLogBuffer = new UiLogMessageBuffer(
                 MaxVisibleLogMessages,
                 LogUiBatchSize,
@@ -312,17 +316,26 @@ namespace WireSockUI.Forms
             return markerLease;
         }
 
-        private async Task HandleNativeCleanupFailureAsync(string profile, string context, string diagnostic = null,
+        private async Task<bool> HandleNativeCleanupFailureAsync(string profile, string context,
+            string diagnostic = null,
             NativeRecoveryMarkerLease markerLease = null)
         {
             if (!string.IsNullOrWhiteSpace(diagnostic))
                 Trace.TraceWarning($"Native cleanup failure after {context}: {diagnostic}");
 
-            await TryResetNetworkLockAfterNativeCleanupFailureAsync(context);
+            var networkLockRecovered = await TryResetNetworkLockAfterNativeCleanupFailureAsync(context);
+            if (!_tunnelLifecycle.HasTunnelHandle && networkLockRecovered)
+            {
+                Global.NativeRecoveryMarkers.TryDelete(markerLease);
+                TryRunOnUiThread(() => UpdateState(ConnectionState.Disconnected, false, profile));
+                return true;
+            }
+
             MarkNativeRecoveryRequired(profile, string.IsNullOrWhiteSpace(diagnostic)
                     ? context
                     : $"{context}: {diagnostic}",
                 markerLease);
+            return false;
         }
 
         private void SetNativeRecoveryUi(string profile)
@@ -370,9 +383,9 @@ namespace WireSockUI.Forms
             _tunnelSession.EndOperation();
         }
 
-        private void StartTunnelConnectionMonitor()
+        private void StartTunnelConnectionMonitor(Task nativeConnectCompletion)
         {
-            _tunnelMonitor.StartConnecting(CurrentTunnelGeneration());
+            _tunnelMonitor.StartConnecting(CurrentTunnelGeneration(), nativeConnectCompletion);
         }
 
         private void StartTunnelStateMonitor()
@@ -464,6 +477,9 @@ namespace WireSockUI.Forms
                     {
                         var resetResult = await _tunnelLifecycle.ResetNetworkLockAsync(NativeQueryTimeoutMilliseconds)
                             .ConfigureAwait(false);
+                        resetResult = await NativeOperationRecoveryPolicy.AwaitTimedOutCompletionAsync(
+                                resetResult, "native network-lock reset")
+                            .ConfigureAwait(false);
                         cleanupFailed = !resetResult.Succeeded;
                         diagnostic = resetResult.Diagnostic;
                     }
@@ -476,11 +492,12 @@ namespace WireSockUI.Forms
 
                 if (cleanupFailed)
                 {
-                    await HandleNativeCleanupFailureAsync(profile, "timed-out disconnect cleanup", diagnostic,
-                            markerLease)
+                    cleanupFailed = !await HandleNativeCleanupFailureAsync(
+                            profile, "timed-out disconnect cleanup", diagnostic, markerLease)
                         .ConfigureAwait(false);
                 }
-                else
+
+                if (!cleanupFailed)
                 {
                     Global.NativeRecoveryMarkers.TryDelete(markerLease);
                     TryRunOnUiThread(() => UpdateState(ConnectionState.Disconnected, false, profile));
@@ -827,14 +844,14 @@ namespace WireSockUI.Forms
                         out var createdNew,
                         CreateSingleInstanceEventSecurity());
 
-                if (createdNew) return false;
-
                 if (!TryValidateSingleInstanceEventSecurity(Global.AlreadyRunning, out var diagnostic))
                 {
                     Global.AlreadyRunning.Dispose();
                     Global.AlreadyRunning = null;
                     throw new InvalidOperationException(diagnostic);
                 }
+
+                if (createdNew) return false;
 
                 Global.AlreadyRunning.Dispose();
                 Global.AlreadyRunning = null;
@@ -855,6 +872,7 @@ namespace WireSockUI.Forms
         private static EventWaitHandleSecurity CreateSingleInstanceEventSecurity()
         {
             var security = new EventWaitHandleSecurity();
+            security.SetOwner(new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null));
             security.SetAccessRuleProtection(true, false);
             security.AddAccessRule(new EventWaitHandleAccessRule(
                 new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
@@ -875,7 +893,6 @@ namespace WireSockUI.Forms
             {
                 return IsSingleInstanceEventSecurityTrusted(
                     waitHandle.GetAccessControl(),
-                    WindowsIdentity.GetCurrent().User,
                     out diagnostic);
             }
             catch (Exception ex)
@@ -885,21 +902,22 @@ namespace WireSockUI.Forms
             }
         }
 
-        internal static bool IsSingleInstanceEventSecurityTrusted(EventWaitHandleSecurity security,
-            SecurityIdentifier currentUser, out string diagnostic)
+        internal static bool IsSingleInstanceEventSecurityTrusted(
+            EventWaitHandleSecurity security,
+            out string diagnostic)
         {
             diagnostic = null;
-            if (security == null || currentUser == null)
+            if (security == null)
             {
                 diagnostic = "The global WireSock ownership event has no verifiable security descriptor.";
                 return false;
             }
 
             if (!(security.GetOwner(typeof(SecurityIdentifier)) is SecurityIdentifier owner) ||
-                (!owner.Equals(currentUser) && !Program.IsTrustedOwnerSid(owner)))
+                !Program.IsTrustedAdministrativeSid(owner))
             {
-                diagnostic = "The global WireSock ownership event is not owned by the current administrator, " +
-                             "the Administrators group, or LocalSystem.";
+                diagnostic = "The global WireSock ownership event is not owned by the Administrators group, " +
+                             "LocalSystem, or TrustedInstaller.";
                 return false;
             }
 
@@ -910,7 +928,7 @@ namespace WireSockUI.Forms
                     !(rule.IdentityReference is SecurityIdentifier sid))
                     continue;
 
-                if (sid.Equals(currentUser) || Program.IsTrustedAdministrativeSid(sid))
+                if (Program.IsTrustedAdministrativeSid(sid))
                     continue;
 
                 diagnostic =
@@ -1424,11 +1442,13 @@ namespace WireSockUI.Forms
         {
             _currentState = state;
             var activeProfileName = profileName ?? _tunnelLifecycle?.ProfileName;
+            var presentation = MainWindowStatePresentation.Create(
+                state, IsNativeCleanupInProgress(), IsNativeRecoveryRequired());
 
             switch (state)
             {
                 case ConnectionState.Connecting:
-                    cmiDeactivateTunnel.Enabled = false;
+                    cmiDeactivateTunnel.Enabled = presentation.CanDeactivate;
 
                     if (TryGetProfileItem(activeProfileName, out var connectingProfile))
                         connectingProfile.ImageKey = ConnectionState.Connecting.ToString();
@@ -1438,9 +1458,8 @@ namespace WireSockUI.Forms
                     cmiStatus.Image = _inactiveStatusImage;
                     cmiStatus.Text = Resources.TrayActivating;
 
-                    cmiResetKillSwitch.Enabled = false;
+                    cmiResetKillSwitch.Enabled = presentation.CanResetNetworkLock;
 
-                    StartTunnelConnectionMonitor();
                     break;
                 case ConnectionState.Connected:
                     cmiStatus.Image = _connectedStatusImage;
@@ -1452,12 +1471,8 @@ namespace WireSockUI.Forms
                     cmiAddresses.Text = _activeTunnelAddresses ?? string.Empty;
                     cmiAddresses.Visible = true;
 
-                    cmiDeactivateTunnel.Enabled = true;
-                    cmiResetKillSwitch.Enabled = false;
-
-                    foreach (ToolStripItem item in mnuContext.Items)
-                        if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
-                            menuItem.Checked = IsTunnelProfileSelected(menuItem.Text, activeProfileName);
+                    cmiDeactivateTunnel.Enabled = presentation.CanDeactivate;
+                    cmiResetKillSwitch.Enabled = presentation.CanResetNetworkLock;
 
                     if (TryGetProfileItem(activeProfileName, out var connectedProfile))
                         connectedProfile.ImageKey = ConnectionState.Connected.ToString();
@@ -1495,12 +1510,8 @@ namespace WireSockUI.Forms
                     cmiAddresses.Visible = false;
                     _activeTunnelAddresses = null;
 
-                    cmiDeactivateTunnel.Enabled = false;
-                    cmiResetKillSwitch.Enabled = !IsNativeCleanupInProgress();
-
-                    foreach (ToolStripItem item in mnuContext.Items)
-                        if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
-                            menuItem.Checked = false;
+                    cmiDeactivateTunnel.Enabled = presentation.CanDeactivate;
+                    cmiResetKillSwitch.Enabled = presentation.CanResetNetworkLock;
 
                     if (TryGetProfileItem(activeProfileName, out var disconnectedProfile))
                         disconnectedProfile.ImageKey = ConnectionState.Disconnected.ToString();
@@ -1520,14 +1531,19 @@ namespace WireSockUI.Forms
                     cmiStatus.Text = Resources.InterfaceStatusRecoveryRequired;
                     cmiAddresses.Text = string.Empty;
                     cmiAddresses.Visible = false;
-                    cmiDeactivateTunnel.Enabled = false;
-                    cmiResetKillSwitch.Enabled = !IsNativeCleanupInProgress();
+                    cmiDeactivateTunnel.Enabled = presentation.CanDeactivate;
+                    cmiResetKillSwitch.Enabled = presentation.CanResetNetworkLock;
 
                     if (TryGetProfileItem(activeProfileName, out var indeterminateProfile))
                         indeterminateProfile.ImageKey = ConnectionState.Indeterminate.ToString();
 
                     break;
             }
+
+            foreach (ToolStripItem item in mnuContext.Items)
+                if (item is ToolStripMenuItem menuItem && Equals(menuItem.Tag, "tunnel"))
+                    menuItem.Checked = presentation.IsTunnelMenuChecked(
+                        IsTunnelProfileSelected(menuItem.Text, activeProfileName));
 
             UpdateSelectedProfileState(state, activeProfileName);
         }
@@ -1539,43 +1555,56 @@ namespace WireSockUI.Forms
                 : lstProfiles.SelectedItems[0].Text;
             var selectedProfileIsTunnelProfile = IsTunnelProfileSelected(
                 selectedProfileName, activeProfileName);
+            var presentation = MainWindowStatePresentation.Create(
+                state, IsNativeCleanupInProgress(), IsNativeRecoveryRequired());
+            var selectedPresentation = presentation.ForSelectedProfile(selectedProfileIsTunnelProfile);
             var btnActivate = layoutInterface.Controls["btnActivate"] as Button;
             var imgStatus = layoutInterface.Controls.Find("imgStatus", true).FirstOrDefault() as PictureBox;
             var txtStatus = layoutInterface.Controls.Find("txtStatus", true).FirstOrDefault() as TextBox;
 
             if (btnActivate != null)
             {
-                btnActivate.Text = state == ConnectionState.Connecting && selectedProfileIsTunnelProfile
-                    ? Resources.ButtonActivating
-                    : state == ConnectionState.Connected && selectedProfileIsTunnelProfile
-                        ? Resources.ButtonActive
-                        : Resources.ButtonInactive;
+                switch (selectedPresentation.Status)
+                {
+                    case MainWindowStatusKind.Activating:
+                        btnActivate.Text = Resources.ButtonActivating;
+                        break;
+                    case MainWindowStatusKind.Active:
+                        btnActivate.Text = Resources.ButtonActive;
+                        break;
+                    default:
+                        btnActivate.Text = Resources.ButtonInactive;
+                        break;
+                }
 
-                if (state == ConnectionState.Disconnected ||
-                    (state == ConnectionState.Connected && selectedProfileIsTunnelProfile))
-                    SetActivateButtonEnabled(true);
-                else
-                    btnActivate.Enabled = false;
+                SetActivateButtonEnabled(selectedPresentation.CanActivate);
             }
 
             if (imgStatus != null)
             {
-                imgStatus.Image = state == ConnectionState.Connected && selectedProfileIsTunnelProfile
+                imgStatus.Image = selectedPresentation.Status == MainWindowStatusKind.Active
                     ? _connectedStatusImage
                     : _inactiveStatusImage;
 
                 if (txtStatus != null)
-                    txtStatus.Text = state == ConnectionState.Connected && selectedProfileIsTunnelProfile
-                        ? Resources.InterfaceStatusActive
-                        : state == ConnectionState.Indeterminate && selectedProfileIsTunnelProfile
-                            ? Resources.InterfaceStatusRecoveryRequired
-                            : Resources.InterfaceStatusInactive;
+                    switch (selectedPresentation.Status)
+                    {
+                        case MainWindowStatusKind.Active:
+                            txtStatus.Text = Resources.InterfaceStatusActive;
+                            break;
+                        case MainWindowStatusKind.RecoveryRequired:
+                            txtStatus.Text = Resources.InterfaceStatusRecoveryRequired;
+                            break;
+                        default:
+                            txtStatus.Text = Resources.InterfaceStatusInactive;
+                            break;
+                    }
             }
 
-            if (state == ConnectionState.Connecting && selectedProfileIsTunnelProfile)
+            if (selectedPresentation.Status == MainWindowStatusKind.Activating)
                 imgStatus?.Focus();
 
-            gbxState.Visible = state == ConnectionState.Connected && selectedProfileIsTunnelProfile;
+            gbxState.Visible = selectedPresentation.ShowStatistics;
         }
 
         internal static bool IsTunnelProfileSelected(string selectedProfileName, string tunnelProfileName)
@@ -1744,6 +1773,7 @@ namespace WireSockUI.Forms
             }
 
             e.Cancel = true;
+            ShowInTaskbar = false;
             Hide();
         }
 
@@ -1761,6 +1791,7 @@ namespace WireSockUI.Forms
         private void OnFormShow(object sender, EventArgs e)
         {
             TopMost = true;
+            ShowInTaskbar = true;
             Show();
             WindowState = FormWindowState.Normal;
             BringToFront();
@@ -1771,7 +1802,10 @@ namespace WireSockUI.Forms
         private void OnFormMinimize(object sender, EventArgs e)
         {
             if (WindowState == FormWindowState.Minimized)
+            {
+                ShowInTaskbar = false;
                 Hide();
+            }
         }
 
         private void OnNewProfileClick(object sender, EventArgs e)
@@ -1970,8 +2004,9 @@ namespace WireSockUI.Forms
                             previousSettings,
                             requestedSettings,
                             _tunnelLifecycle.HasTunnelHandle,
-                            () => Task.FromResult(form.ApplyAutoRunChange()),
-                            () => Task.FromResult(form.RollbackAutoRunChange()));
+                            form.ApplyAutoRunChangeAsync,
+                            form.RollbackAutoRunChangeAsync,
+                            form.CommitAutoRunChangeAsync);
 
                         if (!result.Succeeded)
                         {
@@ -2368,9 +2403,12 @@ namespace WireSockUI.Forms
                         var queryResult = await _tunnelLifecycle.GetConnectedAsync(NativeQueryTimeoutMilliseconds);
                         if (queryResult.Succeeded)
                         {
-                            UpdateState(queryResult.Value ? ConnectionState.Connected : ConnectionState.Connecting,
-                                true,
-                                profile);
+                            var verifiedState = queryResult.Value
+                                ? ConnectionState.Connected
+                                : ConnectionState.Connecting;
+                            UpdateState(verifiedState, true, profile);
+                            if (verifiedState == ConnectionState.Connecting)
+                                StartTunnelConnectionMonitor(connectTask);
                         }
                         else
                         {
@@ -2484,18 +2522,12 @@ namespace WireSockUI.Forms
             {
                 lstLog.BeginUpdate();
                 updating = true;
-                var items = logMessages.Select(logMessage => new ListViewItem(new[]
-                {
-                    logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message
-                })).ToArray();
-                lstLog.Items.AddRange(items);
+                _visibleLogMessages.AddRange(logMessages);
+                lstLog.VirtualListSize = _visibleLogMessages.Count;
+                lstLog.Invalidate();
 
-                var overflow = lstLog.Items.Count - MaxVisibleLogMessages;
-                while (overflow-- > 0)
-                    lstLog.Items.RemoveAt(0);
-
-                if (lstLog.Items.Count > 0)
-                    lstLog.Items[lstLog.Items.Count - 1].EnsureVisible();
+                if (_visibleLogMessages.Count > 0)
+                    lstLog.EnsureVisible(_visibleLogMessages.Count - 1);
             }
             catch (ObjectDisposedException)
             {
@@ -2519,6 +2551,21 @@ namespace WireSockUI.Forms
                     {
                     }
             }
+        }
+
+        private void OnRetrieveVirtualLogItem(object sender, RetrieveVirtualItemEventArgs e)
+        {
+            if (e.ItemIndex < 0 || e.ItemIndex >= _visibleLogMessages.Count)
+            {
+                e.Item = new ListViewItem();
+                return;
+            }
+
+            var logMessage = _visibleLogMessages[e.ItemIndex];
+            e.Item = new ListViewItem(new[]
+            {
+                logMessage.Timestamp.ToString(Resources.LogTimestampFormat), logMessage.Message
+            });
         }
 
         #region Layout
@@ -2585,17 +2632,20 @@ namespace WireSockUI.Forms
                         !string.IsNullOrWhiteSpace(profile.PresharedKey)
                             ? Resources.PeerPresharedKeyValue
                             : string.Empty, true);
-                    AddRow(layoutPeer, "AllowedIPs", Resources.PeerAllowedIPs, TruncateLongString(profile.AllowedIPs));
+                    AddRow(layoutPeer, "AllowedIPs", Resources.PeerAllowedIPs,
+                        ProfileDisplayFormatter.FormatIpAddresses(profile.AllowedIPs));
                     AddRow(layoutPeer, "Endpoint", Resources.PeerEndpoint, profile.Endpoint);
                     AddRow(layoutPeer, "PersistentKeepAlive", Resources.PeerPersistentKeepAlive,
                         profile.PersistentKeepAlive, true);
 
                     layoutPeer.RowStyles.Add(new RowStyle(SizeType.Absolute, 20));
 
-                    AddRow(layoutPeer, "AllowedApps", Resources.PeerAllowedApps, profile.AllowedApps, true);
-                    AddRow(layoutPeer, "DisallowedApps", Resources.PeerDisallowedApps, profile.DisallowedApps, true);
+                    AddRow(layoutPeer, "AllowedApps", Resources.PeerAllowedApps,
+                        ProfileDisplayFormatter.FormatApplications(profile.AllowedApps), true);
+                    AddRow(layoutPeer, "DisallowedApps", Resources.PeerDisallowedApps,
+                        ProfileDisplayFormatter.FormatApplications(profile.DisallowedApps), true);
                     AddRow(layoutPeer, "DisallowedIPs", Resources.PeerDisallowedIPs,
-                        TruncateLongString(profile.DisallowedIPs), true);
+                        ProfileDisplayFormatter.FormatIpAddresses(profile.DisallowedIPs), true);
                     AddRow(layoutPeer, "Socks5Proxy", Resources.PeerSocks5Proxy, profile.Socks5Proxy, true);
                     AddRow(layoutPeer, "Socks5Username", Resources.PeerSocks5Username, profile.Socks5ProxyUsername,
                         true);
@@ -2721,27 +2771,6 @@ namespace WireSockUI.Forms
                 }
             }
 
-            // Helper function to truncate long strings
-            string TruncateLongString(string input)
-            {
-                if (input == null)
-                    return null;
-
-                var values = input.Split(',');
-                var groupedValues = new List<string>();
-
-                for (var i = 0; i < values.Length && i < 20; i += 2)
-                {
-                    var group = values.Skip(i).Take(2);
-                    groupedValues.Add(string.Join(",", group));
-                }
-
-                var result = string.Join("\n", groupedValues);
-
-                if (values.Length > 20) result += "...";
-
-                return result;
-            }
         }
 
         private void OnLayoutPanelResize(object sender, EventArgs e)

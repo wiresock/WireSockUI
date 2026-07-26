@@ -231,10 +231,17 @@ namespace WireSockUI.Forms
                     _manager.Dispose();
                 }
 
-                return _manager.HasTunnelHandle
-                    ? NativeOperationResult<bool>.Failure(
-                        "The native tunnel handle remained allocated after shutdown cleanup returned.", false)
-                    : NativeOperationResult<bool>.Success(true);
+                var handleRemainedAllocated = _manager.HasTunnelHandle;
+                var diagnostic = handleRemainedAllocated
+                    ? "The native tunnel handle remained allocated after shutdown cleanup returned."
+                    : null;
+                if (!TryReleasePreservedNetworkLock(out var networkLockDiagnostic))
+                    diagnostic = AppendDiagnostic(diagnostic, networkLockDiagnostic);
+
+                if (!string.IsNullOrWhiteSpace(diagnostic))
+                    return NativeOperationResult<bool>.Failure(diagnostic, false);
+
+                return NativeOperationResult<bool>.Success(true);
             }, timeoutMilliseconds, "The native shutdown cleanup timed out.");
         }
 

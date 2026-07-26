@@ -41,7 +41,8 @@ jobs:
 
   elevated-sdk-smoke:
     needs: configuration
-    if: vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED == 'true'
+    # This workflow must never execute pull-request code on the privileged driver hosts.
+    if: vars.WIRESOCKUI_SDK_INTEGRATION_ENABLED == 'true' && github.event_name != 'pull_request'
     environment: wiresock-sdk
     timeout-minutes: 10
     strategy:
@@ -58,14 +59,16 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
 
       - name: Setup dotnet
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68
         with:
-          dotnet-version: '10.x'
+          global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore WireSockUI.sln /p:Platform=${{ matrix.platform }} -m:1
+        run: dotnet restore WireSockUI.sln /p:Platform=${{ matrix.platform }} --locked-mode -m:1
 
       - name: Run elevated real-SDK lifecycle smoke test
         env:

@@ -249,7 +249,7 @@ namespace WireSockUI.Notifications
                 _activationForm = new WeakReference(activationForm);
 
             var context = ApplicationContext.Value;
-            if (!context.NotificationShortcutReady)
+            if (!context.TryEnsureNotificationShortcutReady())
                 return;
 
             var icon = EnsureNotificationIcon();
@@ -301,6 +301,7 @@ namespace WireSockUI.Notifications
                     if (form.IsDisposed || form.Disposing)
                         return;
 
+                    form.ShowInTaskbar = true;
                     form.Show();
                     form.WindowState = FormWindowState.Normal;
                     form.Activate();

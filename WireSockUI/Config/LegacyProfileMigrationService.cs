@@ -19,6 +19,7 @@ namespace WireSockUI.Config
             using (SecureFileSystem.OpenDirectory(Global.LegacyConfigsFolder, false))
             {
                 Global.EnsurePendingLegacyProfilesFolderExists();
+                CleanupManagedPendingTemporaryFiles();
 
                 foreach (var legacyProfilePath in EnumerateProfileFiles(
                              Global.LegacyConfigsFolder, "legacy profile"))
@@ -29,6 +30,7 @@ namespace WireSockUI.Config
         internal static IReadOnlyList<string> GetPendingProfileNames()
         {
             Global.EnsurePendingLegacyProfilesFolderExists();
+            CleanupManagedPendingTemporaryFiles();
             var names = new List<string>();
 
             using (SecureFileSystem.OpenDirectory(Global.PendingLegacyProfilesFolder, false))
@@ -60,6 +62,36 @@ namespace WireSockUI.Config
                 .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
                 .ThenBy(name => name, StringComparer.Ordinal)
                 .ToArray();
+        }
+
+        private static void CleanupManagedPendingTemporaryFiles()
+        {
+            var entries = 0;
+            using (SecureFileSystem.OpenDirectory(Global.PendingLegacyProfilesFolder, false))
+            {
+                foreach (var path in Directory.EnumerateFileSystemEntries(
+                             Global.PendingLegacyProfilesFolder, "*", SearchOption.TopDirectoryOnly))
+                {
+                    entries++;
+                    if (entries > Global.MaxSecuredTreeEntries)
+                        throw new InvalidDataException(
+                            $"The staged legacy profile folder contains more than {Global.MaxSecuredTreeEntries} entries while cleaning temporary files.");
+
+                    if (IsManagedPendingTemporaryName(Path.GetFileName(path)))
+                        TryDeleteRegularFile(path, "orphaned temporary staged profile");
+                }
+            }
+        }
+
+        private static bool IsManagedPendingTemporaryName(string fileName)
+        {
+            const string suffix = ".tmp";
+            if (string.IsNullOrEmpty(fileName) ||
+                !fileName.EndsWith(suffix, StringComparison.Ordinal))
+                return false;
+
+            var identifier = fileName.Substring(0, fileName.Length - suffix.Length);
+            return identifier.Length == 32 && Guid.TryParseExact(identifier, "N", out _);
         }
 
         private static IEnumerable<string> EnumerateProfileFiles(string folder, string description)

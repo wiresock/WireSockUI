@@ -29,7 +29,8 @@ namespace WireSockUI.Native
         public string ImageName { get; private set; }
 
         /// <summary>
-        ///     Process username
+        ///     Process owner SID. Keeping this value in raw SID form avoids a potentially blocking
+        ///     account-name lookup while enumerating processes.
         /// </summary>
         public string User { get; private set; }
 

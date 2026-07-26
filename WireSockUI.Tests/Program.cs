@@ -24,7 +24,7 @@ using WireSockUI.Native;
 
 namespace WireSockUI.Tests
 {
-    internal static class Program
+    internal static partial class Program
     {
         private static readonly string PrivateKey = Convert.ToBase64String(Enumerable.Repeat((byte)1, 32).ToArray());
         private static readonly string PublicKey = Convert.ToBase64String(Enumerable.Repeat((byte)2, 32).ToArray());
@@ -58,6 +58,13 @@ namespace WireSockUI.Tests
             {
                 return new TestExecutionResult(false,
                     exception ?? throw new ArgumentNullException(nameof(exception)));
+            }
+        }
+
+        private sealed class TestSkippedException : Exception
+        {
+            internal TestSkippedException(string message) : base(message)
+            {
             }
         }
 
@@ -134,6 +141,7 @@ namespace WireSockUI.Tests
                 { "Profile validates current SDK numeric ranges", ProfileValidatesCurrentSdkNumericRanges },
                 { "Profile rejects SDK casing mismatches", ProfileRejectsSdkCasingMismatches },
                 { "Profile rejects unsupported direct-DLL directives", ProfileRejectsUnsupportedDirectDllDirectives },
+                { "Profile rejects unknown native directives", ProfileRejectsUnknownNativeDirectives },
                 { "Interface extension validation rules are shared", InterfaceExtensionValidationRulesAreShared },
                 { "Stats formatting handles extreme values", StatsFormattingHandlesExtremeValues },
                 { "Stats formatting handles missing handshakes", StatsFormattingHandlesMissingHandshakes },
@@ -142,7 +150,9 @@ namespace WireSockUI.Tests
                 { "Time formatting handles future values", TimeFormattingHandlesFutureValues },
                 { "Time formatting uses localized day text", TimeFormattingUsesLocalizedDayText },
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
+                { "Global rejects unavailable or relative special folders", GlobalRejectsInvalidSpecialFolderRoots },
                 { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
+                { "Global rejects untrusted pre-existing secure data without laundering ACLs", GlobalRejectsUntrustedPreexistingSecureData },
                 { "Global fails closed on configuration directory reparse points", GlobalFailsClosedOnConfigurationDirectoryReparsePoints },
                 { "Global bounds secured tree enumeration", GlobalBoundsSecuredTreeEnumeration },
                 { "Global removes configuration file reparse points by handle", GlobalRemovesConfigurationFileReparsePointsByHandle },
@@ -161,6 +171,7 @@ namespace WireSockUI.Tests
                 { "Program rejects an untrusted WireSock crash handler", ProgramRejectsUntrustedWireSockCrashHandler },
                 { "Program distinguishes read-only and writable ACLs", ProgramDistinguishesReadOnlyAndWritableAcls },
                 { "Program recognizes administrative owner SIDs", ProgramRecognizesAdministrativeOwnerSids },
+                { "Program rejects over-the-shoulder elevation identities", ProgramRejectsOverTheShoulderElevationIdentities },
                 { "Program rejects replaceable trusted path ancestors", ProgramRejectsReplaceableTrustedPathAncestors },
                 { "Autorun rejects untrusted executable paths", AutoRunRejectsUntrustedExecutablePaths },
                 { "Autorun rejects reparse point executable folders", AutoRunRejectsReparsePointExecutableFolders },
@@ -172,6 +183,7 @@ namespace WireSockUI.Tests
                 { "Legacy migration quarantines valid profiles", LegacyMigrationQuarantinesValidProfiles },
                 { "Legacy migration accepts uppercase conf extensions", LegacyMigrationAcceptsUppercaseConfExtensions },
                 { "Legacy migration bounds catalog enumeration", LegacyMigrationBoundsCatalogEnumeration },
+                { "Legacy migration cleans managed orphan temporaries before catalog limits", LegacyMigrationCleansManagedOrphansBeforeCatalogLimit },
                 { "Legacy migration preserves modified sources on completion", LegacyMigrationPreservesModifiedSourcesOnCompletion },
                 { "Legacy migration preserves approved duplicates", LegacyMigrationPreservesApprovedDuplicates },
                 { "Legacy migration rejects oversized files", LegacyMigrationRejectsOversizedFiles },
@@ -197,6 +209,7 @@ namespace WireSockUI.Tests
                 { "WireSock manager bounds native log backpressure", WireSockManagerBoundsNativeLogBackpressure },
                 { "WireSock manager bounds retained log records", WireSockManagerBoundsRetainedLogRecords },
                 { "UI log buffering coalesces and bounds dispatch", UiLogBufferingCoalescesAndBoundsDispatch },
+                { "Visible log storage overwrites without unbounded growth", VisibleLogStorageOverwritesWithoutGrowth },
                 { "Diagnostic logging redacts credentials", DiagnosticLoggingRedactsCredentials },
                 { "Diagnostic logging bounds oversized records", DiagnosticLoggingBoundsOversizedRecords },
                 { "Native query distinguishes error sentinels", NativeQueryDistinguishesErrorSentinels },
@@ -209,23 +222,43 @@ namespace WireSockUI.Tests
                 { "Settings coordinator owns update sequencing", SettingsCoordinatorOwnsUpdateSequencing },
                 { "Settings rollback identifies native recovery requirements", SettingsRollbackIdentifiesNativeRecoveryRequirements },
                 { "Tunnel commands distinguish activation from deactivation", TunnelCommandsDistinguishActivationFromDeactivation },
+                { "Main window presentation renders recovery consistently", MainWindowPresentationRendersRecoveryConsistently },
                 { "Native timeout policy defers cleanup until completion", NativeTimeoutPolicyDefersCleanupUntilCompletion },
                 { "Autorun preserves persisted state when status is unknown", AutorunPreservesPersistedStateWhenStatusIsUnknown },
+                { "Autorun classification covers legacy shortcuts and conflicts", AutorunClassificationCoversLegacyAndConflicts },
+                { "Legacy Startup shortcuts are handled without shell parsing", LegacyStartupShortcutIsHandledWithoutShellParsing },
                 { "Curve25519 matches RFC 7748 public-key vectors", Curve25519MatchesRfc7748PublicKeyVectors },
                 { "Curve25519 supports optional signing keys", Curve25519SupportsOptionalSigningKeys },
                 { "Editor validates Amnezia options", EditorValidatesAmneziaOptions },
                 { "Editor bounds synchronous syntax highlighting", EditorBoundsSynchronousSyntaxHighlighting },
+                { "Editor application-rule insertion is section aware", EditorApplicationRuleInsertionIsSectionAware },
+                { "Editor application-rule insertion rejects ambiguous values", EditorApplicationRuleInsertionRejectsAmbiguousValues },
+                { "Profile display formatting bounds comma-separated values", ProfileDisplayFormattingBoundsValues },
                 { "AppUserModelID is path seeded", AppUserModelIdIsPathSeeded },
                 { "Notification shortcut name is path seeded", NotificationShortcutNameIsPathSeeded },
+                { "Notification shortcut create races are rejected without parsing", NotificationShortcutCreateRaceIsRejectedWithoutParsing },
+                { "Notification shortcut parent mutation races are blocked", NotificationShortcutParentMutationRaceIsBlocked },
+                { "Notification shortcut copy failures preserve their cause", NotificationShortcutCopyFailuresPreserveCause },
                 { "Notification image paths use file URIs", NotificationImagePathsUseFileUris },
                 { "Shell link HRESULT validation uses signed failure semantics", ShellLinkHresultValidationUsesSignedFailureSemantics },
+                { "Shell link PROPVARIANT interop is architecture safe and type checked", ShellLinkPropVariantInteropIsSafe },
                 { "Windows compatibility manifest enables modern behavior", WindowsCompatibilityManifestEnablesModernBehavior },
-                { "Autorun task name is path seeded", AutoRunTaskNameIsPathSeeded },
+                { "Autorun task name is path and user seeded", AutoRunTaskNameIsPathAndUserSeeded },
                 { "Autorun validates the complete task definition", AutoRunValidatesCompleteTaskDefinition },
                 { "Process picker preserves executable match names", ProcessPickerPreservesExecutableMatchNames },
+                { "Process snapshots are cached serialized and SID based", ProcessSnapshotsAreCachedSerializedAndSidBased },
                 { "WireSock disconnect forwards network-lock preservation", WireSockDisconnectForwardsNetworkLockPreservation },
                 { "Lifecycle resets a preserved lock after handle creation fails", LifecycleResetsPreservedLockAfterHandleCreationFails },
+                { "Lifecycle monitor defers queries during a slow native connect", LifecycleMonitorDefersQueriesDuringSlowNativeConnect },
+                { "Virtual adapter rename does not hold lifecycle locks", VirtualAdapterRenameDoesNotHoldLifecycleLocks },
+                { "Virtual adapter readiness rejects missing and ambiguous candidates", VirtualAdapterReadinessRejectsMissingAndAmbiguousCandidates },
+                { "Virtual adapter rename queue keeps only the latest generation", VirtualAdapterRenameQueueKeepsOnlyLatestGeneration },
+                { "Virtual adapter rename queue rejects out-of-order stale enqueues", VirtualAdapterRenameQueueRejectsOutOfOrderStaleEnqueues },
+                { "Virtual adapter rename provider stalls are capacity bounded", VirtualAdapterRenameProviderStallsAreCapacityBounded },
                 { "Lifecycle tracks late disconnect completion after timeout", LifecycleTracksLateDisconnectCompletionAfterTimeout },
+                { "Lifecycle awaits a late network-lock reset", LifecycleAwaitsLateNetworkLockReset },
+                { "Lifecycle shutdown resets an active lock after cleanup failure", LifecycleShutdownResetsActiveLockAfterCleanupFailure },
+                { "Lifecycle shutdown resets a preserved lock after release retry", LifecycleShutdownResetsPreservedLockAfterReleaseRetry },
                 { "Lifecycle shutdown avoids synchronization-context deadlocks", LifecycleShutdownAvoidsSynchronizationContextDeadlocks },
                 { "WireSock manager surfaces native query failures", WireSockManagerSurfacesNativeQueryFailures },
                 { "WireSock manager cleans up failed starts", WireSockManagerCleansUpFailedStarts },
@@ -241,6 +274,7 @@ namespace WireSockUI.Tests
                 { "Profile rename recovery rejects ambiguous states", ProfileRenameRecoveryRejectsAmbiguousStates },
                 { "Profile rename recovery rejects active XML content", ProfileRenameRecoveryRejectsActiveXmlContent },
                 { "Profile transaction recovery removes orphaned temporary files", ProfileTransactionRecoveryRemovesOrphanedTemporaryFiles },
+                { "Profile transaction recovery cleans managed orphans before entry limits", ProfileTransactionRecoveryCleansManagedOrphansBeforeEntryLimit },
                 { "Test execution timeout policy is bounded", TestExecutionTimeoutPolicyIsBounded },
                 { "Single-instance event rejects broad access", SingleInstanceEventRejectsBroadAccess },
                 { "Tunnel profile state matches selections case-insensitively", TunnelProfileStateMatchesSelectionsCaseInsensitively },
@@ -272,6 +306,8 @@ namespace WireSockUI.Tests
             }
 
             var failures = 0;
+            var passes = 0;
+            var skips = 0;
             foreach (var test in tests)
             {
                 var stopwatch = Stopwatch.StartNew();
@@ -286,14 +322,23 @@ namespace WireSockUI.Tests
 
                 if (result.Exception != null)
                 {
+                    if (result.Exception is TestSkippedException)
+                    {
+                        skips++;
+                        Console.WriteLine($"SKIP {test.Key}: {result.Exception.Message}");
+                        continue;
+                    }
+
                     failures++;
                     Console.WriteLine($"FAIL {test.Key}:{Environment.NewLine}{result.Exception}");
                     continue;
                 }
 
+                passes++;
                 Console.WriteLine($"PASS {test.Key} ({stopwatch.ElapsedMilliseconds} ms)");
             }
 
+            Console.WriteLine($"SUMMARY pass={passes} fail={failures} skip={skips}");
             return failures == 0 ? 0 : 1;
         }
 
@@ -710,6 +755,13 @@ namespace WireSockUI.Tests
                 "AllowedIPs = 0.0.0.0/0,\n");
 
             AssertThrows<FormatException>(() => new Profile(path), "AllowedIPs");
+            AssertEscapedBoundedFormatException(
+                () => Profile.ValidateAddresses(
+                    "Peer",
+                    "AllowedIPs",
+                    "Future\0\u202E" + new string('A', 2048),
+                    value => false),
+                @"Future\0\u202E");
         }
 
         private static void ProfileValidatesWindowsSafeNames()
@@ -1055,14 +1107,21 @@ namespace WireSockUI.Tests
         private static void ParserRejectsKeysBeforeSections()
         {
             var path = WriteConfig("PrivateKey = value\n");
+            var unsafePath = WriteConfig(
+                "Future\0\u202E" + new string('A', 2048) + " = value\n");
 
             try
             {
                 AssertThrows<FormatException>(() => ParseConfig(path), "before any section");
+
+                AssertEscapedBoundedFormatException(
+                    () => ParseConfig(unsafePath),
+                    @"Future\0\u202E");
             }
             finally
             {
                 TryDeleteFile(path);
+                TryDeleteFile(unsafePath);
             }
         }
 
@@ -1296,6 +1355,71 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void ProfileRejectsUnknownNativeDirectives()
+        {
+            AssertProfileRejectsInterfaceOption(
+                "#@ws:FuturePacketMode = enabled",
+                "FuturePacketMode");
+            AssertProfileRejectsInterfaceOption(
+                "PreConnect = cmd.exe /c future-script.cmd",
+                "PreConnect");
+
+            var unknownPeerDirective = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n" +
+                "#@ws:PostConnect = cmd.exe /c future-script.cmd\n");
+            var unknownSection = WriteConfig(
+                ValidConfig() +
+                "\n[Automation]\n" +
+                "OnConnect = cmd.exe /c future-script.cmd\n");
+            var overwrittenUnknownDirective = WriteConfig(
+                "[Interface]\n" +
+                "PreConnect = cmd.exe /c ignored-by-last-section-semantics.cmd\n" +
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+            var unsafeIdentifier = WriteConfig(
+                "[Interface]\n" +
+                $"PrivateKey = {PrivateKey}\n" +
+                "Address = 10.0.0.2/32\n" +
+                "Future\0\u202E" + new string('A', 2048) + " = value\n\n" +
+                "[Peer]\n" +
+                $"PublicKey = {PublicKey}\n" +
+                "Endpoint = example.com:51820\n" +
+                "AllowedIPs = 0.0.0.0/0\n");
+
+            try
+            {
+                AssertThrows<FormatException>(
+                    () => new Profile(unknownPeerDirective),
+                    "PostConnect");
+                AssertThrows<FormatException>(
+                    () => new Profile(unknownSection),
+                    "Automation");
+                new Profile(overwrittenUnknownDirective);
+
+                AssertEscapedBoundedFormatException(
+                    () => new Profile(unsafeIdentifier),
+                    @"Future\0\u202E");
+            }
+            finally
+            {
+                TryDeleteFile(unknownPeerDirective);
+                TryDeleteFile(unknownSection);
+                TryDeleteFile(overwrittenUnknownDirective);
+                TryDeleteFile(unsafeIdentifier);
+            }
+        }
+
         private static void ProfileValidatesCurrentSdkNumericRanges()
         {
             var path = WriteConfig(
@@ -1456,6 +1580,21 @@ namespace WireSockUI.Tests
                 "Expected a root path to be treated as itself.");
             AssertTrue((bool)isSameOrChildPath.Invoke(null, new object[] { child, root }),
                 "Expected a child of a drive root to be detected.");
+        }
+
+        private static void GlobalRejectsInvalidSpecialFolderRoots()
+        {
+            AssertThrows<DirectoryNotFoundException>(
+                () => Global.RequireAbsoluteSpecialFolderRoot(string.Empty, "test application data"),
+                "relative data directory");
+            AssertThrows<DirectoryNotFoundException>(
+                () => Global.RequireAbsoluteSpecialFolderRoot("relative-data", "test application data"),
+                "absolute path");
+
+            var absolute = Path.GetFullPath(Path.GetTempPath());
+            AssertEqual(
+                absolute,
+                Global.RequireAbsoluteSpecialFolderRoot(absolute, "test application data"));
         }
 
         private static void GlobalRejectsUnsecuredConfigFolderOverridesByDefault()
@@ -1769,6 +1908,33 @@ namespace WireSockUI.Tests
                     new SecurityIdentifier(
                         "S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464")
                 }), "Expected the exact TrustedInstaller SID to remain trusted.");
+        }
+
+        private static void ProgramRejectsOverTheShoulderElevationIdentities()
+        {
+            var signedInUser =
+                new SecurityIdentifier("S-1-5-21-1000000001-1000000002-1000000003-1100");
+            var suppliedAdministrator =
+                new SecurityIdentifier("S-1-5-21-1000000001-1000000002-1000000003-500");
+
+            AssertTrue(
+                WireSockUI.Program.ValidateInteractiveUserIdentity(
+                    signedInUser,
+                    signedInUser,
+                    out var matchingDiagnostic),
+                matchingDiagnostic);
+            AssertTrue(string.IsNullOrEmpty(matchingDiagnostic),
+                "Expected a matching signed-in and process identity to have no diagnostic.");
+
+            AssertFalse(
+                WireSockUI.Program.ValidateInteractiveUserIdentity(
+                    suppliedAdministrator,
+                    signedInUser,
+                    out var mismatchDiagnostic),
+                "Expected credentials supplied by another administrator account to fail closed.");
+            AssertTrue(
+                mismatchDiagnostic?.IndexOf("different account", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Expected an actionable over-the-shoulder elevation diagnostic.");
         }
 
         private static void GlobalFailsClosedOnConfigurationDirectoryReparsePoints()
@@ -2954,11 +3120,18 @@ namespace WireSockUI.Tests
                     {
                         calls.Add("autorun:rollback");
                         return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("autorun:commit");
+                        return Task.FromResult(true);
                     })
                 .GetAwaiter().GetResult();
 
             AssertTrue(result.Succeeded, "Expected the settings coordinator transaction to succeed.");
-            AssertEqual("autorun:apply,log:Debug,persist:requested,kill:True:True", string.Join(",", calls));
+            AssertEqual(
+                "autorun:apply,log:Debug,persist:requested,kill:True:True,autorun:commit",
+                string.Join(",", calls));
 
             calls.Clear();
             var failingCoordinator = new SettingsUpdateCoordinator(
@@ -2993,6 +3166,11 @@ namespace WireSockUI.Tests
                     {
                         calls.Add("autorun:rollback");
                         return Task.FromResult(true);
+                    },
+                    () =>
+                    {
+                        calls.Add("autorun:commit");
+                        return Task.FromResult(true);
                     })
                 .GetAwaiter().GetResult();
 
@@ -3004,6 +3182,8 @@ namespace WireSockUI.Tests
             AssertEqual(
                 "autorun:apply,log:Debug,persist:requested,persist:previous,log:Info,autorun:rollback",
                 string.Join(",", calls));
+            AssertFalse(calls.Contains("autorun:commit"),
+                "Expected legacy autorun cleanup to remain deferred when a later settings step fails.");
         }
 
         private static void SettingsRollbackIdentifiesNativeRecoveryRequirements()
@@ -3157,6 +3337,53 @@ namespace WireSockUI.Tests
                 "Expected oversized profiles not to be reformatted synchronously on the UI thread.");
             AssertFalse(FrmEdit.ShouldApplySyntaxHighlighting(-1),
                 "Expected invalid text lengths not to enter syntax highlighting.");
+        }
+
+        private static void MainWindowPresentationRendersRecoveryConsistently()
+        {
+            var recovery = MainWindowStatePresentation.Create(
+                FrmMain.ConnectionState.Indeterminate, false, true);
+            var unrelatedProfile = recovery.ForSelectedProfile(false);
+
+            AssertTrue(unrelatedProfile.Status == MainWindowStatusKind.RecoveryRequired,
+                "Expected every selected profile to render the global recovery state.");
+            AssertFalse(unrelatedProfile.CanActivate,
+                "Expected recovery to block activation for every selected profile.");
+            AssertFalse(unrelatedProfile.ShowStatistics,
+                "Expected recovery to hide stale tunnel statistics.");
+            AssertFalse(recovery.IsTunnelMenuChecked(true),
+                "Expected non-connected states to clear every tunnel menu check.");
+            AssertTrue(recovery.CanResetNetworkLock,
+                "Expected recovery UI to offer reset when no cleanup is active.");
+
+            var connected = MainWindowStatePresentation.Create(
+                FrmMain.ConnectionState.Connected, false, false);
+            var activeProfile = connected.ForSelectedProfile(true);
+            AssertTrue(activeProfile.Status == MainWindowStatusKind.Active,
+                "Expected the connected tunnel profile to render as active.");
+            AssertTrue(activeProfile.CanActivate,
+                "Expected the active profile button to remain available for deactivation.");
+            AssertTrue(activeProfile.ShowStatistics,
+                "Expected the active connected profile to show statistics.");
+        }
+
+        private static void ProfileDisplayFormattingBoundsValues()
+        {
+            AssertTrue(ProfileDisplayFormatter.FormatIpAddresses(null) == null,
+                "Expected null profile values to remain null.");
+            AssertEqual(
+                $"a,b{Environment.NewLine}c,d...",
+                ProfileDisplayFormatter.FormatCommaSeparated("a,b,c,d,e", 4, 2, 128));
+
+            var oversized = ProfileDisplayFormatter.FormatApplications(new string('x', 10000));
+            AssertTrue(oversized.Length <= 4096,
+                "Expected displayed application values to remain bounded.");
+            AssertTrue(oversized.EndsWith("...", StringComparison.Ordinal),
+                "Expected bounded display values to identify truncation.");
+
+            AssertEqual(
+                "abcd...",
+                ProfileDisplayFormatter.FormatCommaSeparated("abcd\U0001f600z", 1, 1, 8));
         }
 
         private static void LegacyMigrationAcceptsScriptsOnlyIntoQuarantine()
@@ -3456,30 +3683,42 @@ namespace WireSockUI.Tests
             AssertEqual(32768, (int)unicodePathCapacity.GetRawConstantValue());
         }
 
-        private static void AutoRunTaskNameIsPathSeeded()
+        private static void AutoRunTaskNameIsPathAndUserSeeded()
         {
-            var buildAutoRunTaskName = typeof(FrmSettings).GetMethod(
-                "BuildAutoRunTaskName", BindingFlags.NonPublic | BindingFlags.Static);
-            if (buildAutoRunTaskName == null)
-                throw new InvalidOperationException("BuildAutoRunTaskName helper was not found.");
-
             var isSameExecutablePath = typeof(FrmSettings).GetMethod(
                 "IsSameExecutablePath", BindingFlags.NonPublic | BindingFlags.Static);
             if (isSameExecutablePath == null)
                 throw new InvalidOperationException("IsSameExecutablePath helper was not found.");
 
-            var first = (string)buildAutoRunTaskName.Invoke(null,
-                new object[] { @"C:\Program Files\WireSockUI\WireSockUI.exe" });
-            var firstAgain = (string)buildAutoRunTaskName.Invoke(null,
-                new object[] { @"C:\Program Files\WireSockUI\WireSockUI.exe" });
-            var second = (string)buildAutoRunTaskName.Invoke(null,
-                new object[] { @"D:\Tools\WireSockUI\WireSockUI.exe" });
+            var firstUserSid = new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
+            var secondUserSid = new SecurityIdentifier(WellKnownSidType.LocalServiceSid, null).Value;
+            const string firstPath = @"C:\Program Files\WireSockUI\WireSockUI.exe";
+            var first = FrmSettings.BuildAutoRunTaskNameForUser(firstPath, firstUserSid);
+            var firstAgain = FrmSettings.BuildAutoRunTaskNameForUser(firstPath, firstUserSid);
+            var secondPath = FrmSettings.BuildAutoRunTaskNameForUser(
+                @"D:\Tools\WireSockUI\WireSockUI.exe", firstUserSid);
+            var secondUser = FrmSettings.BuildAutoRunTaskNameForUser(firstPath, secondUserSid);
+            var legacyPathScopedName = FrmSettings.BuildLegacyPathScopedAutoRunTaskName(firstPath);
 
             AssertEqual(first, firstAgain);
-            AssertFalse(string.Equals(first, second, StringComparison.Ordinal),
+            AssertFalse(string.Equals(first, secondPath, StringComparison.Ordinal),
                 "Expected autorun task names to differ for side-by-side executable paths.");
+            AssertFalse(string.Equals(first, secondUser, StringComparison.Ordinal),
+                "Expected users sharing one installation to receive distinct autorun task names.");
             AssertTrue(first.StartsWith("WireSockUI-", StringComparison.Ordinal),
                 $"Expected autorun task name to include the application prefix, got '{first}'.");
+            AssertTrue(first.StartsWith(legacyPathScopedName + "-", StringComparison.Ordinal),
+                "Expected the per-user task name to retain the legacy path seed for deterministic migration.");
+            AssertTrue(FrmSettings.IsRootAutoRunTaskPath($@"\{first}", first),
+                "Expected the canonical autorun task to resolve only at the Task Scheduler root.");
+            AssertFalse(FrmSettings.IsRootAutoRunTaskPath($@"\ForeignFolder\{first}", first),
+                "Expected a same-named task in a subfolder not to alias the root autorun task.");
+            AssertTrue(FrmSettings.ShouldDeleteAutoRunTaskAfterEnableFailure(true, false, false),
+                "Expected a pre-cleanup registration failure to remove a newly created autorun task.");
+            AssertFalse(FrmSettings.ShouldDeleteAutoRunTaskAfterEnableFailure(true, false, true),
+                "Expected a canonical task to be retained after legacy cleanup has begun.");
+            AssertFalse(FrmSettings.ShouldDeleteAutoRunTaskAfterEnableFailure(true, true, false),
+                "Expected failed legacy cleanup to retain a safely upgraded pre-existing autorun task.");
             AssertTrue((bool)isSameExecutablePath.Invoke(null, new object[]
                 {
                     @"C:\Program Files\WireSockUI\WireSockUI.exe",
@@ -3543,7 +3782,7 @@ namespace WireSockUI.Tests
                         File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
                         var controller = new TunnelLifecycleController(manager, networkLockApi);
 
-                        var result = controller.ConnectAsync("office", true, 1000).GetAwaiter().GetResult();
+                        var result = controller.ConnectAsync("office", true, 5000).GetAwaiter().GetResult();
 
                         AssertFalse(result.Succeeded, "Expected handle creation failure to fail the connection.");
                         AssertFalse(result.TimedOut, "Expected the failed fake connection to complete normally.");
@@ -3555,7 +3794,7 @@ namespace WireSockUI.Tests
 
                         networkLockApi.Active = true;
                         networkLockApi.ResetResult = false;
-                        var failedReset = controller.ConnectAsync("office", true, 1000).GetAwaiter().GetResult();
+                        var failedReset = controller.ConnectAsync("office", true, 5000).GetAwaiter().GetResult();
                         AssertTrue(failedReset.Value.RecoveryRequired,
                             "Expected an unreset preserved lock to require explicit recovery.");
                         AssertTrue(failedReset.Diagnostic?.Contains("simulated reset failure") == true,
@@ -3563,6 +3802,388 @@ namespace WireSockUI.Tests
                     }
                     finally
                     {
+                        TestKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void NotificationShortcutCreateRaceIsRejectedWithoutParsing()
+        {
+            var testDirectory = Path.Combine(
+                Path.GetTempPath(), $"wiresockui-notification-shortcut-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(testDirectory);
+            var stagedShortcut = Path.Combine(testDirectory, "trusted-stage.lnk");
+            var destinationShortcut = Path.Combine(testDirectory, "WireSockUI.lnk");
+            try
+            {
+                File.WriteAllBytes(stagedShortcut, new byte[] { 1, 2, 3, 4 });
+
+                AssertThrows<IOException>(
+                    () => WindowsApplicationContext.InstallTrustedNotificationShortcut(
+                        stagedShortcut,
+                        destinationShortcut,
+                        () => File.WriteAllBytes(destinationShortcut, new byte[] { 0xff, 0x00, 0xff })),
+                    "never parsed");
+                AssertFalse(File.Exists(destinationShortcut),
+                    "Expected the competing shortcut file to be deleted after the create race was rejected.");
+            }
+            finally
+            {
+                if (File.Exists(destinationShortcut))
+                    File.Delete(destinationShortcut);
+                if (File.Exists(stagedShortcut))
+                    File.Delete(stagedShortcut);
+                if (Directory.Exists(testDirectory))
+                    Directory.Delete(testDirectory);
+            }
+        }
+
+        private static void NotificationShortcutCopyFailuresPreserveCause()
+        {
+            var testDirectory = Path.Combine(
+                Path.GetTempPath(), $"wiresockui-notification-copy-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(testDirectory);
+            var stagedShortcut = Path.Combine(testDirectory, "trusted-stage.lnk");
+            var destinationShortcut = Path.Combine(testDirectory, "WireSockUI.lnk");
+            try
+            {
+                File.WriteAllBytes(stagedShortcut, new byte[] { 1, 2, 3, 4 });
+                SecurityIdentifier currentUserSid;
+                using (var currentIdentity = WindowsIdentity.GetCurrent())
+                    currentUserSid = currentIdentity.User;
+                var destinationSecurity = new FileSecurity();
+                destinationSecurity.SetAccessRuleProtection(true, false);
+                destinationSecurity.SetOwner(currentUserSid);
+                destinationSecurity.AddAccessRule(new FileSystemAccessRule(
+                    currentUserSid,
+                    FileSystemRights.FullControl,
+                    AccessControlType.Allow));
+
+                AssertThrows<IOException>(
+                    () => WindowsApplicationContext.InstallTrustedNotificationShortcut(
+                        stagedShortcut,
+                        destinationShortcut,
+                        null,
+                        _ => throw new IOException("simulated notification copy failure"),
+                        destinationSecurity),
+                    "simulated notification copy failure");
+                AssertFalse(File.Exists(destinationShortcut),
+                    "Expected a partially written notification shortcut to be removed.");
+            }
+            finally
+            {
+                if (File.Exists(destinationShortcut))
+                    File.Delete(destinationShortcut);
+                if (File.Exists(stagedShortcut))
+                    File.Delete(stagedShortcut);
+                if (Directory.Exists(testDirectory))
+                    Directory.Delete(testDirectory);
+            }
+        }
+
+        private static void LegacyStartupShortcutIsHandledWithoutShellParsing()
+        {
+            var testDirectory = Path.Combine(
+                Path.GetTempPath(), $"wiresockui-legacy-startup-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(testDirectory);
+            var legacyShortcut = Path.Combine(testDirectory, "WireSockUI.lnk");
+            try
+            {
+                File.WriteAllBytes(legacyShortcut, new byte[] { 0xff, 0x00, 0xff });
+                AssertTrue(
+                    FrmSettings.InspectLegacyStartupShortcutPath(legacyShortcut, false) ==
+                    FrmSettings.LegacyStartupShortcutStatus.Unverified,
+                    "Expected the reserved legacy artifact to remain unauthenticated without parsing its bytes.");
+                AssertTrue(
+                    FrmSettings.InspectLegacyStartupShortcutPath(legacyShortcut, true) ==
+                    FrmSettings.LegacyStartupShortcutStatus.Unverified,
+                    "Expected explicit migration to remove the reserved legacy artifact.");
+                AssertFalse(File.Exists(legacyShortcut),
+                    "Expected explicit autorun migration to remove the reserved legacy file by validated handle.");
+            }
+            finally
+            {
+                if (File.Exists(legacyShortcut))
+                    File.Delete(legacyShortcut);
+                if (Directory.Exists(testDirectory))
+                    Directory.Delete(testDirectory);
+            }
+        }
+
+        private static void LifecycleMonitorDefersQueriesDuringSlowNativeConnect()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    StartEntered = new ManualResetEventSlim(false),
+                    ContinueStart = new ManualResetEventSlim(false)
+                };
+                using (nativeApi.StartEntered)
+                using (nativeApi.ContinueStart)
+                using (var connectedUpdate = new ManualResetEventSlim(false))
+                using (var manager = new WireSockManager(nativeApi))
+                {
+                    try
+                    {
+                        TestKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
+                        var generation = 7;
+                        var connectTask = controller.ConnectAsync("office", false, 30000);
+
+                        using (var monitor = new TunnelMonitor(
+                                   controller.GetConnectedAsync,
+                                   controller.GetStateAsync,
+                                   () => generation,
+                                   update =>
+                                   {
+                                       if (update.Kind == TunnelMonitorUpdateKind.Connected)
+                                           connectedUpdate.Set();
+                                       if (update.Kind == TunnelMonitorUpdateKind.QueryFailed)
+                                           throw new InvalidOperationException(
+                                               "The monitor queried native state before the slow connect completed.");
+                                       return Task.CompletedTask;
+                                   },
+                                   5000,
+                                   30000,
+                                   10,
+                                   10))
+                        {
+                            monitor.StartConnecting(generation, connectTask);
+                            AssertTrue(nativeApi.StartEntered.Wait(1000),
+                                "Expected the fake native connect to enter start_tunnel.");
+
+                            Thread.Sleep(6000);
+                            AssertEqual(0, nativeApi.TunnelActiveQueryCount);
+
+                            nativeApi.ContinueStart.Set();
+                            var connectResult = connectTask.GetAwaiter().GetResult();
+                            AssertTrue(connectResult.Succeeded && connectResult.Value.Connected,
+                                "Expected the six-second native connect to succeed inside the 30-second budget.");
+                            AssertTrue(connectedUpdate.Wait(1000),
+                                "Expected monitoring to begin after native connect completion.");
+                            AssertEqual(1, nativeApi.TunnelActiveQueryCount);
+                        }
+                    }
+                    finally
+                    {
+                        nativeApi.ContinueStart.Set();
+                        TestKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void VirtualAdapterRenameDoesNotHoldLifecycleLocks()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                var renamer = new BlockingVirtualAdapterRenamer();
+                using (renamer.RenameEntered)
+                using (renamer.ContinueRename)
+                using (renamer.RenameCompleted)
+                using (var manager = new WireSockManager(nativeApi, renamer, null))
+                {
+                    try
+                    {
+                        TestKillSwitch = false;
+                        File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                        manager.TunnelMode = WireSockManager.Mode.VirtualAdapter;
+                        var controller = new TunnelLifecycleController(manager, new FakeNetworkLockApi());
+
+                        var connectTask = controller.ConnectAsync("office", false, 1000);
+                        var connectResult = connectTask.GetAwaiter().GetResult();
+                        AssertTrue(connectResult.Succeeded && connectResult.Value.Connected,
+                            connectResult.Diagnostic ??
+                            "Expected optional adapter renaming not to extend the native connect timeout.");
+                        AssertTrue(renamer.RenameEntered.Wait(1000),
+                            "Expected virtual-adapter rename to begin after tunnel activation.");
+                        AssertTrue(manager.ConnectionSequence == 1,
+                            "Expected tunnel state to be committed before adapter renaming.");
+                        AssertTrue(manager.TryGetConnected(out var connected, out var diagnostic) && connected,
+                            diagnostic ?? "Expected tunnel queries not to wait for adapter renaming.");
+
+                        renamer.ContinueRename.Set();
+                        AssertTrue(renamer.RenameCompleted.Wait(1000),
+                            "Expected the released adapter rename worker to complete.");
+                        AssertEqual(1, renamer.RenameCount);
+                        AssertEqual("Wiresock Virtual Adapter", renamer.AdapterFriendlyName);
+                        AssertEqual("office", renamer.NewName);
+                        AssertTrue(renamer.ConnectionWasCurrent,
+                            "Expected the adapter rename to verify the originating connection sequence.");
+                    }
+                    finally
+                    {
+                        renamer.ContinueRename.Set();
+                        renamer.RenameCompleted.Wait(1000);
+                        TestKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void VirtualAdapterReadinessRejectsMissingAndAmbiguousCandidates()
+        {
+            AssertTrue(
+                WmiVirtualAdapterRenamer.ClassifyCandidates(0, null) ==
+                WmiVirtualAdapterRenamer.CandidateReadiness.Missing,
+                "Expected an unpublished WMI adapter to be retried.");
+            AssertTrue(
+                WmiVirtualAdapterRenamer.ClassifyCandidates(1, null) ==
+                WmiVirtualAdapterRenamer.CandidateReadiness.NotReady,
+                "Expected an adapter without NetConnectionID to be retried.");
+            AssertTrue(
+                WmiVirtualAdapterRenamer.ClassifyCandidates(1, "Ethernet 7") ==
+                WmiVirtualAdapterRenamer.CandidateReadiness.Ready,
+                "Expected one fully published adapter to be renameable.");
+            AssertTrue(
+                WmiVirtualAdapterRenamer.ClassifyCandidates(2, "stale") ==
+                WmiVirtualAdapterRenamer.CandidateReadiness.Ambiguous,
+                "Expected a ready stale adapter plus a not-yet-ready adapter to remain ambiguous.");
+        }
+
+        private static void VirtualAdapterRenameQueueKeepsOnlyLatestGeneration()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                var renamer = new LatestWinsVirtualAdapterRenamer();
+                using (renamer.FirstCommitChecked)
+                using (renamer.ReleaseFirstCommit)
+                using (renamer.LatestCommitCompleted)
+                using (var manager = new WireSockManager(nativeApi, renamer, null))
+                {
+                    try
+                    {
+                        TestKillSwitch = false;
+                        foreach (var profile in new[] { "one", "two", "three" })
+                            File.WriteAllText(Profile.GetProfilePath(profile), ValidConfig());
+                        manager.TunnelMode = WireSockManager.Mode.VirtualAdapter;
+
+                        AssertTrue(manager.Connect("one"), "Expected the first virtual-adapter connection.");
+                        AssertTrue(renamer.FirstCommitChecked.Wait(1000),
+                            "Expected the first rename to pause after its generation check.");
+                        AssertTrue(manager.Connect("two"), "Expected a newer connection during the stale commit window.");
+                        AssertTrue(manager.Connect("three"), "Expected the latest connection to replace the queued rename.");
+
+                        renamer.ReleaseFirstCommit.Set();
+                        AssertTrue(renamer.LatestCommitCompleted.Wait(2000),
+                            "Expected the latest queued generation to repair the stale rename.");
+                        AssertEqual(2, renamer.RenameCount);
+                        AssertEqual("one", renamer.AttemptedNames[0]);
+                        AssertEqual("three", renamer.AttemptedNames[1]);
+                        AssertTrue(renamer.FirstCommitBecameStale,
+                            "Expected the first non-cancelable commit window to detect its stale generation.");
+                    }
+                    finally
+                    {
+                        renamer.ReleaseFirstCommit.Set();
+                        renamer.LatestCommitCompleted.Wait(1000);
+                        TestKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void VirtualAdapterRenameProviderStallsAreCapacityBounded()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                var renamer = new StallingVirtualAdapterRenamer();
+                using (renamer.FirstRenameEntered)
+                using (renamer.ReleaseProvider)
+                using (renamer.LatestRenameEntered)
+                using (var manager = new WireSockManager(nativeApi, renamer, null, 100))
+                {
+                    try
+                    {
+                        TestKillSwitch = false;
+                        foreach (var profile in new[] { "one", "two", "three" })
+                            File.WriteAllText(Profile.GetProfilePath(profile), ValidConfig());
+                        manager.TunnelMode = WireSockManager.Mode.VirtualAdapter;
+
+                        AssertTrue(manager.Connect("one"), "Expected the first connection despite a stalled rename.");
+                        AssertTrue(renamer.FirstRenameEntered.Wait(1000),
+                            "Expected the fake provider to receive one rename.");
+                        AssertTrue(SpinWait.SpinUntil(
+                                () => manager.AdapterRenameOperationHungForTests, 1000),
+                            "Expected the external adapter-rename deadline to suspend the queue.");
+
+                        AssertTrue(manager.Connect("two"), "Expected a reconnect while the provider is stalled.");
+                        AssertTrue(manager.Connect("three"), "Expected another reconnect to replace the pending rename.");
+                        Thread.Sleep(150);
+                        AssertEqual(1, renamer.RenameCount);
+
+                        renamer.ReleaseProvider.Set();
+                        AssertTrue(renamer.LatestRenameEntered.Wait(2000),
+                            "Expected the queue to resume with only the latest generation.");
+                        AssertEqual(2, renamer.RenameCount);
+                        AssertEqual("three", renamer.LatestName);
+                    }
+                    finally
+                    {
+                        renamer.ReleaseProvider.Set();
+                        TestKillSwitch = originalKillSwitch;
+                    }
+                }
+            });
+        }
+
+        private static void VirtualAdapterRenameQueueRejectsOutOfOrderStaleEnqueues()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi();
+                var renamer = new StallingVirtualAdapterRenamer();
+                using (renamer.FirstRenameEntered)
+                using (renamer.ReleaseProvider)
+                using (renamer.LatestRenameEntered)
+                using (var manager = new WireSockManager(nativeApi, renamer, null, 100))
+                {
+                    try
+                    {
+                        TestKillSwitch = false;
+                        foreach (var profile in new[] { "one", "two" })
+                            File.WriteAllText(Profile.GetProfilePath(profile), ValidConfig());
+                        manager.TunnelMode = WireSockManager.Mode.VirtualAdapter;
+
+                        AssertTrue(manager.Connect("one"), "Expected the first virtual-adapter connection.");
+                        var staleSequence = manager.ConnectionSequence;
+                        AssertTrue(renamer.FirstRenameEntered.Wait(1000),
+                            "Expected the first adapter rename to enter the fake provider.");
+                        AssertTrue(SpinWait.SpinUntil(
+                                () => manager.AdapterRenameOperationHungForTests, 1000),
+                            "Expected the external rename deadline to suspend the queue.");
+
+                        AssertTrue(manager.Connect("two"), "Expected the newer virtual-adapter connection.");
+                        AssertTrue(manager.ConnectionSequence > staleSequence,
+                            "Expected the reconnect to advance the connection generation.");
+
+                        var queueMethod = typeof(WireSockManager).GetMethod(
+                            "QueueVirtualAdapterRename",
+                            BindingFlags.Instance | BindingFlags.NonPublic);
+                        AssertTrue(queueMethod != null,
+                            "Expected to locate the adapter rename enqueue boundary.");
+                        queueMethod.Invoke(manager, new object[] { "one", staleSequence });
+
+                        renamer.ReleaseProvider.Set();
+                        AssertTrue(renamer.LatestRenameEntered.Wait(2000),
+                            "Expected an out-of-order stale enqueue not to replace the pending current generation.");
+                        AssertEqual(2, renamer.RenameCount);
+                        AssertEqual("two", renamer.LatestName);
+                    }
+                    finally
+                    {
+                        renamer.ReleaseProvider.Set();
                         TestKillSwitch = originalKillSwitch;
                     }
                 }
@@ -3608,6 +4229,132 @@ namespace WireSockUI.Tests
                         nativeApi.ContinueDrop.Set();
                         TestKillSwitch = originalKillSwitch;
                     }
+                }
+            });
+        }
+
+        private static void LifecycleAwaitsLateNetworkLockReset()
+        {
+            var networkLockApi = new FakeNetworkLockApi
+            {
+                Active = true,
+                ResetEntered = new ManualResetEventSlim(false),
+                ContinueReset = new ManualResetEventSlim(false)
+            };
+            using (networkLockApi.ResetEntered)
+            using (networkLockApi.ContinueReset)
+            using (var manager = new WireSockManager(new FakeWireSockNativeApi()))
+            {
+                try
+                {
+                    var controller = new TunnelLifecycleController(manager, networkLockApi);
+                    var resetResult = controller.ResetNetworkLockAsync(50).GetAwaiter().GetResult();
+                    AssertTrue(resetResult.TimedOut,
+                        "Expected the blocked network-lock reset to exceed its query timeout.");
+                    AssertTrue(networkLockApi.ResetEntered.Wait(1000),
+                        "Expected the fake network-lock reset to start.");
+
+                    var lateCompletion =
+                        NativeOperationRecoveryPolicy.AwaitTimedOutCompletionAsync(
+                            resetResult, "native network-lock reset");
+                    AssertFalse(lateCompletion.IsCompleted,
+                        "Expected recovery to retain ownership while the timed-out reset is still running.");
+
+                    networkLockApi.ContinueReset.Set();
+                    var completedResult = lateCompletion.GetAwaiter().GetResult();
+                    AssertTrue(completedResult.Succeeded,
+                        completedResult.Diagnostic ?? "Expected the late network-lock reset to remain authoritative.");
+                    AssertFalse(networkLockApi.Active,
+                        "Expected the late successful reset to clear the network lock.");
+                    AssertEqual(1, networkLockApi.ResetCount);
+                }
+                finally
+                {
+                    networkLockApi.ContinueReset.Set();
+                }
+            }
+        }
+
+        private static void LifecycleShutdownResetsActiveLockAfterCleanupFailure()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi
+                {
+                    DropResult = false,
+                    DropError = 32
+                };
+                var networkLockApi = new FakeNetworkLockApi { Active = true };
+                var manager = new WireSockManager(nativeApi);
+                try
+                {
+                    TestKillSwitch = false;
+                    File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                    AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+                    var controller = new TunnelLifecycleController(manager, networkLockApi);
+
+                    var shutdownResult = controller.ShutdownAsync(1000).GetAwaiter().GetResult();
+
+                    AssertFalse(shutdownResult.Succeeded,
+                        "Expected shutdown to report the retained native handle.");
+                    AssertFalse(shutdownResult.TimedOut,
+                        "Expected the simulated cleanup failure to complete within the shutdown budget.");
+                    AssertEqual(1, networkLockApi.QueryCount);
+                    AssertEqual(1, networkLockApi.ResetCount);
+                    AssertFalse(networkLockApi.Active,
+                        "Expected completed shutdown failure to reset an active global network lock.");
+                }
+                finally
+                {
+                    nativeApi.DropResult = true;
+                    manager.Disconnect();
+                    manager.Dispose();
+                    TestKillSwitch = originalKillSwitch;
+                }
+            });
+        }
+
+        private static void LifecycleShutdownResetsPreservedLockAfterReleaseRetry()
+        {
+            WithTemporaryConfigFolder(() =>
+            {
+                var originalKillSwitch = TestKillSwitch;
+                var nativeApi = new FakeWireSockNativeApi { ReleaseFailuresRemaining = 1 };
+                var networkLockApi = new FakeNetworkLockApi { Active = true };
+                var manager = new WireSockManager(nativeApi);
+                try
+                {
+                    TestKillSwitch = false;
+                    File.WriteAllText(Profile.GetProfilePath("office"), ValidConfig());
+                    var controller = new TunnelLifecycleController(manager, networkLockApi);
+                    AssertTrue(manager.Connect("office"), "Expected the fake tunnel to connect.");
+                    AssertFalse(manager.Disconnect(true),
+                        "Expected the preserved drop to retain the handle after release_handle failed.");
+                    AssertTrue(manager.HasTunnelHandle,
+                        "Expected the dropped handle to remain available for a release-only shutdown retry.");
+                    AssertEqual(1, nativeApi.DropCount);
+                    AssertTrue(nativeApi.LastPreserveNetworkLock == true,
+                        "Expected the first native drop to preserve the global network lock.");
+
+                    var shutdownResult = controller.ShutdownAsync(1000).GetAwaiter().GetResult();
+
+                    AssertTrue(shutdownResult.Succeeded,
+                        shutdownResult.Diagnostic ??
+                        "Expected shutdown to release the dropped handle and reset its preserved lock.");
+                    AssertFalse(manager.HasTunnelHandle,
+                        "Expected shutdown's release-only retry to clear the native handle.");
+                    AssertEqual(1, nativeApi.DropCount);
+                    AssertEqual(2, nativeApi.ReleaseCount);
+                    AssertEqual(1, networkLockApi.QueryCount);
+                    AssertEqual(1, networkLockApi.ResetCount);
+                    AssertFalse(networkLockApi.Active,
+                        "Expected shutdown to clear the network lock preserved by the earlier drop.");
+                }
+                finally
+                {
+                    manager.Dispose();
+                    TestKillSwitch = originalKillSwitch;
                 }
             });
         }
@@ -4339,6 +5086,25 @@ namespace WireSockUI.Tests
             }
         }
 
+        private static void VisibleLogStorageOverwritesWithoutGrowth()
+        {
+            var buffer = new BoundedRingBuffer<int>(3);
+            buffer.AddRange(new[] { 1, 2, 3, 4, 5 });
+
+            AssertEqual(3, buffer.Count);
+            AssertEqual(3, buffer[0]);
+            AssertEqual(4, buffer[1]);
+            AssertEqual(5, buffer[2]);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+            {
+                var ignored = buffer[3];
+                GC.KeepAlive(ignored);
+            }, "index");
+
+            buffer.Clear();
+            AssertEqual(0, buffer.Count);
+        }
+
         private static void WireSockManagerRollsBackFailedLogLevelChanges()
         {
             WithTemporaryConfigFolder(() =>
@@ -4644,6 +5410,11 @@ namespace WireSockUI.Tests
             AssertTrue(failure.Exception is InvalidOperationException,
                 "Expected the timeout wrapper to preserve the original test exception.");
 
+            var skipped = ExecuteTestWithTimeout(() => throw new TestSkippedException("unavailable"), 1000);
+            AssertFalse(skipped.TimedOut, "Expected a skipped test not to be mislabeled as timed out.");
+            AssertTrue(skipped.Exception is TestSkippedException,
+                "Expected the timeout wrapper to preserve an explicit skipped result.");
+
             using (var release = new ManualResetEventSlim(false))
             using (var finished = new ManualResetEventSlim(false))
             {
@@ -4669,24 +5440,43 @@ namespace WireSockUI.Tests
 
         private static void SingleInstanceEventRejectsBroadAccess()
         {
-            var currentUser = WindowsIdentity.GetCurrent().User;
+            var untrustedIdentity = new SecurityIdentifier(WellKnownSidType.LocalServiceSid, null);
             var administrators = new SecurityIdentifier(WellKnownSidType.BuiltinAdministratorsSid, null);
             var everyone = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
             var security = new EventWaitHandleSecurity();
-            security.SetOwner(currentUser);
+            security.SetOwner(administrators);
             security.SetAccessRuleProtection(true, false);
             security.AddAccessRule(new EventWaitHandleAccessRule(
                 administrators, EventWaitHandleRights.FullControl, AccessControlType.Allow));
 
-            AssertTrue(FrmMain.IsSingleInstanceEventSecurityTrusted(security, currentUser, out var diagnostic),
+            AssertTrue(FrmMain.IsSingleInstanceEventSecurityTrusted(security, out var diagnostic),
                 diagnostic ?? "Expected an administrator-only event ACL to be trusted.");
 
             security.AddAccessRule(new EventWaitHandleAccessRule(
                 everyone, EventWaitHandleRights.Synchronize, AccessControlType.Allow));
-            AssertFalse(FrmMain.IsSingleInstanceEventSecurityTrusted(security, currentUser, out diagnostic),
+            AssertFalse(FrmMain.IsSingleInstanceEventSecurityTrusted(security, out diagnostic),
                 "Expected a globally writable/openable ownership event to be rejected.");
             AssertTrue(diagnostic?.IndexOf("untrusted identity", StringComparison.OrdinalIgnoreCase) >= 0,
                 $"Expected an actionable event ACL diagnostic, got '{diagnostic}'.");
+
+            security = new EventWaitHandleSecurity();
+            security.SetOwner(untrustedIdentity);
+            security.SetAccessRuleProtection(true, false);
+            security.AddAccessRule(new EventWaitHandleAccessRule(
+                untrustedIdentity, EventWaitHandleRights.FullControl, AccessControlType.Allow));
+            security.AddAccessRule(new EventWaitHandleAccessRule(
+                administrators, EventWaitHandleRights.FullControl, AccessControlType.Allow));
+
+            AssertFalse(FrmMain.IsSingleInstanceEventSecurityTrusted(security, out diagnostic),
+                "Expected a LocalService-owned event to be rejected.");
+            AssertTrue(diagnostic?.IndexOf("not owned", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected an actionable untrusted-owner diagnostic, got '{diagnostic}'.");
+
+            security.SetOwner(administrators);
+            AssertFalse(FrmMain.IsSingleInstanceEventSecurityTrusted(security, out diagnostic),
+                "Expected an event granting LocalService direct access to be rejected.");
+            AssertTrue(diagnostic?.IndexOf("untrusted identity", StringComparison.OrdinalIgnoreCase) >= 0,
+                $"Expected an actionable untrusted ACE diagnostic, got '{diagnostic}'.");
         }
 
         private static void TunnelProfileStateMatchesSelectionsCaseInsensitively()
@@ -4919,6 +5709,8 @@ namespace WireSockUI.Tests
             public int SetNetworkLockCount { get; private set; }
             public int SetNetworkLockFailureOnCall { get; set; }
             public int SetNetworkLockError { get; set; }
+            public ManualResetEventSlim StartEntered { get; set; }
+            public ManualResetEventSlim ContinueStart { get; set; }
             public ManualResetEventSlim DropEntered { get; set; }
             public ManualResetEventSlim ContinueDrop { get; set; }
 
@@ -4964,6 +5756,8 @@ namespace WireSockUI.Tests
             public bool StartTunnel(WireSockManager.Mode mode, IntPtr handle)
             {
                 SetLastErrorForTest((uint)StartError);
+                StartEntered?.Set();
+                ContinueStart?.Wait();
                 return StartResult;
             }
 
@@ -5026,10 +5820,14 @@ namespace WireSockUI.Tests
             public bool Active { get; set; }
             public bool QueryResult { get; set; } = true;
             public bool ResetResult { get; set; } = true;
+            public int QueryCount { get; private set; }
             public int ResetCount { get; private set; }
+            public ManualResetEventSlim ResetEntered { get; set; }
+            public ManualResetEventSlim ContinueReset { get; set; }
 
             public bool TryIsActive(out bool active, out string diagnostic)
             {
+                QueryCount++;
                 active = Active;
                 diagnostic = QueryResult ? null : "simulated query failure";
                 return QueryResult;
@@ -5038,10 +5836,109 @@ namespace WireSockUI.Tests
             public bool TryReset(out string diagnostic)
             {
                 ResetCount++;
+                ResetEntered?.Set();
+                ContinueReset?.Wait();
                 diagnostic = ResetResult ? null : "simulated reset failure";
                 if (ResetResult)
                     Active = false;
                 return ResetResult;
+            }
+        }
+
+        private sealed class BlockingVirtualAdapterRenamer : IVirtualAdapterRenamer
+        {
+            public ManualResetEventSlim RenameEntered { get; } = new ManualResetEventSlim(false);
+            public ManualResetEventSlim ContinueRename { get; } = new ManualResetEventSlim(false);
+            public ManualResetEventSlim RenameCompleted { get; } = new ManualResetEventSlim(false);
+            public int RenameCount { get; private set; }
+            public string AdapterFriendlyName { get; private set; }
+            public string NewName { get; private set; }
+            public bool ConnectionWasCurrent { get; private set; }
+
+            public void Rename(string adapterFriendlyName, string newName, Func<bool> shouldContinue)
+            {
+                try
+                {
+                    RenameCount++;
+                    AdapterFriendlyName = adapterFriendlyName;
+                    NewName = newName;
+                    RenameEntered.Set();
+                    ContinueRename.Wait();
+                    ConnectionWasCurrent = shouldContinue();
+                }
+                finally
+                {
+                    RenameCompleted.Set();
+                }
+            }
+        }
+
+        private sealed class LatestWinsVirtualAdapterRenamer : IVirtualAdapterRenamer
+        {
+            private readonly object _syncRoot = new object();
+            private readonly List<string> _attemptedNames = new List<string>();
+            private int _renameCount;
+
+            public ManualResetEventSlim FirstCommitChecked { get; } = new ManualResetEventSlim(false);
+            public ManualResetEventSlim ReleaseFirstCommit { get; } = new ManualResetEventSlim(false);
+            public ManualResetEventSlim LatestCommitCompleted { get; } = new ManualResetEventSlim(false);
+            public int RenameCount => Volatile.Read(ref _renameCount);
+            public bool FirstCommitBecameStale { get; private set; }
+
+            public IReadOnlyList<string> AttemptedNames
+            {
+                get
+                {
+                    lock (_syncRoot)
+                        return _attemptedNames.ToArray();
+                }
+            }
+
+            public void Rename(string adapterFriendlyName, string newName, Func<bool> shouldContinue)
+            {
+                var invocation = Interlocked.Increment(ref _renameCount);
+                lock (_syncRoot)
+                    _attemptedNames.Add(newName);
+
+                if (invocation == 1)
+                {
+                    var currentBeforeCommit = shouldContinue();
+                    FirstCommitChecked.Set();
+                    ReleaseFirstCommit.Wait();
+                    FirstCommitBecameStale = currentBeforeCommit && !shouldContinue();
+                    return;
+                }
+
+                shouldContinue();
+                LatestCommitCompleted.Set();
+            }
+        }
+
+        private sealed class StallingVirtualAdapterRenamer : IVirtualAdapterRenamer
+        {
+            private int _renameCount;
+
+            public ManualResetEventSlim FirstRenameEntered { get; } = new ManualResetEventSlim(false);
+            public ManualResetEventSlim ReleaseProvider { get; } = new ManualResetEventSlim(false);
+            public ManualResetEventSlim LatestRenameEntered { get; } = new ManualResetEventSlim(false);
+            public int RenameCount => Volatile.Read(ref _renameCount);
+            public string LatestName { get; private set; }
+
+            public void Rename(string adapterFriendlyName, string newName, Func<bool> shouldContinue)
+            {
+                var invocation = Interlocked.Increment(ref _renameCount);
+                if (invocation == 1)
+                {
+                    FirstRenameEntered.Set();
+                    ReleaseProvider.Wait();
+                    if (!shouldContinue())
+                        throw new OperationCanceledException("The timed-out rename was canceled.");
+                    return;
+                }
+
+                LatestName = newName;
+                shouldContinue();
+                LatestRenameEntered.Set();
             }
         }
 
@@ -5261,7 +6158,7 @@ namespace WireSockUI.Tests
             if (string.Equals(Environment.GetEnvironmentVariable("CI"), "true", StringComparison.OrdinalIgnoreCase))
                 throw new InvalidOperationException(message);
 
-            Console.WriteLine($"SKIP {message}");
+            throw new TestSkippedException(message);
         }
 
         private static void TryDeleteFile(string path)
@@ -5368,10 +6265,17 @@ namespace WireSockUI.Tests
                 currentUserName = identity.Name;
             }
 
+            var otherUserId = new[]
+                {
+                    WellKnownSidType.LocalSystemSid,
+                    WellKnownSidType.LocalServiceSid,
+                    WellKnownSidType.NetworkServiceSid
+                }
+                .Select(type => new SecurityIdentifier(type, null).Value)
+                .First(sid => !FrmSettings.IsSameTaskUser(currentUserId, sid));
             AssertTrue(FrmSettings.IsSameTaskUser(currentUserName, currentUserId),
                 "Expected account names and SID strings for the same user to compare equal.");
-            AssertFalse(FrmSettings.IsSameTaskUser(currentUserId,
-                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value),
+            AssertFalse(FrmSettings.IsSameTaskUser(currentUserId, otherUserId),
                 "Expected different user SIDs not to compare equal.");
 
             using (var taskService = new Microsoft.Win32.TaskScheduler.TaskService())
@@ -5380,8 +6284,37 @@ namespace WireSockUI.Tests
                 definition.Principal.UserId = currentUserId;
                 definition.Principal.LogonType = Microsoft.Win32.TaskScheduler.TaskLogonType.InteractiveToken;
                 definition.Principal.RunLevel = Microsoft.Win32.TaskScheduler.TaskRunLevel.Highest;
+                definition.Principal.ProcessTokenSidType =
+                    Microsoft.Win32.TaskScheduler.TaskProcessTokenSidType.Default;
                 definition.Settings.ExecutionTimeLimit = TimeSpan.Zero;
-                definition.Triggers.Add(new Microsoft.Win32.TaskScheduler.LogonTrigger { UserId = currentUserId });
+                definition.Settings.DisallowStartIfOnBatteries = false;
+                definition.Settings.StopIfGoingOnBatteries = false;
+                definition.Settings.WakeToRun = true;
+                definition.Settings.IdleSettings.StopOnIdleEnd = false;
+                definition.Settings.RunOnlyIfIdle = false;
+                definition.Settings.RunOnlyIfNetworkAvailable = false;
+                definition.Settings.RestartCount = 0;
+                definition.Settings.RestartInterval = TimeSpan.Zero;
+                definition.Settings.MultipleInstances =
+                    Microsoft.Win32.TaskScheduler.TaskInstancesPolicy.IgnoreNew;
+                definition.Settings.StartWhenAvailable = true;
+                definition.Settings.Enabled = true;
+                definition.Settings.Hidden = false;
+                definition.Settings.AllowDemandStart = true;
+                definition.Settings.DeleteExpiredTaskAfter = TimeSpan.Zero;
+                definition.Settings.Priority = ProcessPriorityClass.BelowNormal;
+                definition.Settings.Volatile = false;
+                definition.Settings.DisallowStartOnRemoteAppSession = false;
+                var logonTrigger = new Microsoft.Win32.TaskScheduler.LogonTrigger
+                {
+                    UserId = currentUserId,
+                    Delay = TimeSpan.Zero,
+                    Enabled = true,
+                    StartBoundary = DateTime.MinValue,
+                    EndBoundary = DateTime.MaxValue,
+                    ExecutionTimeLimit = TimeSpan.Zero
+                };
+                definition.Triggers.Add(logonTrigger);
                 definition.Actions.Add(new Microsoft.Win32.TaskScheduler.ExecAction(executablePath));
 
                 AssertTrue(FrmSettings.IsTaskDefinitionOwnedByExecutable(
@@ -5397,7 +6330,59 @@ namespace WireSockUI.Tests
                     "Expected a task with the Task Scheduler 72-hour limit not to be accepted.");
                 definition.Settings.ExecutionTimeLimit = TimeSpan.Zero;
 
-                ((Microsoft.Win32.TaskScheduler.LogonTrigger)definition.Triggers[0]).UserId = null;
+                definition.Settings.DisallowStartIfOnBatteries = true;
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected a task that refuses battery-powered startup not to be accepted as canonical.");
+                definition.Settings.DisallowStartIfOnBatteries = false;
+
+                definition.Settings.RunOnlyIfIdle = true;
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected an idle-gated task not to be reported as canonical autorun.");
+                definition.Settings.RunOnlyIfIdle = false;
+
+                logonTrigger.Delay = TimeSpan.FromDays(30);
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected a delayed logon task not to be reported as canonical autorun.");
+                logonTrigger.Delay = TimeSpan.Zero;
+
+                logonTrigger.EndBoundary = DateTime.UtcNow.AddDays(-1);
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected an expired logon task not to be reported as canonical autorun.");
+                logonTrigger.EndBoundary = DateTime.MaxValue;
+
+                logonTrigger.Repetition.Interval = TimeSpan.FromMinutes(5);
+                logonTrigger.Repetition.Duration = TimeSpan.FromHours(1);
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected a repeating logon trigger not to be reported as canonical autorun.");
+                logonTrigger.Repetition.Duration = TimeSpan.Zero;
+                logonTrigger.Repetition.Interval = TimeSpan.Zero;
+
+                definition.Settings.RestartCount = 3;
+                definition.Settings.RestartInterval = TimeSpan.FromMinutes(1);
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected an automatically restarting task not to be reported as canonical autorun.");
+                definition.Settings.RestartCount = 0;
+                definition.Settings.RestartInterval = TimeSpan.Zero;
+
+                definition.Settings.Volatile = true;
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected a volatile task that disappears at reboot not to be canonical autorun.");
+                definition.Settings.Volatile = false;
+
+                definition.Settings.DisallowStartOnRemoteAppSession = true;
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected a task that skips remote interactive logons not to be canonical autorun.");
+                definition.Settings.DisallowStartOnRemoteAppSession = false;
+
+                logonTrigger.UserId = null;
                 definition.Settings.ExecutionTimeLimit = TimeSpan.FromHours(72);
                 AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
                         definition, true, executablePath),
@@ -5406,18 +6391,25 @@ namespace WireSockUI.Tests
                     "Expected an older WireSock UI task to remain replaceable during migration.");
 
                 definition.Principal.UserId =
-                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
+                    otherUserId;
                 AssertFalse(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
                     "Expected another user's autorun principal not to be replaceable.");
 
                 definition.Principal.UserId = null;
-                ((Microsoft.Win32.TaskScheduler.LogonTrigger)definition.Triggers[0]).UserId =
-                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null).Value;
+                logonTrigger.UserId = otherUserId;
                 AssertFalse(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
                     "Expected another user's logon trigger not to be replaceable.");
 
+                definition.Principal.UserId = otherUserId;
+                logonTrigger.UserId = otherUserId;
+                AssertTrue(FrmSettings.IsTaskScopedToAnotherUser(definition),
+                    "Expected a legacy task consistently scoped to another user to be left available for that user.");
+                logonTrigger.UserId = currentUserId;
+                AssertFalse(FrmSettings.IsTaskScopedToAnotherUser(definition),
+                    "Expected a mixed-user legacy task to remain a conflict instead of being ignored.");
+
                 definition.Principal.UserId = currentUserName;
-                ((Microsoft.Win32.TaskScheduler.LogonTrigger)definition.Triggers[0]).UserId = currentUserId;
+                logonTrigger.UserId = currentUserId;
                 definition.Settings.ExecutionTimeLimit = TimeSpan.Zero;
                 AssertTrue(FrmSettings.IsTaskDefinitionReplaceableByExecutable(definition, executablePath),
                     "Expected a current-user account name and SID trigger to remain replaceable.");
@@ -5427,6 +6419,24 @@ namespace WireSockUI.Tests
                         definition, true, executablePath),
                     "Expected tasks with additional actions not to be treated as owned.");
             }
+
+            var canonicalSecurity =
+                new RawSecurityDescriptor(FrmSettings.AutoRunTaskSecurityDescriptorSddl);
+            AssertTrue(FrmSettings.IsAutoRunTaskSecurityCanonical(canonicalSecurity),
+                "Expected the protected SYSTEM/Administrators task DACL to be canonical.");
+            var userWritableSecurity = new RawSecurityDescriptor(
+                FrmSettings.AutoRunTaskSecurityDescriptorSddl +
+                $"(A;;FA;;;{currentUserId})");
+            AssertFalse(FrmSettings.IsAutoRunTaskSecurityCanonical(userWritableSecurity),
+                "Expected a task granting the interactive user direct control not to be canonical.");
+            var systemDeniedSecurity = new RawSecurityDescriptor(
+                "O:BAG:BAD:P(D;;FA;;;SY)(A;;FA;;;SY)(A;;FA;;;BA)");
+            AssertFalse(FrmSettings.IsAutoRunTaskSecurityCanonical(systemDeniedSecurity),
+                "Expected an explicit SYSTEM deny ACE to make the autorun task noncanonical.");
+            var inheritOnlySystemSecurity = new RawSecurityDescriptor(
+                "O:BAG:BAD:P(A;IO;FA;;;SY)(A;;FA;;;BA)");
+            AssertFalse(FrmSettings.IsAutoRunTaskSecurityCanonical(inheritOnlySystemSecurity),
+                "Expected an inherit-only SYSTEM ACE not to satisfy the task DACL.");
         }
 
         private static void ShellLinkHresultValidationUsesSignedFailureSemantics()
@@ -5523,6 +6533,30 @@ namespace WireSockUI.Tests
             }
 
             throw new Exception($"Expected {typeof(T).Name}.");
+        }
+
+        private static void AssertEscapedBoundedFormatException(Action action, string escapedText)
+        {
+            try
+            {
+                action();
+            }
+            catch (FormatException ex)
+            {
+                AssertFalse(ex.Message.Contains("\0"),
+                    "Diagnostics must not contain raw NUL characters from untrusted configuration text.");
+                AssertFalse(ex.Message.Contains("\u202E"),
+                    "Diagnostics must not contain raw bidi controls from untrusted configuration text.");
+                AssertTrue(ex.Message.Contains(escapedText),
+                    "Diagnostics should expose escaped control characters for troubleshooting.");
+                AssertTrue(ex.Message.Contains("\u2026"),
+                    "Diagnostics should indicate when untrusted configuration text was truncated.");
+                AssertTrue(ex.Message.Length < 2048,
+                    "Diagnostics should cap untrusted configuration text.");
+                return;
+            }
+
+            throw new Exception("Expected FormatException.");
         }
 
         private static void AssertTrue(bool condition, string message)

@@ -15,6 +15,8 @@ namespace WireSockUI.Forms
     public partial class TaskManager : Form
     {
         private readonly List<ListViewItem> _cachedProcessListItems = new List<ListViewItem>();
+        private readonly ProcessSnapshotCache _processSnapshotCache = new ProcessSnapshotCache();
+        private readonly string _currentUserSid;
         private CancellationTokenSource _refreshCancellation;
         private Image _refreshButtonImage;
 
@@ -22,26 +24,19 @@ namespace WireSockUI.Forms
         {
             public string DisplayName { get; set; }
             public string MatchName { get; set; }
-            public string IconKey { get; set; }
         }
 
-        private sealed class ProcessRefreshResult : IDisposable
+        private sealed class ProcessRefreshResult
         {
             public List<ProcessDisplayEntry> Entries { get; } = new List<ProcessDisplayEntry>();
-            public Dictionary<string, Icon> Icons { get; } =
-                new Dictionary<string, Icon>(StringComparer.OrdinalIgnoreCase);
-
-            public void Dispose()
-            {
-                foreach (var icon in Icons.Values)
-                    icon.Dispose();
-                Icons.Clear();
-            }
         }
 
         public TaskManager()
         {
             InitializeComponent();
+
+            using (var identity = WindowsIdentity.GetCurrent())
+                _currentUserSid = identity.User?.Value;
 
             // Safely set the icon
             if (Resources.ico != null) Icon = Resources.ico;
@@ -71,16 +66,15 @@ namespace WireSockUI.Forms
 
         private async void OnTaskManagerShown(object sender, EventArgs e)
         {
-            await RefreshProcessesAsync();
+            await RefreshProcessesAsync(true);
         }
 
-        private async Task RefreshProcessesAsync()
+        private async Task RefreshProcessesAsync(bool forceSnapshotRefresh)
         {
             if (IsDisposed || Disposing)
                 return;
 
             _refreshCancellation?.Cancel();
-            _refreshCancellation?.Dispose();
             var refreshCancellation = new CancellationTokenSource();
             _refreshCancellation = refreshCancellation;
             btnRefresh.Enabled = false;
@@ -89,13 +83,17 @@ namespace WireSockUI.Forms
             ProcessRefreshResult result = null;
             try
             {
-                string currentUser;
-                using (var identity = WindowsIdentity.GetCurrent())
-                    currentUser = identity.Name;
                 var hideOtherUsers = checkBoxShowUserProcesses.Checked;
 
+                var processes = await _processSnapshotCache.GetSnapshotAsync(
+                    forceSnapshotRefresh,
+                    refreshCancellation.Token);
                 result = await Task.Run(
-                    () => BuildProcessRefreshResult(hideOtherUsers, currentUser, refreshCancellation.Token),
+                    () => BuildProcessRefreshResult(
+                        processes,
+                        hideOtherUsers,
+                        _currentUserSid,
+                        refreshCancellation.Token),
                     refreshCancellation.Token);
 
                 if (refreshCancellation.IsCancellationRequested ||
@@ -115,11 +113,9 @@ namespace WireSockUI.Forms
             }
             finally
             {
-                result?.Dispose();
                 if (ReferenceEquals(_refreshCancellation, refreshCancellation))
                 {
                     _refreshCancellation = null;
-                    refreshCancellation.Dispose();
 
                     if (!IsDisposed && !Disposing)
                     {
@@ -127,74 +123,43 @@ namespace WireSockUI.Forms
                         checkBoxShowUserProcesses.Enabled = true;
                     }
                 }
+
+                refreshCancellation.Dispose();
             }
         }
 
-        private static ProcessRefreshResult BuildProcessRefreshResult(bool hideOtherUsers, string currentUser,
+        private static ProcessRefreshResult BuildProcessRefreshResult(
+            IEnumerable<ProcessEntry> processSnapshot,
+            bool hideOtherUsers,
+            string currentUserSid,
             CancellationToken cancellationToken)
         {
-            const string defaultIconKey = "DefaultIcon";
             var result = new ProcessRefreshResult();
-            try
-            {
-                var processes = ProcessList.GetProcessList()
-                    .Where(p => !hideOtherUsers ||
-                                string.Equals(p.User, currentUser, StringComparison.OrdinalIgnoreCase))
-                    .Distinct(ProcessEntry.Comparer);
+            var processes = (processSnapshot ?? Enumerable.Empty<ProcessEntry>())
+                .Where(p => ShouldIncludeProcessForUser(p, hideOtherUsers, currentUserSid))
+                .Distinct(ProcessEntry.Comparer);
 
-                foreach (var process in processes)
+            foreach (var process in processes)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+
+                var displayName = !string.IsNullOrWhiteSpace(process.ImageName)
+                    ? Path.GetFileNameWithoutExtension(process.ImageName)
+                    : Path.GetFileNameWithoutExtension(process.Name);
+                if (string.IsNullOrWhiteSpace(displayName))
+                    displayName = process.Name;
+                var matchName = GetProcessMatchName(process);
+                if (string.IsNullOrWhiteSpace(matchName))
+                    continue;
+
+                result.Entries.Add(new ProcessDisplayEntry
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-
-                    var displayName = !string.IsNullOrWhiteSpace(process.ImageName)
-                        ? Path.GetFileNameWithoutExtension(process.ImageName)
-                        : Path.GetFileNameWithoutExtension(process.Name);
-                    if (string.IsNullOrWhiteSpace(displayName))
-                        displayName = process.Name;
-                    var matchName = GetProcessMatchName(process);
-                    if (string.IsNullOrWhiteSpace(matchName))
-                        continue;
-
-                    var iconKey = defaultIconKey;
-                    if (!string.IsNullOrWhiteSpace(process.ImageName) && File.Exists(process.ImageName))
-                    {
-                        iconKey = process.ImageName;
-                        if (!result.Icons.ContainsKey(iconKey))
-                        {
-                            try
-                            {
-                                using (var icon = Icon.ExtractAssociatedIcon(process.ImageName))
-                                {
-                                    if (icon != null)
-                                        result.Icons.Add(iconKey, (Icon)icon.Clone());
-                                    else
-                                        iconKey = defaultIconKey;
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                System.Diagnostics.Trace.TraceWarning(
-                                    $"Failed to extract process icon for '{process.ImageName}': {ex.Message}");
-                                iconKey = defaultIconKey;
-                            }
-                        }
-                    }
-
-                    result.Entries.Add(new ProcessDisplayEntry
-                    {
-                        DisplayName = displayName,
-                        MatchName = matchName,
-                        IconKey = iconKey
-                    });
-                }
-
-                return result;
+                    DisplayName = displayName,
+                    MatchName = matchName
+                });
             }
-            catch
-            {
-                result.Dispose();
-                throw;
-            }
+
+            return result;
         }
 
         private void ApplyProcessRefreshResult(ProcessRefreshResult result)
@@ -205,15 +170,12 @@ namespace WireSockUI.Forms
             const string defaultIconKey = "DefaultIcon";
             var defaultIcon = Resources.ico;
             if (defaultIcon != null)
-                lstProcesses.SmallImageList.Images.Add(defaultIconKey, (Icon)defaultIcon.Clone());
-
-            foreach (var icon in result.Icons)
-                lstProcesses.SmallImageList.Images.Add(icon.Key, (Icon)icon.Value.Clone());
+                lstProcesses.SmallImageList.Images.Add(defaultIconKey, defaultIcon);
 
             foreach (var process in result.Entries)
             {
-                var iconKey = result.Icons.ContainsKey(process.IconKey) ? process.IconKey : defaultIconKey;
-                var listViewItem = new ListViewItem(process.DisplayName, iconKey) { Tag = process.MatchName };
+                var listViewItem = new ListViewItem(process.DisplayName, defaultIconKey)
+                { Tag = process.MatchName };
                 _cachedProcessListItems.Add(listViewItem);
             }
         }
@@ -230,6 +192,19 @@ namespace WireSockUI.Forms
                 return null;
 
             return string.IsNullOrEmpty(Path.GetExtension(matchName)) ? matchName + ".exe" : matchName;
+        }
+
+        internal static bool ShouldIncludeProcessForUser(
+            ProcessEntry process,
+            bool hideOtherUsers,
+            string currentUserSid)
+        {
+            if (process == null)
+                return false;
+            if (!hideOtherUsers)
+                return true;
+            return !string.IsNullOrWhiteSpace(currentUserSid) &&
+                   string.Equals(process.User, currentUserSid, StringComparison.OrdinalIgnoreCase);
         }
 
         private void FilterProcesses(string filter)
@@ -264,7 +239,7 @@ namespace WireSockUI.Forms
 
         private async void OnRefreshClick(object sender, EventArgs e)
         {
-            await RefreshProcessesAsync();
+            await RefreshProcessesAsync(true);
         }
 
         private void OnFindProcessChanged(object sender, EventArgs e)
@@ -295,14 +270,12 @@ namespace WireSockUI.Forms
 
         private async void OnChangeUserProcessVisibilityCheckBox(object sender, EventArgs e)
         {
-            await RefreshProcessesAsync();
+            await RefreshProcessesAsync(false);
         }
 
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             _refreshCancellation?.Cancel();
-            _refreshCancellation?.Dispose();
-            _refreshCancellation = null;
             btnRefresh.Image = null;
             _refreshButtonImage?.Dispose();
             _refreshButtonImage = null;

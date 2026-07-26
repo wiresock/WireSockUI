@@ -97,6 +97,16 @@ namespace WireSockUI.Native
 
         internal static IDisposable OpenDirectoryChain(string path)
         {
+            return OpenDirectoryChainCore(path, false);
+        }
+
+        internal static IDisposable OpenDirectoryChainForStableChildCreation(string path)
+        {
+            return OpenDirectoryChainCore(path, true);
+        }
+
+        private static IDisposable OpenDirectoryChainCore(string path, bool denyWriteSharing)
+        {
             var pending = new Stack<string>();
             var current = NormalizeComparablePath(path);
             while (!string.IsNullOrWhiteSpace(current))
@@ -114,7 +124,14 @@ namespace WireSockUI.Native
             try
             {
                 while (pending.Count > 0)
-                    handles.Add(OpenDirectory(pending.Pop(), false));
+                    handles.Add(Open(
+                        pending.Pop(),
+                        expectDirectory: true,
+                        writableSecurity: false,
+                        allowDelete: false,
+                        expectReparsePoint: false,
+                        readContent: false,
+                        denyWriteSharing: denyWriteSharing));
                 return new ValidatedHandleCollection(handles);
             }
             catch
@@ -130,7 +147,8 @@ namespace WireSockUI.Native
             bool writableSecurity,
             bool allowDelete,
             bool expectReparsePoint,
-            bool readContent = false)
+            bool readContent = false,
+            bool denyWriteSharing = false)
         {
             var expectedPath = Path.GetFullPath(path);
             var desiredAccess = ReadControl;
@@ -144,7 +162,11 @@ namespace WireSockUI.Native
             var handle = CreateFile(
                 expectedPath,
                 desiredAccess,
-                readContent || allowDelete ? FileShare.Read : FileShare.Read | FileShare.Write,
+                denyWriteSharing
+                    ? FileShare.Read
+                    : readContent || allowDelete
+                        ? FileShare.Read
+                        : FileShare.Read | FileShare.Write,
                 IntPtr.Zero,
                 OpenExisting,
                 FileFlagBackupSemantics | FileFlagOpenReparsePoint,
@@ -209,6 +231,42 @@ namespace WireSockUI.Native
             }
 
             throw new PathTooLongException("The opened path exceeds the supported Windows path length.");
+        }
+
+        internal static void ValidateCreatedRegularFile(SafeFileHandle handle, string expectedPath)
+        {
+            if (handle == null)
+                throw new ArgumentNullException(nameof(handle));
+            if (handle.IsInvalid || handle.IsClosed)
+                throw new IOException("The newly created file handle is unavailable for validation.");
+
+            var normalizedExpectedPath = Path.GetFullPath(expectedPath);
+            if (!GetFileInformationByHandle(handle, out var information))
+                throw new Win32Exception(Marshal.GetLastWin32Error(),
+                    $"Unable to inspect the newly created file '{normalizedExpectedPath}'.");
+
+            var attributes = (FileAttributes)information.FileAttributes;
+            if ((attributes & (FileAttributes.Directory | FileAttributes.ReparsePoint)) != 0)
+                throw new IOException(
+                    $"The newly created path '{normalizedExpectedPath}' is not a regular file.");
+            if (information.NumberOfLinks != 1)
+                throw new IOException(
+                    $"The newly created file '{normalizedExpectedPath}' unexpectedly has {information.NumberOfLinks} links.");
+
+            var finalPath = GetFinalPath(handle);
+            if (!PathsEqual(normalizedExpectedPath, finalPath))
+                throw new IOException(
+                    $"Newly created path '{normalizedExpectedPath}' resolved to unexpected object '{finalPath}'.");
+        }
+
+        internal static void DeleteOpenFile(SafeFileHandle handle, string path)
+        {
+            if (handle == null)
+                throw new ArgumentNullException(nameof(handle));
+            if (handle.IsInvalid || handle.IsClosed)
+                throw new IOException($"The open handle for '{path}' is unavailable for deletion.");
+
+            DeleteHandle(handle, path);
         }
 
         private static bool PathsEqual(string expectedPath, string finalPath)
@@ -388,13 +446,7 @@ namespace WireSockUI.Native
 
             internal void Delete()
             {
-                var disposition = new FileDispositionInformation { DeleteFile = true };
-                if (!SetFileInformationByHandle(
-                        _handle,
-                        FileInfoByHandleClass.FileDispositionInfo,
-                        ref disposition,
-                        (uint)Marshal.SizeOf<FileDispositionInformation>()))
-                    throw new Win32Exception(Marshal.GetLastWin32Error(), $"Unable to delete '{Path}'.");
+                DeleteHandle(_handle, Path);
             }
 
             public void Dispose()
@@ -425,6 +477,17 @@ namespace WireSockUI.Native
         {
             for (var index = handles.Count - 1; index >= 0; index--)
                 handles[index].Dispose();
+        }
+
+        private static void DeleteHandle(SafeFileHandle handle, string path)
+        {
+            var disposition = new FileDispositionInformation { DeleteFile = true };
+            if (!SetFileInformationByHandle(
+                    handle,
+                    FileInfoByHandleClass.FileDispositionInfo,
+                    ref disposition,
+                    (uint)Marshal.SizeOf<FileDispositionInformation>()))
+                throw new Win32Exception(Marshal.GetLastWin32Error(), $"Unable to delete '{path}'.");
         }
 
         [StructLayout(LayoutKind.Sequential)]

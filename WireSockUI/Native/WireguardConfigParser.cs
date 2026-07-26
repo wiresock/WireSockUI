@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -8,6 +9,62 @@ namespace WireSockUI.Native
 {
     internal static class WireguardConfigParser
     {
+        private const int MaxDiagnosticTokenCodeUnits = 160;
+
+        internal static string EscapeDiagnosticToken(string value)
+        {
+            if (value == null)
+                return "<null>";
+
+            var displayedLength = Math.Min(value.Length, MaxDiagnosticTokenCodeUnits);
+            var escaped = new StringBuilder(Math.Min(displayedLength * 2, 320));
+            for (var index = 0; index < displayedLength; index++)
+            {
+                var current = value[index];
+                switch (current)
+                {
+                    case '\\':
+                        escaped.Append(@"\\");
+                        continue;
+                    case '"':
+                        escaped.Append("\\\"");
+                        continue;
+                    case '\0':
+                        escaped.Append(@"\0");
+                        continue;
+                    case '\r':
+                        escaped.Append(@"\r");
+                        continue;
+                    case '\n':
+                        escaped.Append(@"\n");
+                        continue;
+                    case '\t':
+                        escaped.Append(@"\t");
+                        continue;
+                }
+
+                var category = CharUnicodeInfo.GetUnicodeCategory(current);
+                if (category == UnicodeCategory.Control ||
+                    category == UnicodeCategory.Format ||
+                    category == UnicodeCategory.LineSeparator ||
+                    category == UnicodeCategory.ParagraphSeparator ||
+                    category == UnicodeCategory.Surrogate)
+                {
+                    escaped.Append(@"\u");
+                    escaped.Append(((int)current).ToString("X4", CultureInfo.InvariantCulture));
+                }
+                else
+                {
+                    escaped.Append(current);
+                }
+            }
+
+            if (value.Length > displayedLength)
+                escaped.Append('\u2026');
+
+            return escaped.ToString();
+        }
+
         public class Section
         {
             public Dictionary<string, List<string>> KeyValues { get; } =
@@ -115,7 +172,7 @@ namespace WireSockUI.Native
 
                         if (string.IsNullOrEmpty(currentSection))
                             throw new FormatException(
-                                $"Invalid WireGuard configuration line {lineNumber}: key \"{key}\" appears before any section.");
+                                $"Invalid WireGuard configuration line {lineNumber}: key \"{EscapeDiagnosticToken(key)}\" appears before any section.");
 
                         if (!Sections.ContainsKey(currentSection))
                             Sections[currentSection] = new Section();

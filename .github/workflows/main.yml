@@ -12,31 +12,35 @@ jobs:
   test:
     runs-on: windows-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ['x86', 'x64']
     steps:
       - name: Checkout from GitHub
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.ref }}
+          persist-credentials: false
 
       - name: Setup dotnet
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
-          dotnet-version: '10.x'
+          global-json-file: global.json
 
       - name: Restore
-        run: dotnet restore WireSockUI.sln -p:Platform=x64 -m:1
+        run: dotnet restore WireSockUI.sln -p:Platform=${{ matrix.platform }} --locked-mode -m:1
 
       - name: Verify formatting
         run: dotnet format WireSockUI.sln whitespace --verify-no-changes --no-restore
 
       - name: Test
-        run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Platform=x64 -p:UseSharedCompilation=false --no-restore
+        run: dotnet run --project WireSockUI.Tests/WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Platform=${{ matrix.platform }} -p:UseSharedCompilation=false --no-restore
 
   sdk-integration:
     uses: ./.github/workflows/sdk-integration.yml
     with:
       require_sdk_validation: true
-    secrets: inherit
 
   build-and-package:
     needs:
@@ -44,7 +48,7 @@ jobs:
       - sdk-integration
     strategy:
       matrix:
-        platform: ['AnyCPU', 'x64', 'ARM64']
+        platform: ['AnyCPU', 'x86', 'x64', 'ARM64']
         framework: ['net472-windows']
         build_configuration: ['Release', 'Release UWP']
         include:
@@ -66,11 +70,12 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           ref: ${{ github.ref }}
+          persist-credentials: false
 
       - name: Setup dotnet
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
-          dotnet-version: '10.x'
+          global-json-file: global.json
 
       - name: Parse Version
         shell: pwsh
@@ -84,9 +89,16 @@ jobs:
           "WIRESOCKUI_VERSION=$($Matches.version)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Build
-        run: dotnet publish WireSockUI/WireSockUI.csproj --configuration "${{ matrix.build_configuration }}" --framework "${{ matrix.framework }}" --no-self-contained /p:Platform="${{ matrix.platform }}" /p:UseSharedCompilation=false /p:Version="${{ env.WIRESOCKUI_VERSION }}" /p:Repository="${{ github.repository }}" -m:1
+        run: dotnet publish WireSockUI/WireSockUI.csproj --configuration "${{ matrix.build_configuration }}" --framework "${{ matrix.framework }}" --no-self-contained /p:Platform="${{ matrix.platform }}" /p:UseSharedCompilation=false /p:Version="${{ env.WIRESOCKUI_VERSION }}" /p:Repository="${{ github.repository }}" /p:RestoreLockedMode=true -m:1
 
-      - name: Import signing certificate
+      - name: Install pinned SBOM tool
+        shell: pwsh
+        run: |
+          $toolPath = Join-Path $env:RUNNER_TEMP 'sbom-tool'
+          dotnet tool install Microsoft.Sbom.DotNetTool --tool-path $toolPath --version 4.1.5
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to install the pinned Microsoft SBOM tool.' }
+
+      - name: Import certificate, sign, verify, and remove certificate
         shell: pwsh
         env:
           SIGNING_CERTIFICATE_BASE64: ${{ secrets.WINDOWS_SIGNING_CERTIFICATE_BASE64 }}
@@ -97,6 +109,8 @@ jobs:
           }
 
           $pfxPath = Join-Path $env:RUNNER_TEMP 'wiresockui-signing.pfx'
+          $certificates = @()
+          $certificate = $null
           try {
             [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String($env:SIGNING_CERTIFICATE_BASE64))
             $password = ConvertTo-SecureString $env:SIGNING_CERTIFICATE_PASSWORD -AsPlainText -Force
@@ -106,38 +120,33 @@ jobs:
               throw 'The release signing certificate could not be imported with its private key.'
             }
 
-            "SIGNING_CERTIFICATE_THUMBPRINT=$($certificate.Thumbprint)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+            $executable = Join-Path '${{ env.ARTIFACT_SRC_PATH }}' 'WireSockUI.exe'
+            $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
+                -Filter signtool.exe -Recurse -File -ErrorAction Stop |
+              Where-Object { $_.DirectoryName.EndsWith('\x64', [StringComparison]::OrdinalIgnoreCase) } |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+            if ([string]::IsNullOrWhiteSpace($signTool)) { throw 'signtool.exe was not found.' }
+
+            & $signTool sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /sha1 $certificate.Thumbprint $executable
+            if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE." }
+
+            $signature = Get-AuthenticodeSignature -FilePath $executable
+            if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+              throw "Signed executable verification failed: $($signature.StatusMessage)"
+            }
           }
           finally {
+            foreach ($importedCertificate in $certificates) {
+              Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($importedCertificate.Thumbprint)" -Force -ErrorAction SilentlyContinue
+            }
             Remove-Item -LiteralPath $pfxPath -Force -ErrorAction SilentlyContinue
-          }
-
-      - name: Sign and verify executable
-        shell: pwsh
-        run: |
-          $executable = Join-Path '${{ env.ARTIFACT_SRC_PATH }}' 'WireSockUI.exe'
-          $signTool = Get-ChildItem -Path "${env:ProgramFiles(x86)}\Windows Kits\10\bin" `
-              -Filter signtool.exe -Recurse -File -ErrorAction Stop |
-            Where-Object { $_.DirectoryName.EndsWith('\x64', [StringComparison]::OrdinalIgnoreCase) } |
-            Sort-Object FullName -Descending |
-            Select-Object -First 1 -ExpandProperty FullName
-          if ([string]::IsNullOrWhiteSpace($signTool)) { throw 'signtool.exe was not found.' }
-
-          & $signTool sign /fd SHA256 /td SHA256 /tr https://timestamp.digicert.com /sha1 $env:SIGNING_CERTIFICATE_THUMBPRINT $executable
-          if ($LASTEXITCODE -ne 0) { throw "signtool failed with exit code $LASTEXITCODE." }
-
-          $signature = Get-AuthenticodeSignature -FilePath $executable
-          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-            throw "Signed executable verification failed: $($signature.StatusMessage)"
           }
 
       - name: Generate SPDX SBOM
         shell: pwsh
         run: |
           $toolPath = Join-Path $env:RUNNER_TEMP 'sbom-tool'
-          dotnet tool install Microsoft.Sbom.DotNetTool --tool-path $toolPath --version 4.1.5
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to install the pinned Microsoft SBOM tool.' }
-
           & (Join-Path $toolPath 'sbom-tool.exe') generate `
             -b '${{ env.ARTIFACT_SRC_PATH }}' `
             -bc '${{ github.workspace }}' `
@@ -179,14 +188,6 @@ jobs:
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4
         with:
           subject-path: '${{ env.ARTIFACT_ZIP_NAME }}.*'
-
-      - name: Remove signing certificate
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          if (-not [string]::IsNullOrWhiteSpace($env:SIGNING_CERTIFICATE_THUMBPRINT)) {
-            Remove-Item -LiteralPath "Cert:\CurrentUser\My\$env:SIGNING_CERTIFICATE_THUMBPRINT" -Force -ErrorAction SilentlyContinue
-          }
 
   upload-release:
     if: ${{ success() }}

@@ -124,7 +124,16 @@ namespace WireSockUI.Forms
 
         public void StartConnecting(int generation)
         {
-            Start(cancellationToken => MonitorConnectingAsync(generation, cancellationToken));
+            StartConnecting(generation, Task.CompletedTask);
+        }
+
+        public void StartConnecting(int generation, Task nativeConnectCompletion)
+        {
+            if (nativeConnectCompletion == null)
+                throw new ArgumentNullException(nameof(nativeConnectCompletion));
+
+            Start(cancellationToken =>
+                MonitorConnectingAsync(generation, nativeConnectCompletion, cancellationToken));
         }
 
         public void StartConnected(int generation)
@@ -179,12 +188,17 @@ namespace WireSockUI.Forms
             CancelAndDisposeWhenComplete(previousCancellation, previousTask);
         }
 
-        private async Task MonitorConnectingAsync(int generation, CancellationToken cancellationToken)
+        private async Task MonitorConnectingAsync(int generation, Task nativeConnectCompletion,
+            CancellationToken cancellationToken)
         {
-            var elapsed = Stopwatch.StartNew();
-
             try
             {
+                await nativeConnectCompletion.ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (generation != _currentGeneration())
+                    return;
+
+                var elapsed = Stopwatch.StartNew();
                 while (generation == _currentGeneration())
                 {
                     await Task.Delay(_connectionPollIntervalMilliseconds, cancellationToken);

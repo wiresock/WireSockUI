@@ -139,6 +139,13 @@ namespace WireSockUI.Native
         // Narrowed down from PropVariant.cs of Windows API Code Pack 1.1
         // Originally from http://blogs.msdn.com/b/adamroot/archive/2008/04/11
         // /interop-with-propvariants-in-net.aspx
+        [StructLayout(LayoutKind.Sequential)]
+        private struct CountedPointer
+        {
+            private readonly uint count;
+            private readonly IntPtr pointer;
+        }
+
         [StructLayout(LayoutKind.Explicit)]
         private sealed class PropVariant : IDisposable
         {
@@ -154,6 +161,7 @@ namespace WireSockUI.Native
             // ushort wReserved3; // Reserved field
 
             [FieldOffset(8)] private readonly IntPtr ptr; // Value
+            [FieldOffset(8)] private readonly CountedPointer countedPointer; // Largest native union member
 
             #endregion
 
@@ -172,7 +180,23 @@ namespace WireSockUI.Native
                 valueType == (ushort)VarEnum.VT_NULL;
 
             // Value (only for string value)
-            public string Value => Marshal.PtrToStringUni(ptr);
+            public string Value
+            {
+                get
+                {
+                    if (IsNullOrEmpty)
+                        return null;
+                    if (VarType != VarEnum.VT_LPWSTR)
+                        throw new InvalidDataException(
+                            $"The shell property has unexpected type '{VarType}' instead of VT_LPWSTR.");
+                    if (ptr == IntPtr.Zero)
+                        return null;
+
+                    var value = new StringBuilder(MaxAppUserModelIdLength + 1);
+                    VerifySucceeded(unchecked((uint)PropVariantToString(this, value, (uint)value.Capacity)));
+                    return value.ToString();
+                }
+            }
 
             #endregion
 
@@ -224,6 +248,12 @@ namespace WireSockUI.Native
         [DllImport("Ole32.dll", PreserveSig = false)]
         private static extern void PropVariantClear([In][Out] PropVariant pvar);
 
+        [DllImport("Propsys.dll", CharSet = CharSet.Unicode)]
+        private static extern int PropVariantToString(
+            [In] PropVariant propVariant,
+            [Out] StringBuilder value,
+            uint valueCapacity);
+
         #endregion
 
         #region Fields
@@ -241,6 +271,8 @@ namespace WireSockUI.Native
         private const int Win32FindDataPathCapacity = 260;
         private const int UnicodePathCapacity = 32768;
         private const int Infotipsize = 1024;
+        private const int MaxAppUserModelIdLength = 128;
+        internal static int NativePropVariantSize => IntPtr.Size == 8 ? 24 : 16;
 
         private const int StgmRead = 0x00000000; // STGM constants
         private const uint SlgpUncpriority = 0x0002; // SLGP flags
@@ -338,8 +370,6 @@ namespace WireSockUI.Native
                 using (var pv = new PropVariant())
                 {
                     VerifySucceeded(PropertyStore.GetValue(_appUserModelIdKey, pv));
-
-                    if (pv.Value == null) return "Null";
 
                     return pv.Value;
                 }

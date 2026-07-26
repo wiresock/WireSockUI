@@ -25,7 +25,8 @@ namespace WireSockUI.Config
             ApplicationSettingsSnapshot requestedSettings,
             bool hasTunnelHandle,
             Func<Task<bool>> applyAutoRun,
-            Func<Task<bool>> rollbackAutoRun)
+            Func<Task<bool>> rollbackAutoRun,
+            Func<Task<bool>> commitAutoRun = null)
         {
             if (previousSettings == null) throw new ArgumentNullException(nameof(previousSettings));
             if (requestedSettings == null) throw new ArgumentNullException(nameof(requestedSettings));
@@ -37,7 +38,7 @@ namespace WireSockUI.Config
             var killSwitchRequiresNativeUpdate =
                 requestedSettings.EnableKillSwitch != previousSettings.EnableKillSwitch || hasTunnelHandle;
 
-            return CompensatingTransaction.ApplyAsync(new List<CompensatingTransactionStep>
+            var steps = new List<CompensatingTransactionStep>
             {
                 new CompensatingTransactionStep("autorun task", applyAutoRun, rollbackAutoRun),
                 new CompensatingTransactionStep(
@@ -58,7 +59,14 @@ namespace WireSockUI.Config
                         killSwitchRequiresNativeUpdate),
                     () => _applyKillSwitch(previousSettings.EnableKillSwitch,
                         killSwitchRequiresNativeUpdate))
-            });
+            };
+            if (commitAutoRun != null)
+                steps.Add(new CompensatingTransactionStep(
+                    "autorun migration commit",
+                    commitAutoRun,
+                    () => Task.FromResult(true)));
+
+            return CompensatingTransaction.ApplyAsync(steps);
         }
 
         internal static bool FailureRequiresNativeRecovery(CompensatingTransactionResult result)

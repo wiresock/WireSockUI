@@ -13,12 +13,16 @@ namespace WireSockUI
     {
         private const string ApplicationFolderName = "WireSockUI";
         internal const int MaxSecuredTreeEntries = 4096;
+        private static readonly string ApplicationDataRoot =
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+        private static readonly string CommonApplicationDataRoot =
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
 
         public static string MainFolder =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), ApplicationFolderName);
+            Path.Combine(ApplicationDataRoot, ApplicationFolderName);
 
         public static string SecureMainFolder =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), ApplicationFolderName);
+            Path.Combine(CommonApplicationDataRoot, ApplicationFolderName);
 
         public static string ConfigsFolder = Path.Combine(SecureMainFolder, "Configs");
 
@@ -32,8 +36,7 @@ namespace WireSockUI
         public static string DiagnosticLogPath => Path.Combine(DiagnosticsFolder, "WireSockUI.log");
 
         public static string NotificationAssetsFolder =
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
-                ApplicationFolderName + "-Notifications");
+            Path.Combine(CommonApplicationDataRoot, ApplicationFolderName + "-Notifications");
 
         public static string LegacyConfigsFolder = Path.Combine(MainFolder, "Configs");
 
@@ -49,6 +52,51 @@ namespace WireSockUI
         internal static bool AllowUnsecuredConfigFolderOverrideForTests { get; set; }
 
         public static EventWaitHandle AlreadyRunning;
+
+        internal static void ValidateSpecialFolderRoots()
+        {
+            RequireAbsoluteSpecialFolderRoot(
+                ApplicationDataRoot,
+                "the signed-in user's ApplicationData folder");
+            RequireAbsoluteSpecialFolderRoot(
+                CommonApplicationDataRoot,
+                "the system CommonApplicationData folder");
+        }
+
+        internal static string RequireAbsoluteSpecialFolderRoot(string path, string description)
+        {
+            if (string.IsNullOrWhiteSpace(description))
+                throw new ArgumentException("A special-folder description is required.", nameof(description));
+            if (string.IsNullOrWhiteSpace(path) || !IsFullyQualifiedWindowsPath(path))
+                throw new DirectoryNotFoundException(
+                    $"Windows did not provide an absolute path for {description}. WireSock UI will not use a relative data directory.");
+
+            try
+            {
+                return Path.GetFullPath(path);
+            }
+            catch (Exception ex) when (ex is ArgumentException ||
+                                       ex is NotSupportedException ||
+                                       ex is PathTooLongException)
+            {
+                throw new DirectoryNotFoundException(
+                    $"Windows provided an invalid path for {description}.", ex);
+            }
+        }
+
+        private static bool IsFullyQualifiedWindowsPath(string path)
+        {
+            if (path.StartsWith(@"\\", StringComparison.Ordinal))
+                return path.Split(
+                    new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar },
+                    StringSplitOptions.RemoveEmptyEntries).Length >= 2;
+
+            return path.Length >= 3 &&
+                   char.IsLetter(path[0]) &&
+                   path[1] == Path.VolumeSeparatorChar &&
+                   (path[2] == Path.DirectorySeparatorChar ||
+                    path[2] == Path.AltDirectorySeparatorChar);
+        }
 
         public static void EnsureApplicationFolders()
         {
@@ -153,15 +201,27 @@ namespace WireSockUI
             try
             {
                 var security = CreateAdministratorsOnlyDirectorySecurity();
-                if (SecureFileSystem.AllowOwnerWriteFailureForTests)
-                    Directory.CreateDirectory(path);
-                else
-                    Directory.CreateDirectory(path, security);
-                if (secureExistingChildren)
-                    SecureExistingChildren(path, excludedChildDirectory);
-                else
-                    using (var directory = SecureFileSystem.OpenDirectory(path, true))
-                        directory.SetSecurity(security);
+                if (!PathEntryExists(path))
+                {
+                    if (SecureFileSystem.AllowOwnerWriteFailureForTests)
+                        Directory.CreateDirectory(path);
+                    else
+                        Directory.CreateDirectory(path, security);
+                }
+
+                using (var directory = SecureFileSystem.OpenDirectory(path, false))
+                {
+                    EnsureTrustedBeforeSecurityMutation(path, false);
+                    if (secureExistingChildren)
+                    {
+                        SecureExistingChildren(path, excludedChildDirectory);
+                    }
+                    else
+                    {
+                        using (var writableDirectory = SecureFileSystem.OpenDirectory(path, true))
+                            writableDirectory.SetSecurity(security);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -200,12 +260,20 @@ namespace WireSockUI
             try
             {
                 var security = CreateUsersReadOnlyDirectorySecurity();
-                if (SecureFileSystem.AllowOwnerWriteFailureForTests)
-                    Directory.CreateDirectory(path);
-                else
-                    Directory.CreateDirectory(path, security);
-                using (var directory = SecureFileSystem.OpenDirectory(path, true))
-                    directory.SetSecurity(security);
+                if (!PathEntryExists(path))
+                {
+                    if (SecureFileSystem.AllowOwnerWriteFailureForTests)
+                        Directory.CreateDirectory(path);
+                    else
+                        Directory.CreateDirectory(path, security);
+                }
+
+                using (var directory = SecureFileSystem.OpenDirectory(path, false))
+                {
+                    EnsureTrustedBeforeSecurityMutation(path, false);
+                    using (var writableDirectory = SecureFileSystem.OpenDirectory(path, true))
+                        writableDirectory.SetSecurity(security);
+                }
             }
             catch (Exception ex)
             {
@@ -283,9 +351,11 @@ namespace WireSockUI
                 throw new IOException(
                     $"WireSock UI configuration directory nesting exceeds {maximumDepth} levels at '{path}'.");
 
-            using (var directoryHandle = SecureFileSystem.OpenDirectory(path, true))
+            using (var directoryHandle = SecureFileSystem.OpenDirectory(path, false))
             {
-                directoryHandle.SetSecurity(CreateAdministratorsOnlyDirectorySecurity());
+                EnsureTrustedBeforeSecurityMutation(path, false);
+                using (var writableDirectory = SecureFileSystem.OpenDirectory(path, true))
+                    writableDirectory.SetSecurity(CreateAdministratorsOnlyDirectorySecurity());
                 EnumerateBoundedChildren(path, ref entries, out var files, out var childDirectories);
 
                 foreach (var file in files)
@@ -298,8 +368,12 @@ namespace WireSockUI
 
                     try
                     {
-                        using (var fileHandle = SecureFileSystem.OpenFile(file, true))
-                            fileHandle.SetSecurity(CreateAdministratorsOnlyFileSecurity());
+                        using (var fileHandle = SecureFileSystem.OpenFile(file, false))
+                        {
+                            EnsureTrustedBeforeSecurityMutation(file, true);
+                            using (var writableFile = SecureFileSystem.OpenFile(file, true))
+                                writableFile.SetSecurity(CreateAdministratorsOnlyFileSecurity());
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -369,6 +443,38 @@ namespace WireSockUI
 
             files = discoveredFiles.ToArray();
             directories = discoveredDirectories.ToArray();
+        }
+
+        private static void EnsureTrustedBeforeSecurityMutation(string path, bool file)
+        {
+            if (SecureFileSystem.AllowOwnerWriteFailureForTests)
+                return;
+
+            var potentiallyUserWritable = file
+                ? Program.IsPotentiallyUserWritableFile(path)
+                : Program.IsPotentiallyUserWritableDirectory(path);
+            if (!potentiallyUserWritable)
+                return;
+
+            throw new UnauthorizedAccessException(
+                $"Refusing to change security on pre-existing WireSock UI {(file ? "file" : "directory")} '{path}' because it is writable by or owned by non-administrative users.");
+        }
+
+        private static bool PathEntryExists(string path)
+        {
+            try
+            {
+                File.GetAttributes(path);
+                return true;
+            }
+            catch (FileNotFoundException)
+            {
+                return false;
+            }
+            catch (DirectoryNotFoundException)
+            {
+                return false;
+            }
         }
 
         private static bool IsReparsePoint(string path)

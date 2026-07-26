@@ -12,6 +12,7 @@ namespace WireSockUI.Native
         private const int EmSetcharformat = WmUser + 68;
 
         private const int EmSetcuebanner = 0x1501;
+        private const uint WmSetredraw = 0x000B;
 
         /* EM_SETCHARFORMAT wparam masks */
         internal const uint ScfSelection = 0x0001;
@@ -27,6 +28,15 @@ namespace WireSockUI.Native
         [DllImport("user32", CharSet = CharSet.Unicode, SetLastError = false)]
         private static extern IntPtr SendMessage(HandleRef hWnd, uint msg, uint wParam,
             [MarshalAs(UnmanagedType.LPWStr)] string lParam);
+
+        [DllImport("user32", CharSet = CharSet.Unicode, SetLastError = false)]
+        private static extern IntPtr SendMessage(HandleRef hWnd, uint msg, IntPtr wParam, IntPtr lParam);
+
+        internal static IDisposable SuspendRedraw(this Control control)
+        {
+            if (control == null) throw new ArgumentNullException(nameof(control));
+            return new RedrawScope(control);
+        }
 
         private static Charformat2W GetCharFormat(RichTextBox richTextBox, bool fSelection)
         {
@@ -72,6 +82,31 @@ namespace WireSockUI.Native
         public static void SetCueBanner(this TextBox textBox, string bannerText)
         {
             SendMessage(new HandleRef(textBox, textBox.Handle), EmSetcuebanner, 0, bannerText);
+        }
+
+        private sealed class RedrawScope : IDisposable
+        {
+            private Control _control;
+
+            internal RedrawScope(Control control)
+            {
+                _control = control;
+                SendMessage(new HandleRef(control, control.Handle), WmSetredraw, IntPtr.Zero, IntPtr.Zero);
+            }
+
+            public void Dispose()
+            {
+                var control = _control;
+                if (control == null)
+                    return;
+
+                _control = null;
+                if (control.IsDisposed || !control.IsHandleCreated)
+                    return;
+
+                SendMessage(new HandleRef(control, control.Handle), WmSetredraw, new IntPtr(1), IntPtr.Zero);
+                control.Invalidate();
+            }
         }
         // the format came from a toolbar, etc. and
         // therefore UI formatting rules should be

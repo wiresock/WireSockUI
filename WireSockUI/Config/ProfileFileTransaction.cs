@@ -370,6 +370,7 @@ namespace WireSockUI.Config
         private static void RecoverInterruptedTransactionsCore(string profileDirectory, string transactionDirectory)
         {
             RecoverLegacyTemporaryProfiles(profileDirectory);
+            CleanupManagedTransactionTemporariesBeforeLimit(transactionDirectory);
             var entries = EnumerateTransactionEntries(transactionDirectory);
             var journals = entries
                 .Where(path => IsManagedJournalName(Path.GetFileName(path)))
@@ -388,6 +389,30 @@ namespace WireSockUI.Config
                 if (IsManagedProfileTemporaryName(fileName) || IsManagedJournalTemporaryName(fileName))
                     DeleteRegularFileIfPresent(path);
             }
+        }
+
+        private static void CleanupManagedTransactionTemporariesBeforeLimit(string transactionDirectory)
+        {
+            var entries = EnumerateTransactionEntries(transactionDirectory, Global.MaxSecuredTreeEntries);
+
+            foreach (var path in entries.Where(path =>
+                         IsManagedJournalTemporaryName(Path.GetFileName(path))))
+                DeleteRegularFileIfPresent(path);
+
+            var journalPaths = entries
+                .Where(path => IsManagedJournalName(Path.GetFileName(path)))
+                .ToArray();
+            if (journalPaths.Length > MaximumTransactionEntries)
+                throw new InvalidDataException(
+                    $"The profile transaction folder contains more than {MaximumTransactionEntries} recovery journals.");
+
+            var referencedTemporaryNames = new HashSet<string>(
+                journalPaths.Select(path => LoadJournal(path).TemporaryFileName),
+                StringComparer.OrdinalIgnoreCase);
+            foreach (var path in entries.Where(path =>
+                         IsManagedProfileTemporaryName(Path.GetFileName(path)) &&
+                         !referencedTemporaryNames.Contains(Path.GetFileName(path))))
+                DeleteRegularFileIfPresent(path);
         }
 
         private static void RecoverLegacyTemporaryProfiles(string profileDirectory)
@@ -452,17 +477,22 @@ namespace WireSockUI.Config
                 $"Profile rename recovery could not find either '{originalFileName}' or '{destinationFileName}'.");
         }
 
-        private static IReadOnlyList<string> EnumerateTransactionEntries(string transactionDirectory)
+        private static IReadOnlyList<string> EnumerateTransactionEntries(
+            string transactionDirectory,
+            int maximumEntries = MaximumTransactionEntries)
         {
+            if (maximumEntries <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maximumEntries));
+
             var entries = new List<string>();
             var enumeratedEntries = 0;
             foreach (var entry in Directory.EnumerateFileSystemEntries(transactionDirectory, "*",
                          SearchOption.TopDirectoryOnly))
             {
                 enumeratedEntries++;
-                if (enumeratedEntries > MaximumTransactionEntries)
+                if (enumeratedEntries > maximumEntries)
                     throw new InvalidDataException(
-                        $"The profile transaction folder contains more than {MaximumTransactionEntries} entries.");
+                        $"The profile transaction folder contains more than {maximumEntries} entries.");
 
                 FileAttributes attributes;
                 try
