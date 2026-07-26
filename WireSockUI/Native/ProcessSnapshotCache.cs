@@ -8,9 +8,11 @@ namespace WireSockUI.Native
 {
     internal sealed class ProcessSnapshotCache
     {
+        private static readonly IReadOnlyList<ProcessEntry> EmptySnapshot =
+            Array.AsReadOnly(Array.Empty<ProcessEntry>());
         private readonly SemaphoreSlim _enumerationGate = new SemaphoreSlim(1, 1);
         private readonly Func<CancellationToken, IReadOnlyList<ProcessEntry>> _snapshotFactory;
-        private ProcessEntry[] _cachedSnapshot;
+        private IReadOnlyList<ProcessEntry> _cachedSnapshot;
 
         internal ProcessSnapshotCache()
             : this(cancellationToken => ProcessList.GetProcessList(cancellationToken).ToArray())
@@ -39,7 +41,10 @@ namespace WireSockUI.Native
                     .ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
 
-                _cachedSnapshot = snapshot?.ToArray() ?? Array.Empty<ProcessEntry>();
+                var entries = snapshot?.ToArray() ?? Array.Empty<ProcessEntry>();
+                _cachedSnapshot = entries.Length == 0
+                    ? EmptySnapshot
+                    : Array.AsReadOnly(entries);
                 return _cachedSnapshot;
             }
             finally

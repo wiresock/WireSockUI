@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Security.Principal;
@@ -212,6 +213,7 @@ namespace WireSockUI.Tests
             var calls = 0;
             var activeFactories = 0;
             var maximumActiveFactories = 0;
+            ProcessEntry[] latestFactorySnapshot = null;
             var cache = new ProcessSnapshotCache(cancellationToken =>
             {
                 var active = Interlocked.Increment(ref activeFactories);
@@ -221,10 +223,11 @@ namespace WireSockUI.Tests
                     Thread.Sleep(25);
                     cancellationToken.ThrowIfCancellationRequested();
                     Interlocked.Increment(ref calls);
-                    return new[]
+                    latestFactorySnapshot = new[]
                     {
                         new ProcessEntry(1, "one.exe", @"C:\one.exe", "S-1-5-21-1")
                     };
+                    return latestFactorySnapshot;
                 }
                 finally
                 {
@@ -243,6 +246,39 @@ namespace WireSockUI.Tests
             var cached = cache.GetSnapshotAsync(false, CancellationToken.None).GetAwaiter().GetResult();
             AssertTrue(calls == 2 && cached.Count == 1,
                 "Expected filter-only refreshes to reuse the most recent process snapshot.");
+            AssertFalse(cached is ProcessEntry[],
+                "Expected callers never to receive the cache's mutable backing array.");
+
+            var mutableView = cached as IList<ProcessEntry>;
+            AssertTrue(mutableView != null,
+                "Expected the snapshot wrapper to expose standard read-only list semantics.");
+            AssertThrows<NotSupportedException>(
+                () => mutableView[0] = new ProcessEntry(
+                    99,
+                    "mutated.exe",
+                    @"C:\mutated.exe",
+                    "S-1-5-21-99"),
+                string.Empty);
+            latestFactorySnapshot[0] = new ProcessEntry(
+                98,
+                "factory-mutated.exe",
+                @"C:\factory-mutated.exe",
+                "S-1-5-21-98");
+
+            var cachedAfterMutationAttempt =
+                cache.GetSnapshotAsync(false, CancellationToken.None).GetAwaiter().GetResult();
+            AssertTrue(ReferenceEquals(cached, cachedAfterMutationAttempt),
+                "Expected cached reads to reuse one immutable wrapper without per-read copying.");
+            AssertEqual("one.exe", cachedAfterMutationAttempt[0].Name);
+
+            var refreshed =
+                cache.GetSnapshotAsync(true, CancellationToken.None).GetAwaiter().GetResult();
+            AssertTrue(calls == 3 && !ReferenceEquals(cached, refreshed),
+                "Expected an explicit refresh to atomically replace the immutable cached snapshot.");
+            AssertTrue(ReferenceEquals(
+                    refreshed,
+                    cache.GetSnapshotAsync(false, CancellationToken.None).GetAwaiter().GetResult()),
+                "Expected reads after refresh to reuse the replacement immutable wrapper.");
 
             using (var cancellation = new CancellationTokenSource())
             {

@@ -6591,7 +6591,7 @@ namespace WireSockUI.Tests
                 definition.Settings.Hidden = false;
                 definition.Settings.AllowDemandStart = true;
                 definition.Settings.DeleteExpiredTaskAfter = TimeSpan.Zero;
-                definition.Settings.Priority = ProcessPriorityClass.BelowNormal;
+                definition.Settings.Priority = FrmSettings.AutoRunTaskPriorityClass;
                 definition.Settings.Volatile = false;
                 definition.Settings.DisallowStartOnRemoteAppSession = false;
                 var logonTrigger = new Microsoft.Win32.TaskScheduler.LogonTrigger
@@ -6609,9 +6609,19 @@ namespace WireSockUI.Tests
                 AssertTrue(FrmSettings.IsTaskDefinitionOwnedByExecutable(
                         definition, true, executablePath),
                     "Expected the exact elevated logon task shape to be recognized.");
+                var serializedPriority = XDocument.Parse(definition.XmlText)
+                    .Descendants()
+                    .Single(element => element.Name.LocalName == "Priority");
+                AssertEqual(7, XmlConvert.ToInt32(serializedPriority.Value));
                 AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
                         definition, false, executablePath),
                     "Expected a disabled task not to be reported as active autorun.");
+
+                definition.Settings.Priority = ProcessPriorityClass.Normal;
+                AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(
+                        definition, true, executablePath),
+                    "Expected a task with a different scheduler priority not to be accepted as canonical.");
+                definition.Settings.Priority = FrmSettings.AutoRunTaskPriorityClass;
 
                 definition.Settings.ExecutionTimeLimit = TimeSpan.FromHours(72);
                 AssertFalse(FrmSettings.IsTaskDefinitionOwnedByExecutable(

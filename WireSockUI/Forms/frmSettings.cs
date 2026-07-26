@@ -20,6 +20,8 @@ namespace WireSockUI.Forms
     public partial class FrmSettings : Form
     {
         private const int AutoRunInspectionTimeoutMilliseconds = 5000;
+        // TaskScheduler maps BelowNormal to the native Task Scheduler 2.0 priority value 7.
+        internal const ProcessPriorityClass AutoRunTaskPriorityClass = ProcessPriorityClass.BelowNormal;
         internal const string AutoRunTaskSecurityDescriptorSddl =
             "O:BAG:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)";
         private static readonly SemaphoreSlim AutoRunOperationGate = new SemaphoreSlim(1, 1);
@@ -591,7 +593,7 @@ namespace WireSockUI.Forms
                     td.Settings.Hidden = false;
                     td.Settings.AllowDemandStart = true;
                     td.Settings.DeleteExpiredTaskAfter = TimeSpan.Zero;
-                    td.Settings.Priority = ProcessPriorityClass.BelowNormal;
+                    td.Settings.Priority = AutoRunTaskPriorityClass;
                     td.Settings.Volatile = false;
                     td.Settings.DisallowStartOnRemoteAppSession = false;
 
@@ -869,7 +871,7 @@ namespace WireSockUI.Forms
                 settings.Hidden ||
                 !settings.AllowDemandStart ||
                 settings.DeleteExpiredTaskAfter != TimeSpan.Zero ||
-                settings.Priority != ProcessPriorityClass.BelowNormal ||
+                settings.Priority != AutoRunTaskPriorityClass ||
                 settings.Volatile ||
                 settings.DisallowStartOnRemoteAppSession ||
                 !settings.RunOnlyIfLoggedOn ||
