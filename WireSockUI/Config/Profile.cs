@@ -177,7 +177,11 @@ namespace WireSockUI.Config
             get => _address;
             set
             {
-                ValidateAddresses("Interface", "Address", value, IpHelper.IsValidSubnetOrSingleIpAddress);
+                if (!ValidateAddresses("Interface", "Address", value,
+                        IpHelper.IsValidSubnetOrSingleIpAddress, true))
+                    throw new FormatException(
+                        "\"Address\" in \"Interface\" must contain at least one address.");
+
                 _address = value;
             }
         }
@@ -301,7 +305,11 @@ namespace WireSockUI.Config
             get => _allowedIPs;
             set
             {
-                ValidateAddresses("Peer", "AllowedIPs", value, IpHelper.IsValidSubnetOrSingleIpAddress);
+                if (!ValidateAddresses("Peer", "AllowedIPs", value,
+                        IpHelper.IsValidSubnetOrSingleIpAddress, true))
+                    throw new FormatException(
+                        "\"AllowedIPs\" in \"Peer\" must contain at least one address.");
+
                 _allowedIPs = value;
             }
         }
@@ -356,8 +364,10 @@ namespace WireSockUI.Config
             get => _disallowedIPs;
             set
             {
-                ValidateAddresses("Peer", "DisallowedIPs", value, IpHelper.IsValidSubnetOrSingleIpAddress);
-                _disallowedIPs = string.IsNullOrWhiteSpace(value) ? null : value;
+                _disallowedIPs = ValidateAddresses("Peer", "DisallowedIPs", value,
+                    IpHelper.IsValidSubnetOrSingleIpAddress, true)
+                    ? value
+                    : null;
             }
         }
 
@@ -432,18 +442,32 @@ namespace WireSockUI.Config
                     $"\"{key}\" in \"{section}\", invalid key length, only 256-bit keys are supported.");
         }
 
-        internal static void ValidateAddresses(string section, string key, string keyValue,
-            Func<string, bool> validator)
+        internal static bool ValidateAddresses(string section, string key, string keyValue,
+            Func<string, bool> validator, bool ignoreBlankItems = false)
         {
-            if (string.IsNullOrWhiteSpace(keyValue)) return;
+            if (string.IsNullOrWhiteSpace(keyValue)) return false;
 
+            var hasAddress = false;
             foreach (var value in keyValue.Split(','))
             {
                 var trimmedValue = value.Trim();
-                if (string.IsNullOrWhiteSpace(trimmedValue) || !validator(trimmedValue))
+                if (string.IsNullOrWhiteSpace(trimmedValue))
+                {
+                    if (ignoreBlankItems)
+                        continue;
+
                     throw new FormatException(
                         $"\"{key}\" in \"{section}\", invalid address \"{EscapeDiagnosticToken(value)}\".");
+                }
+
+                if (!validator(trimmedValue))
+                    throw new FormatException(
+                        $"\"{key}\" in \"{section}\", invalid address \"{EscapeDiagnosticToken(value)}\".");
+
+                hasAddress = true;
             }
+
+            return hasAddress;
         }
 
         internal static void ValidateBool(string section, string key, string keyValue)
@@ -668,13 +692,13 @@ namespace WireSockUI.Config
             var profiles = new List<string>();
             var catalogEntries = 0;
 
-            foreach (var file in Directory.EnumerateFiles(
+            foreach (var file in Directory.EnumerateFileSystemEntries(
                          Global.ConfigsFolder, "*", SearchOption.TopDirectoryOnly))
             {
                 catalogEntries++;
                 if (catalogEntries > MaxProfileCatalogEntries)
                     throw new InvalidDataException(
-                        $"The profile folder contains more than {MaxProfileCatalogEntries} files. Remove unused files before continuing.");
+                        $"The profile folder contains more than {MaxProfileCatalogEntries} entries. Remove unused files or directories before continuing.");
 
                 if (!file.EndsWith(".conf", StringComparison.OrdinalIgnoreCase))
                     continue;
