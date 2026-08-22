@@ -146,8 +146,8 @@ See [WireSockUI.Installer/README.md](WireSockUI.Installer/README.md) for install
 ## Runtime and release notes
 
 - Start the native `WireSockUI.exe`; `WireSockUI.Managed.dll` is not an application entry point.
-- Profiles are stored under `%ProgramData%\WireSockUI\Configs` with administrator-only permissions.
-- Diagnostic logs are written to `%ProgramData%\WireSockUI\Logs\WireSockUI.log`, bounded and rotated, with credentials and private keys redacted.
+- Profiles are normally stored under `%ProgramData%\WireSockUI\Configs` with administrator-only permissions. If that folder does not exist and the system ProgramData ACL is unsafe, WireSockUI uses an administrator-only data directory in the protected Program Files hierarchy instead of refusing to start. The fallback is shared across application architectures and remains selected on later launches; WireSockUI never copies data from an unsafe pre-existing ProgramData tree.
+- Diagnostic logs are normally written to `%ProgramData%\WireSockUI\Logs\WireSockUI.log`; they follow the selected secure data root, remain bounded and rotated, and redact credentials and private keys.
 - WireSockUI discovers the SDK from registered WireSock Secure Connect, Secure Connect Pro, and legacy CLI locations, then validates the architecture and protected installation path before loading it.
 - Official releases contain six per-machine MSIs: x86, x64, and ARM64 in `uwp` and `no-uwp` variants. The MSI and its application modules are unsigned by policy; no signing certificate or signing environment variable is required.
 - Each release includes SHA-256 sidecars, validation metadata, an SPDX SBOM, and GitHub artifact-provenance attestations.

@@ -169,6 +169,15 @@ namespace WireSockUI.Tests
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
                 { "Global rejects unavailable or relative special folders", GlobalRejectsInvalidSpecialFolderRoots },
                 { "Global permits redirected legacy ApplicationData only", GlobalPermitsRedirectedLegacyApplicationDataOnly },
+                { "Global prefers trusted ProgramData storage", GlobalPrefersTrustedProgramDataStorage },
+                { "Global resolves architecture-stable Program Files storage", GlobalResolvesArchitectureStableProgramFilesStorage },
+                { "Global falls back to protected Program Files storage", GlobalFallsBackToProtectedProgramFilesStorage },
+                { "Global keeps an existing trusted fallback", GlobalKeepsExistingTrustedFallback },
+                { "Global rejects an unsafe existing fallback", GlobalRejectsUnsafeExistingFallback },
+                { "Global does not launder an unsafe fallback ACL", GlobalDoesNotLaunderUnsafeFallbackAcl },
+                { "Global does not bypass an unsafe existing preferred tree", GlobalDoesNotBypassUnsafeExistingPreferredTree },
+                { "Global rebases every secure storage path", GlobalRebasesEverySecureStoragePath },
+                { "Global rejects unavailable preferred and fallback storage", GlobalRejectsUnavailablePreferredAndFallbackStorage },
                 { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
                 { "Global rejects untrusted pre-existing secure data without laundering ACLs", GlobalRejectsUntrustedPreexistingSecureData },
                 { "Global fails closed on configuration directory reparse points", GlobalFailsClosedOnConfigurationDirectoryReparsePoints },
@@ -1891,6 +1900,274 @@ namespace WireSockUI.Tests
                 Global.ConfigsFolder = originalConfigsFolder;
                 Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
             }
+        }
+
+        private static void GlobalPrefersTrustedProgramDataStorage()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            const string preferredNotifications = @"C:\ProgramData\WireSockUI-Notifications";
+            var validationCount = 0;
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    validationCount++;
+                    diagnostic = null;
+                    return string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase);
+                };
+
+            var selection = Global.ResolveSecureStoragePaths(
+                preferredRoot,
+                preferredNotifications,
+                @"C:\Program Files",
+                validator,
+                path => false);
+
+            AssertEqual(preferredRoot, selection.SecureMainFolder);
+            AssertEqual(preferredNotifications, selection.NotificationAssetsFolder);
+            AssertFalse(selection.UsesFallback, "Expected trusted ProgramData storage to remain preferred.");
+            AssertEqual(1, validationCount);
+        }
+
+        private static void GlobalFallsBackToProtectedProgramFilesStorage()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            const string fallbackParent = @"C:\Program Files";
+            const string expectedFallback = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            const string expectedNotifications =
+                @"C:\Program Files\WireSock Foundation WireSock UI Notifications";
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    if (string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase))
+                    {
+                        diagnostic = "ProgramData grants Everyone full control.";
+                        return false;
+                    }
+
+                    diagnostic = null;
+                    return string.Equals(path, expectedFallback, StringComparison.OrdinalIgnoreCase);
+                };
+
+            var selection = Global.ResolveSecureStoragePaths(
+                preferredRoot,
+                @"C:\ProgramData\WireSockUI-Notifications",
+                fallbackParent,
+                validator,
+                path => false);
+
+            AssertEqual(expectedFallback, selection.SecureMainFolder);
+            AssertEqual(expectedNotifications, selection.NotificationAssetsFolder);
+            AssertTrue(selection.UsesFallback, "Expected unsafe ProgramData storage to select the fallback.");
+            AssertTrue(
+                selection.FallbackDiagnostic.IndexOf("Everyone full control", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Expected the preferred-path failure to be retained for diagnostics.");
+            AssertFalse(
+                selection.SecureMainFolder.StartsWith(
+                    @"C:\Program Files\WireSock Foundation WireSock UI" + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase),
+                "Mutable fallback data must remain outside the native application payload.");
+            AssertFalse(
+                selection.NotificationAssetsFolder.StartsWith(
+                    @"C:\Program Files\WireSock Foundation WireSock UI" + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase),
+                "Mutable notification assets must remain outside the native application payload.");
+            AssertEqual(fallbackParent, Path.GetDirectoryName(selection.SecureMainFolder));
+            AssertEqual(fallbackParent, Path.GetDirectoryName(selection.NotificationAssetsFolder));
+        }
+
+        private static void GlobalResolvesArchitectureStableProgramFilesStorage()
+        {
+            var programFilesRoot = Global.GetArchitectureStableProgramFilesRoot();
+
+            AssertTrue(Path.IsPathRooted(programFilesRoot),
+                "Expected Windows to return an absolute Program Files folder.");
+            AssertTrue(Directory.Exists(programFilesRoot),
+                "Expected the architecture-stable Program Files folder to exist.");
+
+            if (Environment.Is64BitOperatingSystem && !Environment.Is64BitProcess)
+            {
+                AssertFalse(string.Equals(
+                        programFilesRoot,
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        StringComparison.OrdinalIgnoreCase),
+                    "A 32-bit process on 64-bit Windows must not redirect fallback data to Program Files (x86).");
+            }
+        }
+
+        private static void GlobalKeepsExistingTrustedFallback()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            const string fallbackRoot = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            var preferredValidated = false;
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = null;
+                    if (string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase))
+                        preferredValidated = true;
+                    return true;
+                };
+
+            var selection = Global.ResolveSecureStoragePaths(
+                preferredRoot,
+                @"C:\ProgramData\WireSockUI-Notifications",
+                @"C:\Program Files",
+                validator,
+                path => string.Equals(path, fallbackRoot, StringComparison.OrdinalIgnoreCase));
+
+            AssertTrue(selection.UsesFallback, "Expected an existing trusted fallback to remain selected.");
+            AssertEqual(fallbackRoot, selection.SecureMainFolder);
+            AssertFalse(preferredValidated, "Sticky fallback selection should not probe or switch to ProgramData.");
+        }
+
+        private static void GlobalRejectsUnsafeExistingFallback()
+        {
+            const string fallbackRoot = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = "Fallback is writable by Users.";
+                    return false;
+                };
+
+            AssertThrows<UnauthorizedAccessException>(
+                () => Global.ResolveSecureStoragePaths(
+                    @"C:\ProgramData\WireSockUI",
+                    @"C:\ProgramData\WireSockUI-Notifications",
+                    @"C:\Program Files",
+                    validator,
+                    path => string.Equals(path, fallbackRoot, StringComparison.OrdinalIgnoreCase)),
+                "existing protected WireSock UI fallback");
+        }
+
+        private static void GlobalDoesNotLaunderUnsafeFallbackAcl()
+        {
+            var fallbackParent = Path.Combine(
+                Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var fallbackRoot = Path.Combine(
+                fallbackParent, "WireSock Foundation WireSock UI Data");
+            var sentinel = Path.Combine(fallbackRoot, "do-not-modify.txt");
+            Directory.CreateDirectory(fallbackRoot);
+            File.WriteAllText(sentinel, "preserve me");
+
+            try
+            {
+                var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+                var security = Directory.GetAccessControl(fallbackRoot);
+                security.AddAccessRule(new FileSystemAccessRule(
+                    users,
+                    FileSystemRights.Modify,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+                Directory.SetAccessControl(fallbackRoot, security);
+                const AccessControlSections comparedSections =
+                    AccessControlSections.Access |
+                    AccessControlSections.Owner |
+                    AccessControlSections.Group;
+                var originalSecurity = Directory.GetAccessControl(fallbackRoot)
+                    .GetSecurityDescriptorSddlForm(comparedSections);
+
+                AssertThrows<UnauthorizedAccessException>(
+                    () => Global.ResolveSecureStoragePaths(
+                        @"C:\ProgramData\WireSockUI",
+                        @"C:\ProgramData\WireSockUI-Notifications",
+                        fallbackParent,
+                        WireSockUI.Program.TryValidateTrustedDirectoryCreationPath,
+                        path => string.Equals(path, fallbackRoot, StringComparison.OrdinalIgnoreCase)),
+                    "existing protected WireSock UI fallback");
+
+                AssertEqual("preserve me", File.ReadAllText(sentinel));
+                AssertEqual(
+                    originalSecurity,
+                    Directory.GetAccessControl(fallbackRoot)
+                        .GetSecurityDescriptorSddlForm(comparedSections));
+            }
+            finally
+            {
+                TryDeleteDirectory(fallbackParent, true);
+            }
+        }
+
+        private static void GlobalDoesNotBypassUnsafeExistingPreferredTree()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase)
+                        ? "Existing data is owned by a non-administrative user."
+                        : null;
+                    return !string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase);
+                };
+
+            AssertThrows<UnauthorizedAccessException>(
+                () => Global.ResolveSecureStoragePaths(
+                    preferredRoot,
+                    @"C:\ProgramData\WireSockUI-Notifications",
+                    @"C:\Program Files",
+                    validator,
+                    path => string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase)),
+                "existing preferred WireSock UI data directory");
+        }
+
+        private static void GlobalRebasesEverySecureStoragePath()
+        {
+            var originalSelection = new Global.SecureStoragePaths(
+                Global.SecureMainFolder,
+                Global.NotificationAssetsFolder,
+                Global.IsUsingSecureStorageFallback,
+                Global.SecureStorageFallbackDiagnostic);
+            const string fallbackRoot = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            const string fallbackNotifications =
+                @"C:\Program Files\WireSock Foundation WireSock UI Notifications";
+
+            try
+            {
+                Global.ApplySecureStoragePaths(new Global.SecureStoragePaths(
+                    fallbackRoot,
+                    fallbackNotifications,
+                    true,
+                    "test fallback"));
+
+                AssertEqual(fallbackRoot, Global.SecureMainFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Configs"), Global.ConfigsFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Configs", ".transactions"),
+                    Global.ProfileTransactionsFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "PendingLegacyProfiles"),
+                    Global.PendingLegacyProfilesFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Logs"), Global.DiagnosticsFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Logs", "WireSockUI.log"), Global.DiagnosticLogPath);
+                AssertEqual(Path.Combine(fallbackRoot, "NativeRecoveryRequired.txt"),
+                    Global.NativeRecoveryMarkerPath);
+                AssertEqual(fallbackNotifications, Global.NotificationAssetsFolder);
+                AssertTrue(Global.IsUsingSecureStorageFallback, "Expected fallback state to be applied.");
+            }
+            finally
+            {
+                Global.ApplySecureStoragePaths(originalSelection);
+            }
+        }
+
+        private static void GlobalRejectsUnavailablePreferredAndFallbackStorage()
+        {
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = path.IndexOf("ProgramData", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? "ProgramData is unsafe."
+                        : "The Program Files root is unsafe.";
+                    return false;
+                };
+
+            AssertThrows<UnauthorizedAccessException>(
+                () => Global.ResolveSecureStoragePaths(
+                    @"C:\ProgramData\WireSockUI",
+                    @"C:\ProgramData\WireSockUI-Notifications",
+                    @"C:\Program Files",
+                    validator,
+                    path => false),
+                "Program Files root is unsafe");
         }
 
         private static void ReleaseVersionParserHandlesSemVerTags()
