@@ -87,12 +87,13 @@ active identities omitted by the complete six-package release matrix.
   `%ProgramData%\WireSockUI` tree. If that application folder is absent and
   the ProgramData parent has an unsafe ACL, the elevated application creates
   an administrator-only data directory in the architecture-stable Program
-  Files hierarchy. An existing unsafe `%ProgramData%\WireSockUI` tree remains
-  a startup error and is never bypassed or repaired automatically. This fallback
-  is deliberately outside the MSI payload so mutable data is not treated as an
-  installed file and is retained across repair or uninstall. Once selected, it
-  remains the active data root on later launches. WireSock UI never copies profiles or
-  settings from an unsafe pre-existing ProgramData tree.
+  Files hierarchy. Before a fallback has been established, an existing unsafe
+  `%ProgramData%\WireSockUI` tree remains a startup error and is never repaired
+  or copied automatically. This fallback is deliberately outside the MSI payload
+  so mutable data is not treated as an installed file and is retained across
+  repair or uninstall. Once selected, it remains the active data root on later
+  launches; the ProgramData tree is no longer consulted, preventing the unsafe
+  parent from reintroducing the startup failure.
 - The interactive installer exposes Start-menu and desktop shortcuts as
   independent optional features. Both are selected by default, including for
   unattended installs, and can be changed later through Windows Installer
