@@ -83,6 +83,16 @@ active identities omitted by the complete six-package release matrix.
   full control; built-in Users receive read/execute only. The native host still
   validates the actual owner, DACL, link count, reparse state, hashes, and
   embedded payload manifest at every launch.
+- Runtime profiles and diagnostics normally remain under the protected
+  `%ProgramData%\WireSockUI` tree. If that application folder is absent and
+  the ProgramData parent has an unsafe ACL, the elevated application creates
+  an administrator-only data directory in the architecture-stable Program
+  Files hierarchy. An existing unsafe `%ProgramData%\WireSockUI` tree remains
+  a startup error and is never bypassed or repaired automatically. This fallback
+  is deliberately outside the MSI payload so mutable data is not treated as an
+  installed file and is retained across repair or uninstall. Once selected, it
+  remains the active data root on later launches. WireSock UI never copies profiles or
+  settings from an unsafe pre-existing ProgramData tree.
 - The interactive installer exposes Start-menu and desktop shortcuts as
   independent optional features. Both are selected by default, including for
   unattended installs, and can be changed later through Windows Installer
@@ -215,8 +225,9 @@ cleanup belongs to the verified application lifecycle.
 Uninstall removes MSI-owned runtime files, installer registry state, and the
 all-users Start-menu and desktop shortcuts. It does not recursively delete
 unknown files and does not remove application-created profiles, protected
-preferences, recovery state, or logs under `%ProgramData%`. It also does not
-remove another user's Task Scheduler autorun definition. Settings from the former managed-EXE
+preferences, recovery state, or logs under `%ProgramData%` or the protected
+Program Files fallback directories. It also does not remove another user's
+Task Scheduler autorun definition. Settings from the former managed-EXE
 `LocalFileSettingsProvider` identity are migrated separately by the application
 through a bounded, allowlisted reader; autorun is never migrated from
 `user.config`.

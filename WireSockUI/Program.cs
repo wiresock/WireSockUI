@@ -207,8 +207,15 @@ namespace WireSockUI
 
             try
             {
+                Global.SelectSecureStorageRoot();
                 Global.EnsureApplicationFolders();
                 SecureRollingTraceListener.Initialize();
+                if (Global.IsUsingSecureStorageFallback)
+                {
+                    Trace.TraceWarning(
+                        $"The preferred ProgramData storage location is unsafe; using protected fallback storage at '{Global.SecureMainFolder}'. " +
+                        Global.SecureStorageFallbackDiagnostic);
+                }
                 ProfileFileTransaction.RecoverInterruptedTransactions();
             }
             catch (Exception ex)
