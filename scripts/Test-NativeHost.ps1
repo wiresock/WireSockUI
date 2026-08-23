@@ -419,6 +419,9 @@ if (-not $SkipBcryptSentinel) {
             -Destination $testLauncherPath
         Set-PrivateTestTreeAcl -Root $testRoot
         Invoke-NativeHostProbe -Path $testLauncherPath
+        Invoke-NativeHostProbe `
+            -Path $testLauncherPath `
+            -ExpectManagedBoundaryFailure
 
         Initialize-VisualCppEnvironment -Platform $platform
         $sentinelSourcePath = Join-Path $buildDirectory 'bcrypt-sentinel.cpp'
@@ -582,9 +585,6 @@ extern "C" LONG WINAPI SentinelFinishHash(void*, unsigned char*, ULONG, ULONG)
         Invoke-NativeHostProbe `
             -Path $testLauncherPath `
             -BcryptSentinelMarker $sentinelMarker
-        Invoke-NativeHostProbe `
-            -Path $testLauncherPath `
-            -ExpectManagedBoundaryFailure
         if (Test-Path -LiteralPath $sentinelMarker) {
             throw 'The native loader executed an app-local bcrypt.dll before wWinMain.'
         }
