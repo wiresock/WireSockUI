@@ -135,6 +135,7 @@ namespace WireSockUI.Forms
 
             // Update the list of available configurations.
             LoadProfiles();
+            trayIcon.Visible = true;
         }
 
         internal static string BuildWindowTitle(string productName, string informationalVersion)
@@ -271,10 +272,7 @@ namespace WireSockUI.Forms
 
         private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
         {
-            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
-            {
-                return windowsIcon?.ToBitmap();
-            }
+            return WindowsIcons.GetWindowsIconBitmap(icon, size);
         }
 
         private void SetOwnedMenuImage(ToolStripItem item, WindowsIcons.Icons icon)
@@ -287,10 +285,18 @@ namespace WireSockUI.Forms
 
         private void AddProfileIcon(string key, WindowsIcons.Icons icon, int size)
         {
-            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+            try
             {
-                if (windowsIcon != null)
-                    imlProfiles.Images.AddClonedIcon(key, windowsIcon);
+                using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+                {
+                    if (windowsIcon != null)
+                        imlProfiles.Images.AddClonedIcon(key, windowsIcon);
+                }
+            }
+            catch (Exception ex) when (WindowsIcons.IsRecoverableIconException(ex))
+            {
+                Trace.TraceWarning(
+                    $"Unable to load decorative Windows icon {icon} for this Windows release: {ex.Message}");
             }
         }
 

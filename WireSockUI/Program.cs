@@ -30,6 +30,9 @@ namespace WireSockUI
         private const uint LoadLibrarySearchSystem32 = 0x00000800;
         private const uint LoadLibrarySearchUserDirs = 0x00000400;
         private const uint FixedDriveType = 3;
+        private const int HostedMainFailureExitCode = 1;
+        private const int NativeHostSelfTestFailureExitCode = 31;
+        private const int MaximumStartupDiagnosticCharacters = 2048;
 
         private static IntPtr _wireSockLibraryHandle = IntPtr.Zero;
         private static IntPtr _wireSockLibraryDirectoryCookie = IntPtr.Zero;
@@ -107,8 +110,71 @@ namespace WireSockUI
         [STAThread]
         public static int HostedMain(string hostedArgument)
         {
+            var nativeHostSelfTestRequested = false;
+            try
+            {
+                nativeHostSelfTestRequested = string.Equals(
+                    hostedArgument, NativeHostSelfTestToken, StringComparison.Ordinal);
+                return ExecuteHostedMainBoundary(
+                    hostedArgument,
+                    HostedMainCore,
+                    exception => ReportUnhandledHostedMainFailure(
+                        exception, nativeHostSelfTestRequested),
+                    nativeHostSelfTestRequested
+                        ? NativeHostSelfTestFailureExitCode
+                        : HostedMainFailureExitCode);
+            }
+            catch (Exception ex)
+            {
+                return CompleteHostedMainFailure(ex, nativeHostSelfTestRequested);
+            }
+        }
+
+        internal static int ExecuteHostedMainBoundary(
+            string hostedArgument,
+            Func<string, int> hostedMain,
+            Action<Exception> reportFailure,
+            int failureExitCode)
+        {
+            if (hostedMain == null) throw new ArgumentNullException(nameof(hostedMain));
+            if (reportFailure == null) throw new ArgumentNullException(nameof(reportFailure));
+
+            try
+            {
+                return hostedMain(hostedArgument);
+            }
+            catch (Exception ex)
+            {
+                try
+                {
+                    reportFailure(ex);
+                }
+                catch
+                {
+                    // The CLR hosting contract must receive an integer result
+                    // even when diagnostics or the startup-error UI also fail.
+                }
+
+                return failureExitCode;
+            }
+        }
+
+        private static int HostedMainCore(string hostedArgument)
+        {
             var nativeHostSelfTestRequested = string.Equals(
                 hostedArgument, NativeHostSelfTestToken, StringComparison.Ordinal);
+#if DEBUG
+            if (nativeHostSelfTestRequested &&
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "WIRESOCKUI_DEVELOPMENT_MANAGED_BOUNDARY_FAILURE"),
+                    "1",
+                    StringComparison.Ordinal))
+            {
+                throw new ArgumentException(
+                    "Injected managed native-host boundary failure.");
+            }
+#endif
             if (!TryValidateApplicationPayload(Assembly.GetExecutingAssembly().Location, out var payloadDiagnostic))
             {
                 return ReportStartupFailure(
@@ -217,6 +283,7 @@ namespace WireSockUI
                         Global.SecureStorageFallbackDiagnostic);
                 }
                 ProfileFileTransaction.RecoverInterruptedTransactions();
+                Trace.TraceInformation("WireSock UI startup phase completed: secure data and diagnostics.");
             }
             catch (Exception ex)
             {
@@ -231,6 +298,7 @@ namespace WireSockUI
             {
                 UpgradeUserSettings();
                 InitializePrivilegedSettings();
+                Trace.TraceInformation("WireSock UI startup phase completed: application settings.");
             }
             catch (Exception ex)
             {
@@ -255,6 +323,7 @@ namespace WireSockUI
                     Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
+            Trace.TraceInformation("WireSock UI startup phase started: WireSock SDK discovery.");
             if (!IsWireSockInstalled(out var wireSockDiagnostic, out var installationCandidateFound))
             {
                 var message = string.IsNullOrWhiteSpace(wireSockDiagnostic)
@@ -268,8 +337,99 @@ namespace WireSockUI
                 return 1;
             }
 
-            Application.Run(new FrmMain());
+            Trace.TraceInformation("WireSock UI startup phase completed: WireSock SDK discovery.");
+            Trace.TraceInformation("WireSock UI startup phase started: main window construction.");
+            using (var mainForm = new FrmMain())
+            {
+                Trace.TraceInformation("WireSock UI startup phase completed: main window construction.");
+                Application.Run(mainForm);
+            }
             return 0;
+        }
+
+        private static int CompleteHostedMainFailure(
+            Exception exception,
+            bool nativeHostSelfTestRequested)
+        {
+            try
+            {
+                ReportUnhandledHostedMainFailure(
+                    exception, nativeHostSelfTestRequested);
+            }
+            catch
+            {
+                // Nothing from managed startup, including diagnostics, may
+                // escape through ExecuteInDefaultAppDomain as an HRESULT.
+            }
+
+            return nativeHostSelfTestRequested
+                ? NativeHostSelfTestFailureExitCode
+                : HostedMainFailureExitCode;
+        }
+
+        private static void ReportUnhandledHostedMainFailure(
+            Exception exception,
+            bool nativeHostSelfTestRequested)
+        {
+            var diagnostic = FormatStartupException(exception);
+            try
+            {
+                Trace.TraceError($"Unhandled managed startup exception: {exception}");
+                Trace.Flush();
+            }
+            catch
+            {
+                // The secure trace listener may not have initialized yet.
+            }
+
+            if (nativeHostSelfTestRequested)
+            {
+                WriteNativeHostSelfTestDiagnostic(
+                    $"The managed native-host entry point failed: {diagnostic}");
+                return;
+            }
+
+            try
+            {
+                MessageBox.Show(
+                    $"WireSock UI encountered an unexpected startup error." +
+                    $"{Environment.NewLine}{Environment.NewLine}{diagnostic}" +
+                    $"{Environment.NewLine}{Environment.NewLine}" +
+                    "See the WireSockUI diagnostic log for details.",
+                    "WireSock UI startup error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+            }
+            catch
+            {
+                // Never allow error reporting to cross the managed host boundary.
+            }
+        }
+
+        internal static string FormatStartupException(Exception exception)
+        {
+            if (exception == null)
+                return "An unknown managed startup error occurred.";
+
+            string typeName;
+            string message;
+            try
+            {
+                typeName = exception.GetType().FullName ?? exception.GetType().Name;
+                message = exception.Message ?? string.Empty;
+            }
+            catch
+            {
+                return "A managed startup exception could not be described.";
+            }
+
+            var diagnostic = string.IsNullOrWhiteSpace(message)
+                ? typeName
+                : $"{typeName}: {message}";
+            if (diagnostic.Length <= MaximumStartupDiagnosticCharacters)
+                return diagnostic;
+
+            return diagnostic.Substring(0, MaximumStartupDiagnosticCharacters) + "...";
         }
 
         private static int ReportStartupFailure(

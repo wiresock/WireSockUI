@@ -110,7 +110,7 @@ namespace WireSockUI.Forms
             // 
             this.trayIcon.ContextMenuStrip = this.mnuContext;
             this.trayIcon.Text = "WireSock: Inactive";
-            this.trayIcon.Visible = true;
+            this.trayIcon.Visible = false;
             this.trayIcon.DoubleClick += new System.EventHandler(this.OnFormShow);
             // 
             // mnuContext

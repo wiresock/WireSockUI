@@ -201,6 +201,8 @@ namespace WireSockUI.Tests
                 { "Program restricts trusted owner SIDs", ProgramRestrictsTrustedOwnerSids },
                 { "Program checks elevation without token-access failures", ProgramChecksElevationWithoutTokenAccessFailures },
                 { "Program rejects over-the-shoulder elevation identities", ProgramRejectsOverTheShoulderElevationIdentities },
+                { "Managed host boundary returns deterministic startup failures", ManagedHostBoundaryReturnsDeterministicStartupFailures },
+                { "Windows shell icons are optional on legacy Windows", WindowsShellIconsAreOptionalOnLegacyWindows },
                 { "Program rejects replaceable trusted path ancestors", ProgramRejectsReplaceableTrustedPathAncestors },
                 { "Program rejects protected directory creation below writable parents", ProgramRejectsProtectedDirectoryCreationBelowWritableParents },
                 { "Program permits one protected leaf below a trusted shared root", ProgramPermitsSingleProtectedLeafBelowTrustedSharedRoot },
@@ -7775,6 +7777,120 @@ namespace WireSockUI.Tests
                 AssertTrue(images.Images.ContainsKey("profile"),
                     "Expected the cloned icon to retain its profile key.");
             }
+        }
+
+        private static void ManagedHostBoundaryReturnsDeterministicStartupFailures()
+        {
+            var hostedMain = typeof(WireSockUI.Program).GetMethod(
+                "HostedMain",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { typeof(string) },
+                null);
+            AssertTrue(hostedMain != null,
+                "Expected the CLR host to find one public static HostedMain(string) method.");
+            AssertTrue(hostedMain.ReturnType == typeof(int),
+                "Expected the managed host entry point to return an integer exit code.");
+            AssertTrue(hostedMain.GetCustomAttributes(typeof(STAThreadAttribute), false).Any(),
+                "Expected the managed host entry point to retain its STA contract.");
+
+            Exception reported = null;
+            var success = WireSockUI.Program.ExecuteHostedMainBoundary(
+                "normal",
+                argument => string.Equals(argument, "normal", StringComparison.Ordinal) ? 17 : 18,
+                exception => reported = exception,
+                71);
+            AssertEqual(17, success);
+            AssertTrue(reported == null, "A successful managed entry point must not report a failure.");
+
+            var failure = new ArgumentException("Windows 7 startup failure");
+            var failed = WireSockUI.Program.ExecuteHostedMainBoundary(
+                "normal",
+                argument =>
+                {
+                    throw failure;
+                },
+                exception => reported = exception,
+                72);
+            AssertEqual(72, failed);
+            AssertTrue(ReferenceEquals(failure, reported),
+                "Expected the host boundary to report the original managed exception.");
+
+            var reporterFailed = WireSockUI.Program.ExecuteHostedMainBoundary(
+                "normal",
+                argument =>
+                {
+                    throw new InvalidOperationException("managed failure");
+                },
+                exception =>
+                {
+                    throw new InvalidOperationException("reporter failure");
+                },
+                73);
+            AssertEqual(73, reporterFailed);
+
+            var formatted = WireSockUI.Program.FormatStartupException(
+                new ArgumentException(new string('x', 4096)));
+            AssertTrue(formatted.StartsWith(
+                    typeof(ArgumentException).FullName + ": ",
+                    StringComparison.Ordinal),
+                "Expected the bounded startup diagnostic to identify the exception type.");
+            AssertTrue(formatted.Length <= 2051,
+                "Expected the startup diagnostic to remain bounded.");
+            AssertEqual(
+                "An unknown managed startup error occurred.",
+                WireSockUI.Program.FormatStartupException(null));
+        }
+
+        private static void WindowsShellIconsAreOptionalOnLegacyWindows()
+        {
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new ArgumentException("invalid legacy icon")),
+                "Legacy icon format failures should be recoverable.");
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new ExternalException("GDI rejected icon")),
+                "GDI conversion failures should be recoverable.");
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new IOException("resource unavailable")),
+                "Shell resource I/O failures should be recoverable.");
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new UnauthorizedAccessException("resource unavailable")),
+                "Shell resource access failures should be recoverable.");
+            AssertTrue(!WindowsIcons.IsRecoverableIconException(
+                    new InvalidOperationException("programming error")),
+                "Unrelated programming errors must not be swallowed.");
+
+            using (var missingIcon = WindowsIcons.TryLoadOptionalResource<Icon>(() =>
+                   {
+                       throw new ArgumentException("legacy icon conversion failed");
+                   }))
+            {
+                AssertTrue(missingIcon == null,
+                    "A rejected legacy shell icon must remain optional.");
+            }
+            using (var missingBitmap = WindowsIcons.TryLoadOptionalResource<Bitmap>(() =>
+                   {
+                       throw new ExternalException("legacy bitmap conversion failed");
+                   }))
+            {
+                AssertTrue(missingBitmap == null,
+                    "A rejected legacy shell bitmap must remain optional.");
+            }
+
+            AssertThrows<InvalidOperationException>(() =>
+                WindowsIcons.TryLoadOptionalResource<Icon>(() =>
+                {
+                    throw new InvalidOperationException("programming error");
+                }), "programming error");
+
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Refresh, 0), null);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIconBitmap(WindowsIcons.Icons.Refresh, 0), null);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIcon((WindowsIcons.Icons)int.MaxValue, 16), null);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIconBitmap((WindowsIcons.Icons)int.MaxValue, 16), null);
         }
 
         private static void SdkSyntheticSmokePermitsInactiveTunnel()

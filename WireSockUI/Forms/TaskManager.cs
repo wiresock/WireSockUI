@@ -61,13 +61,10 @@ namespace WireSockUI.Forms
             if (Resources.ico != null) Icon = Resources.ico;
 
             // Safely set the refresh button image
-            using (var refreshIcon = WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Refresh, 16))
+            _refreshButtonImage = WindowsIcons.GetWindowsIconBitmap(WindowsIcons.Icons.Refresh, 16);
+            if (_refreshButtonImage != null)
             {
-                if (refreshIcon != null)
-                {
-                    _refreshButtonImage = refreshIcon.ToBitmap();
-                    btnRefresh.Image = _refreshButtonImage;
-                }
+                btnRefresh.Image = _refreshButtonImage;
             }
 
             // Keep the single process column aligned with the resizable viewport.

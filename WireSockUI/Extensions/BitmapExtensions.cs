@@ -36,30 +36,43 @@ namespace WireSockUI.Extensions
         public static Icon SuperImpose(this Icon icon, int size, WindowsIcons.Icons imposed, int imposedSize,
             int imposedOffset)
         {
-            using (var resizedIcon = new Icon(icon, new Size(size, size)))
-            using (var bitmap = resizedIcon.ToBitmap())
-            {
-                using (var gr = Graphics.FromImage(bitmap))
-                {
-                    using (var imposedIcon = WindowsIcons.GetWindowsIcon(imposed, imposedSize))
-                    {
-                        if (imposedIcon != null)
-                            gr.DrawIcon(imposedIcon, imposedOffset, imposedOffset);
-                    }
-                }
+            if (icon == null) throw new ArgumentNullException(nameof(icon));
+            if (size <= 0) throw new ArgumentOutOfRangeException(nameof(size));
+            if (imposedSize <= 0) throw new ArgumentOutOfRangeException(nameof(imposedSize));
 
-                var hIcon = bitmap.GetHicon();
-                try
+            try
+            {
+                using (var resizedIcon = new Icon(icon, new Size(size, size)))
+                using (var bitmap = resizedIcon.ToBitmap())
                 {
-                    using (var nativeIcon = Icon.FromHandle(hIcon))
+                    using (var gr = Graphics.FromImage(bitmap))
                     {
-                        return (Icon)nativeIcon.Clone();
+                        using (var imposedIcon = WindowsIcons.GetWindowsIcon(imposed, imposedSize))
+                        {
+                            if (imposedIcon != null)
+                                gr.DrawIcon(imposedIcon, imposedOffset, imposedOffset);
+                        }
+                    }
+
+                    var hIcon = bitmap.GetHicon();
+                    try
+                    {
+                        using (var nativeIcon = Icon.FromHandle(hIcon))
+                        {
+                            return (Icon)nativeIcon.Clone();
+                        }
+                    }
+                    finally
+                    {
+                        DestroyIcon(hIcon);
                     }
                 }
-                finally
-                {
-                    DestroyIcon(hIcon);
-                }
+            }
+            catch (Exception ex) when (WindowsIcons.IsRecoverableIconException(ex))
+            {
+                // The Windows shell overlay is optional. Preserve the bundled
+                // application icon when a legacy GDI implementation rejects it.
+                return (Icon)icon.Clone();
             }
         }
     }

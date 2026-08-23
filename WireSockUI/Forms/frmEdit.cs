@@ -764,10 +764,7 @@ namespace WireSockUI.Forms
 
         private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
         {
-            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
-            {
-                return windowsIcon?.ToBitmap();
-            }
+            return WindowsIcons.GetWindowsIconBitmap(icon, size);
         }
     }
 }
