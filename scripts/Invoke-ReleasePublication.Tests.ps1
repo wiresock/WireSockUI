@@ -10,6 +10,14 @@ $testRoot = Join-Path (
 ) ("WireSockUI-Publication-{0}" -f [Guid]::NewGuid().ToString('N'))
 $assetRoot = Join-Path $testRoot 'assets'
 [void](New-Item -ItemType Directory -Path $assetRoot -Force)
+$releaseNotesPath = Join-Path $testRoot 'release-notes.md'
+$expectedTestReleaseBody = (
+    "## WireSock UI 1.2.3`n`n" +
+    'Human-friendly fixture release notes.')
+[IO.File]::WriteAllText(
+    $releaseNotesPath,
+    ($expectedTestReleaseBody -replace "`n", "`r`n") + "`r`n",
+    [Text.UTF8Encoding]::new($false))
 
 $global:PublicationTestTagOid = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 $global:PublicationTestSha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
@@ -21,6 +29,7 @@ $global:PublicationTestRelease = $null
 $global:PublicationTestGhCalls = [Collections.Generic.List[string]]::new()
 $global:PublicationTestFailUploadName = $null
 $global:PublicationTestFailedUploadOnce = $false
+$global:PublicationTestCreateRequest = $null
 
 function Write-TestAsset {
     param(
@@ -98,10 +107,7 @@ function Reset-TestRelease {
         tag_name = 'release-v1.2.3'
         target_commitish = $global:PublicationTestSha
         name = 'WireSockUI-release-v1.2.3'
-        body = (
-            'WireSockUI release-v1.2.3. Verify every artifact with its adjacent ' +
-            'SHA-256 sidecar, the immutable GitHub release attestation, and ' +
-            'repository provenance attestations.')
+        body = $expectedTestReleaseBody
         draft = $Draft
         prerelease = $false
         immutable = -not $Draft
@@ -164,7 +170,27 @@ function global:Invoke-RestMethod {
             }
         }
     }
+    if ($Uri -eq 'https://api.github.com/repos/wiresock/WireSockUI/releases' -and
+        $Method -eq 'Post') {
+        $document = $Body | ConvertFrom-Json
+        if ([string]$document.tag_name -cne 'release-v1.2.3' -or
+            [string]$document.target_commitish -cne $global:PublicationTestSha -or
+            [string]$document.name -cne 'WireSockUI-release-v1.2.3' -or
+            [string]$document.body -cne $expectedTestReleaseBody -or
+            $document.draft -ne $true -or
+            $document.prerelease -ne $false -or
+            $document.generate_release_notes -ne $false -or
+            [string]$document.make_latest -cne 'true') {
+            throw 'Fixture received an invalid release creation request.'
+        }
+        $global:PublicationTestCreateRequest = $document
+        Reset-TestRelease -Draft $true -RemoteAssetCount 0
+        return $global:PublicationTestRelease
+    }
     if ($Uri -match '/releases\?per_page=100&page=1$') {
+        if ($null -eq $global:PublicationTestRelease) {
+            return @()
+        }
         Write-Output `
             -NoEnumerate `
             -InputObject @($global:PublicationTestRelease)
@@ -280,16 +306,93 @@ $commonArguments = @{
     TrustedSha = $global:PublicationTestSha
     TrustedTagOid = $global:PublicationTestTagOid
     AssetDirectory = $assetRoot
+    ReleaseNotesPath = $releaseNotesPath
 }
 $env:GH_TOKEN = 'fixture-token'
 
 try {
+    $invalidNotesPath = Join-Path $testRoot 'wrong-version.md'
+    [IO.File]::WriteAllText(
+        $invalidNotesPath,
+        "## WireSock UI 1.2.2`n",
+        [Text.UTF8Encoding]::new($false))
+    $invalidArguments = $commonArguments.Clone()
+    $invalidArguments.ReleaseNotesPath = $invalidNotesPath
+    Assert-Throws `
+        -Action {
+            & $scriptUnderTest -Mode Verify @invalidArguments
+        } `
+        -ExpectedMessage "exact heading '## WireSock UI 1.2.3'"
+
+    $invalidNotesPath = Join-Path $testRoot 'control-character.md'
+    [IO.File]::WriteAllText(
+        $invalidNotesPath,
+        "## WireSock UI 1.2.3`n$([char]27)misleading text",
+        [Text.UTF8Encoding]::new($false))
+    $invalidArguments.ReleaseNotesPath = $invalidNotesPath
+    Assert-Throws `
+        -Action {
+            & $scriptUnderTest -Mode Verify @invalidArguments
+        } `
+        -ExpectedMessage 'disallowed control character'
+
+    $invalidNotesPath = Join-Path $testRoot 'invalid-utf8.md'
+    [IO.File]::WriteAllBytes(
+        $invalidNotesPath,
+        [byte[]]@(0xC3, 0x28))
+    $invalidArguments.ReleaseNotesPath = $invalidNotesPath
+    Assert-Throws `
+        -Action {
+            & $scriptUnderTest -Mode Verify @invalidArguments
+        } `
+        -ExpectedMessage 'must contain valid UTF-8'
+
+    $invalidNotesPath = Join-Path $testRoot 'empty.md'
+    [IO.File]::WriteAllBytes($invalidNotesPath, [byte[]]@())
+    $invalidArguments.ReleaseNotesPath = $invalidNotesPath
+    Assert-Throws `
+        -Action {
+            & $scriptUnderTest -Mode Verify @invalidArguments
+        } `
+        -ExpectedMessage 'must be between 1 and 131072 bytes'
+
+    $invalidNotesPath = Join-Path $testRoot 'oversized.md'
+    [IO.File]::WriteAllBytes(
+        $invalidNotesPath,
+        [byte[]]::new(131073))
+    $invalidArguments.ReleaseNotesPath = $invalidNotesPath
+    Assert-Throws `
+        -Action {
+            & $scriptUnderTest -Mode Verify @invalidArguments
+        } `
+        -ExpectedMessage 'must be between 1 and 131072 bytes'
+
+    $global:PublicationTestRelease = $null
+    $global:PublicationTestRemoteAssets = @()
+    $global:PublicationTestCreateRequest = $null
+    $null = & $scriptUnderTest -Mode Publish @commonArguments
+    if ($null -eq $global:PublicationTestCreateRequest -or
+        $global:PublicationTestRelease.draft -ne $false -or
+        $global:PublicationTestRelease.immutable -ne $true -or
+        $global:PublicationTestRemoteAssets.Count -ne 36) {
+        throw 'New release publication did not use the expected notes and exact asset set.'
+    }
+
     Reset-TestRelease -Draft $false -RemoteAssetCount 36
     $global:PublicationTestGhCalls.Clear()
     $null = & $scriptUnderTest -Mode Verify @commonArguments
     if ($global:PublicationTestGhCalls.Count -ne 56) {
         throw "Expected 56 GitHub CLI verification calls, found $($global:PublicationTestGhCalls.Count)."
     }
+
+    $global:PublicationTestRelease.body = 'Unexpected release notes.'
+    Assert-Throws `
+        -Action {
+            & $scriptUnderTest -Mode Verify @commonArguments
+        } `
+        -ExpectedMessage 'unexpected identity'
+
+    Reset-TestRelease -Draft $false -RemoteAssetCount 36
 
     $global:PublicationTestMainSha = 'cccccccccccccccccccccccccccccccccccccccc'
     Assert-Throws `
@@ -338,6 +441,7 @@ finally {
             'PublicationTestExpectedAssets',
             'PublicationTestRemoteAssets',
             'PublicationTestRelease',
+            'PublicationTestCreateRequest',
             'PublicationTestGhCalls',
             'PublicationTestFailUploadName',
             'PublicationTestFailedUploadOnce')) {

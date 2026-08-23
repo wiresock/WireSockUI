@@ -35,6 +35,8 @@ namespace WireSockUI.Tests
         private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
         private const int TestTimeoutMilliseconds = 120000;
         private const int MoveFileWriteThrough = 0x8;
+        private const string WinFormsFontFallbackHelperSwitch =
+            "--winforms-font-fallback-helper";
 
         private sealed class TestExecutionResult
         {
@@ -106,6 +108,9 @@ namespace WireSockUI.Tests
 
         private static int Main(string[] args)
         {
+            if (TryRunWinFormsFontFallbackTestHelper(args, out var fontFallbackHelperExitCode))
+                return fontFallbackHelperExitCode;
+
             if (TryRunAutoRunServiceTestHelper(args, out var autoRunHelperExitCode))
                 return autoRunHelperExitCode;
 
@@ -169,6 +174,15 @@ namespace WireSockUI.Tests
                 { "Global config folder containment handles drive roots", GlobalConfigFolderContainmentHandlesDriveRoots },
                 { "Global rejects unavailable or relative special folders", GlobalRejectsInvalidSpecialFolderRoots },
                 { "Global permits redirected legacy ApplicationData only", GlobalPermitsRedirectedLegacyApplicationDataOnly },
+                { "Global prefers trusted ProgramData storage", GlobalPrefersTrustedProgramDataStorage },
+                { "Global resolves architecture-stable Program Files storage", GlobalResolvesArchitectureStableProgramFilesStorage },
+                { "Global falls back to protected Program Files storage", GlobalFallsBackToProtectedProgramFilesStorage },
+                { "Global keeps an existing trusted fallback", GlobalKeepsExistingTrustedFallback },
+                { "Global rejects an unsafe existing fallback", GlobalRejectsUnsafeExistingFallback },
+                { "Global does not launder an unsafe fallback ACL", GlobalDoesNotLaunderUnsafeFallbackAcl },
+                { "Global does not bypass an unsafe existing preferred tree", GlobalDoesNotBypassUnsafeExistingPreferredTree },
+                { "Global rebases every secure storage path", GlobalRebasesEverySecureStoragePath },
+                { "Global rejects unavailable preferred and fallback storage", GlobalRejectsUnavailablePreferredAndFallbackStorage },
                 { "Global rejects unsecured config folder overrides by default", GlobalRejectsUnsecuredConfigFolderOverridesByDefault },
                 { "Global rejects untrusted pre-existing secure data without laundering ACLs", GlobalRejectsUntrustedPreexistingSecureData },
                 { "Global fails closed on configuration directory reparse points", GlobalFailsClosedOnConfigurationDirectoryReparsePoints },
@@ -192,6 +206,10 @@ namespace WireSockUI.Tests
                 { "Program restricts trusted owner SIDs", ProgramRestrictsTrustedOwnerSids },
                 { "Program checks elevation without token-access failures", ProgramChecksElevationWithoutTokenAccessFailures },
                 { "Program rejects over-the-shoulder elevation identities", ProgramRejectsOverTheShoulderElevationIdentities },
+                { "Managed host boundary returns deterministic startup failures", ManagedHostBoundaryReturnsDeterministicStartupFailures },
+                { "Windows shell icons are optional on legacy Windows", WindowsShellIconsAreOptionalOnLegacyWindows },
+                { "Windows message font is optional on legacy Windows", WindowsMessageFontIsOptionalOnLegacyWindows },
+                { "WinForms default fonts fall back before control construction", WinFormsDefaultFontsFallbackBeforeControlConstruction },
                 { "Program rejects replaceable trusted path ancestors", ProgramRejectsReplaceableTrustedPathAncestors },
                 { "Program rejects protected directory creation below writable parents", ProgramRejectsProtectedDirectoryCreationBelowWritableParents },
                 { "Program permits one protected leaf below a trusted shared root", ProgramPermitsSingleProtectedLeafBelowTrustedSharedRoot },
@@ -267,6 +285,7 @@ namespace WireSockUI.Tests
                 { "Image lists clone icons before delayed handle creation", ImageListsCloneIconsBeforeDelayedHandleCreation },
                 { "WinForms dialogs initialize and dispose on an STA thread", WinFormsDialogsInitializeAndDisposeOnStaThread },
                 { "WinForms dialogs use readable responsive layouts", WinFormsDialogsUseReadableResponsiveLayouts },
+                { "Main window profile details retain visual order after scaling", MainWindowProfileDetailsRetainVisualOrderAfterScaling },
                 { "Main window action rows remain visible after scaling", MainWindowActionRowsRemainVisibleAfterScaling },
                 { "Settings copies the secured profiles path without shell activation", SettingsCopiesSecuredProfilesPathWithoutShellActivation },
                 { "Editor bounds synchronous syntax highlighting", EditorBoundsSynchronousSyntaxHighlighting },
@@ -1891,6 +1910,453 @@ namespace WireSockUI.Tests
                 Global.ConfigsFolder = originalConfigsFolder;
                 Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
             }
+        }
+
+        private static bool TryRunWinFormsFontFallbackTestHelper(string[] args, out int exitCode)
+        {
+            exitCode = 0;
+            if (args == null ||
+                args.Length != 1 ||
+                !string.Equals(args[0], WinFormsFontFallbackHelperSwitch, StringComparison.Ordinal))
+                return false;
+
+            try
+            {
+                if (!UiFonts.TryCreatePrivateSystemFont(out var healthyFont))
+                {
+                    Console.Error.Write(
+                        "A usable Windows TrueType font file could not be loaded privately.");
+                    exitCode = 1;
+                    return true;
+                }
+
+                using (healthyFont)
+                {
+                    var fallbackFactoryCalled = false;
+                    if (!UiFonts.TryEnsureWinFormsDefaultFonts(
+                            () => healthyFont,
+                            () => healthyFont,
+                            () =>
+                            {
+                                fallbackFactoryCalled = true;
+                                return null;
+                            },
+                            out var unnecessaryFallback,
+                            out var healthyDiagnostic) ||
+                        unnecessaryFallback ||
+                        fallbackFactoryCalled ||
+                        !string.IsNullOrEmpty(healthyDiagnostic))
+                    {
+                        Console.Error.Write(
+                            "Healthy WinForms defaults unexpectedly selected a fallback.");
+                        exitCode = 2;
+                        return true;
+                    }
+                }
+
+                Font fallbackFont = null;
+                if (!UiFonts.TryEnsureWinFormsDefaultFonts(
+                        () => throw new ArgumentException("Font '?' cannot be found."),
+                        () => throw new InvalidOperationException(
+                            "The menu font provider must not run after the default font fails."),
+                        () => fallbackFont = UiFonts.CreateFallbackFont(),
+                        out var installedFallback,
+                        out var diagnostic) ||
+                    !installedFallback ||
+                    fallbackFont == null ||
+                    diagnostic?.Contains("Font '?' cannot be found.") != true)
+                {
+                    Console.Error.Write(diagnostic);
+                    exitCode = 3;
+                    return true;
+                }
+
+                using (var contextMenu = new ContextMenuStrip())
+                using (var toolStrip = new ToolStrip())
+                {
+                    contextMenu.GripStyle = ToolStripGripStyle.Hidden;
+                    toolStrip.GripStyle = ToolStripGripStyle.Hidden;
+                    if (!ReferenceEquals(fallbackFont, Control.DefaultFont) ||
+                        !ReferenceEquals(fallbackFont, contextMenu.Font) ||
+                        !ReferenceEquals(fallbackFont, toolStrip.Font))
+                    {
+                        Console.Error.Write(
+                            "WinForms controls did not retain the installed fallback font.");
+                        exitCode = 4;
+                    }
+                }
+
+                const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Static;
+                var controlDefaultFontField = typeof(Control).GetField("defaultFont", flags);
+                var toolStripDefaultFontField =
+                    typeof(ToolStripManager).GetField("defaultFont", flags);
+                var toolStripDefaultFontCache =
+                    typeof(ToolStripManager).GetField("defaultFontCache", flags)?.GetValue(null)
+                    as System.Collections.Concurrent.ConcurrentDictionary<int, Font>;
+                if (toolStripDefaultFontCache != null &&
+                    (!toolStripDefaultFontCache.TryGetValue(96, out var standardDpiFont) ||
+                     !toolStripDefaultFontCache.TryGetValue(384, out var highDpiFont) ||
+                     !ReferenceEquals(fallbackFont, standardDpiFont) ||
+                     !ReferenceEquals(fallbackFont, highDpiFont)))
+                {
+                    Console.Error.Write(
+                        "The ToolStrip fallback cache did not cover every monitor DPI.");
+                    exitCode = 5;
+                    return true;
+                }
+
+                controlDefaultFontField?.SetValue(null, null);
+                toolStripDefaultFontField?.SetValue(null, null);
+                toolStripDefaultFontCache?.Clear();
+                UiFonts.RestoreFallbackAfterPreferenceChange(
+                    null,
+                    new Microsoft.Win32.UserPreferenceChangingEventArgs(
+                        Microsoft.Win32.UserPreferenceCategory.Window));
+                using (var refreshedContextMenu = new ContextMenuStrip())
+                {
+                    refreshedContextMenu.GripStyle = ToolStripGripStyle.Hidden;
+                    if (!ReferenceEquals(fallbackFont, Control.DefaultFont) ||
+                        !ReferenceEquals(fallbackFont, refreshedContextMenu.Font))
+                    {
+                        Console.Error.Write(
+                            "WinForms did not restore the fallback after a preference change.");
+                        exitCode = 6;
+                    }
+                }
+
+                controlDefaultFontField?.SetValue(null, null);
+                Microsoft.Win32.UserPreferenceChangedEventHandler simulatedLateControlHandler =
+                    (sender, eventArgs) =>
+                    {
+                        if (eventArgs.Category ==
+                            Microsoft.Win32.UserPreferenceCategory.Color)
+                            controlDefaultFontField?.SetValue(null, null);
+                    };
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged +=
+                    simulatedLateControlHandler;
+                try
+                {
+                    UiFonts.RestoreFallbackAfterPreferenceChange(
+                        null,
+                        new Microsoft.Win32.UserPreferenceChangingEventArgs(
+                            Microsoft.Win32.UserPreferenceCategory.Color));
+
+                    var systemEventsType = typeof(Microsoft.Win32.SystemEvents);
+                    var preferenceChangedEventKey = systemEventsType.GetField(
+                        "OnUserPreferenceChangedEvent",
+                        flags)?.GetValue(null);
+                    var raiseEvent = systemEventsType.GetMethod(
+                        "RaiseEvent",
+                        flags,
+                        null,
+                        new[] { typeof(object), typeof(object[]) },
+                        null);
+                    if (preferenceChangedEventKey == null || raiseEvent == null)
+                        throw new MissingMemberException(
+                            "The .NET Framework SystemEvents test seam was unavailable.");
+
+                    raiseEvent.Invoke(
+                        null,
+                        new object[]
+                        {
+                            preferenceChangedEventKey,
+                            new object[]
+                            {
+                                null,
+                                new Microsoft.Win32.UserPreferenceChangedEventArgs(
+                                    Microsoft.Win32.UserPreferenceCategory.Color)
+                            }
+                        });
+                }
+                finally
+                {
+                    Microsoft.Win32.SystemEvents.UserPreferenceChanged -=
+                        simulatedLateControlHandler;
+                }
+
+                if (!ReferenceEquals(fallbackFont, Control.DefaultFont))
+                {
+                    Console.Error.Write(
+                        "WinForms did not restore the fallback after a color preference change.");
+                    exitCode = 7;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.Write(ex);
+                exitCode = 8;
+                return true;
+            }
+        }
+
+        private static void GlobalPrefersTrustedProgramDataStorage()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            const string preferredNotifications = @"C:\ProgramData\WireSockUI-Notifications";
+            var validationCount = 0;
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    validationCount++;
+                    diagnostic = null;
+                    return string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase);
+                };
+
+            var selection = Global.ResolveSecureStoragePaths(
+                preferredRoot,
+                preferredNotifications,
+                @"C:\Program Files",
+                validator,
+                path => false);
+
+            AssertEqual(preferredRoot, selection.SecureMainFolder);
+            AssertEqual(preferredNotifications, selection.NotificationAssetsFolder);
+            AssertFalse(selection.UsesFallback, "Expected trusted ProgramData storage to remain preferred.");
+            AssertEqual(1, validationCount);
+        }
+
+        private static void GlobalFallsBackToProtectedProgramFilesStorage()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            const string fallbackParent = @"C:\Program Files";
+            const string expectedFallback = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            const string expectedNotifications =
+                @"C:\Program Files\WireSock Foundation WireSock UI Notifications";
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    if (string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase))
+                    {
+                        diagnostic = "ProgramData grants Everyone full control.";
+                        return false;
+                    }
+
+                    diagnostic = null;
+                    return string.Equals(path, expectedFallback, StringComparison.OrdinalIgnoreCase);
+                };
+
+            var selection = Global.ResolveSecureStoragePaths(
+                preferredRoot,
+                @"C:\ProgramData\WireSockUI-Notifications",
+                fallbackParent,
+                validator,
+                path => false);
+
+            AssertEqual(expectedFallback, selection.SecureMainFolder);
+            AssertEqual(expectedNotifications, selection.NotificationAssetsFolder);
+            AssertTrue(selection.UsesFallback, "Expected unsafe ProgramData storage to select the fallback.");
+            AssertTrue(
+                selection.FallbackDiagnostic.IndexOf("Everyone full control", StringComparison.OrdinalIgnoreCase) >= 0,
+                "Expected the preferred-path failure to be retained for diagnostics.");
+            AssertFalse(
+                selection.SecureMainFolder.StartsWith(
+                    @"C:\Program Files\WireSock Foundation WireSock UI" + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase),
+                "Mutable fallback data must remain outside the native application payload.");
+            AssertFalse(
+                selection.NotificationAssetsFolder.StartsWith(
+                    @"C:\Program Files\WireSock Foundation WireSock UI" + Path.DirectorySeparatorChar,
+                    StringComparison.OrdinalIgnoreCase),
+                "Mutable notification assets must remain outside the native application payload.");
+            AssertEqual(fallbackParent, Path.GetDirectoryName(selection.SecureMainFolder));
+            AssertEqual(fallbackParent, Path.GetDirectoryName(selection.NotificationAssetsFolder));
+        }
+
+        private static void GlobalResolvesArchitectureStableProgramFilesStorage()
+        {
+            var programFilesRoot = Global.GetArchitectureStableProgramFilesRoot();
+
+            AssertTrue(Path.IsPathRooted(programFilesRoot),
+                "Expected Windows to return an absolute Program Files folder.");
+            AssertTrue(Directory.Exists(programFilesRoot),
+                "Expected the architecture-stable Program Files folder to exist.");
+
+            if (Environment.Is64BitOperatingSystem && !Environment.Is64BitProcess)
+            {
+                AssertFalse(string.Equals(
+                        programFilesRoot,
+                        Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
+                        StringComparison.OrdinalIgnoreCase),
+                    "A 32-bit process on 64-bit Windows must not redirect fallback data to Program Files (x86).");
+            }
+        }
+
+        private static void GlobalKeepsExistingTrustedFallback()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            const string fallbackRoot = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            var preferredValidated = false;
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = null;
+                    if (string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase))
+                        preferredValidated = true;
+                    return true;
+                };
+
+            var selection = Global.ResolveSecureStoragePaths(
+                preferredRoot,
+                @"C:\ProgramData\WireSockUI-Notifications",
+                @"C:\Program Files",
+                validator,
+                path => string.Equals(path, fallbackRoot, StringComparison.OrdinalIgnoreCase));
+
+            AssertTrue(selection.UsesFallback, "Expected an existing trusted fallback to remain selected.");
+            AssertEqual(fallbackRoot, selection.SecureMainFolder);
+            AssertFalse(preferredValidated, "Sticky fallback selection should not probe or switch to ProgramData.");
+        }
+
+        private static void GlobalRejectsUnsafeExistingFallback()
+        {
+            const string fallbackRoot = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = "Fallback is writable by Users.";
+                    return false;
+                };
+
+            AssertThrows<UnauthorizedAccessException>(
+                () => Global.ResolveSecureStoragePaths(
+                    @"C:\ProgramData\WireSockUI",
+                    @"C:\ProgramData\WireSockUI-Notifications",
+                    @"C:\Program Files",
+                    validator,
+                    path => string.Equals(path, fallbackRoot, StringComparison.OrdinalIgnoreCase)),
+                "existing protected WireSock UI fallback");
+        }
+
+        private static void GlobalDoesNotLaunderUnsafeFallbackAcl()
+        {
+            var fallbackParent = Path.Combine(
+                Path.GetTempPath(), "WireSockUI.Tests", Guid.NewGuid().ToString("N"));
+            var fallbackRoot = Path.Combine(
+                fallbackParent, "WireSock Foundation WireSock UI Data");
+            var sentinel = Path.Combine(fallbackRoot, "do-not-modify.txt");
+            Directory.CreateDirectory(fallbackRoot);
+            File.WriteAllText(sentinel, "preserve me");
+
+            try
+            {
+                var users = new SecurityIdentifier(WellKnownSidType.BuiltinUsersSid, null);
+                var security = Directory.GetAccessControl(fallbackRoot);
+                security.AddAccessRule(new FileSystemAccessRule(
+                    users,
+                    FileSystemRights.Modify,
+                    InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                    PropagationFlags.None,
+                    AccessControlType.Allow));
+                Directory.SetAccessControl(fallbackRoot, security);
+                const AccessControlSections comparedSections =
+                    AccessControlSections.Access |
+                    AccessControlSections.Owner |
+                    AccessControlSections.Group;
+                var originalSecurity = Directory.GetAccessControl(fallbackRoot)
+                    .GetSecurityDescriptorSddlForm(comparedSections);
+
+                AssertThrows<UnauthorizedAccessException>(
+                    () => Global.ResolveSecureStoragePaths(
+                        @"C:\ProgramData\WireSockUI",
+                        @"C:\ProgramData\WireSockUI-Notifications",
+                        fallbackParent,
+                        WireSockUI.Program.TryValidateTrustedDirectoryCreationPath,
+                        path => string.Equals(path, fallbackRoot, StringComparison.OrdinalIgnoreCase)),
+                    "existing protected WireSock UI fallback");
+
+                AssertEqual("preserve me", File.ReadAllText(sentinel));
+                AssertEqual(
+                    originalSecurity,
+                    Directory.GetAccessControl(fallbackRoot)
+                        .GetSecurityDescriptorSddlForm(comparedSections));
+            }
+            finally
+            {
+                TryDeleteDirectory(fallbackParent, true);
+            }
+        }
+
+        private static void GlobalDoesNotBypassUnsafeExistingPreferredTree()
+        {
+            const string preferredRoot = @"C:\ProgramData\WireSockUI";
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase)
+                        ? "Existing data is owned by a non-administrative user."
+                        : null;
+                    return !string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase);
+                };
+
+            AssertThrows<UnauthorizedAccessException>(
+                () => Global.ResolveSecureStoragePaths(
+                    preferredRoot,
+                    @"C:\ProgramData\WireSockUI-Notifications",
+                    @"C:\Program Files",
+                    validator,
+                    path => string.Equals(path, preferredRoot, StringComparison.OrdinalIgnoreCase)),
+                "existing preferred WireSock UI data directory");
+        }
+
+        private static void GlobalRebasesEverySecureStoragePath()
+        {
+            var originalSelection = new Global.SecureStoragePaths(
+                Global.SecureMainFolder,
+                Global.NotificationAssetsFolder,
+                Global.IsUsingSecureStorageFallback,
+                Global.SecureStorageFallbackDiagnostic);
+            const string fallbackRoot = @"C:\Program Files\WireSock Foundation WireSock UI Data";
+            const string fallbackNotifications =
+                @"C:\Program Files\WireSock Foundation WireSock UI Notifications";
+
+            try
+            {
+                Global.ApplySecureStoragePaths(new Global.SecureStoragePaths(
+                    fallbackRoot,
+                    fallbackNotifications,
+                    true,
+                    "test fallback"));
+
+                AssertEqual(fallbackRoot, Global.SecureMainFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Configs"), Global.ConfigsFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Configs", ".transactions"),
+                    Global.ProfileTransactionsFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "PendingLegacyProfiles"),
+                    Global.PendingLegacyProfilesFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Logs"), Global.DiagnosticsFolder);
+                AssertEqual(Path.Combine(fallbackRoot, "Logs", "WireSockUI.log"), Global.DiagnosticLogPath);
+                AssertEqual(Path.Combine(fallbackRoot, "NativeRecoveryRequired.txt"),
+                    Global.NativeRecoveryMarkerPath);
+                AssertEqual(fallbackNotifications, Global.NotificationAssetsFolder);
+                AssertTrue(Global.IsUsingSecureStorageFallback, "Expected fallback state to be applied.");
+            }
+            finally
+            {
+                Global.ApplySecureStoragePaths(originalSelection);
+            }
+        }
+
+        private static void GlobalRejectsUnavailablePreferredAndFallbackStorage()
+        {
+            Global.TrustedDirectoryCreationValidator validator =
+                delegate (string path, string label, out string diagnostic)
+                {
+                    diagnostic = path.IndexOf("ProgramData", StringComparison.OrdinalIgnoreCase) >= 0
+                        ? "ProgramData is unsafe."
+                        : "The Program Files root is unsafe.";
+                    return false;
+                };
+
+            AssertThrows<UnauthorizedAccessException>(
+                () => Global.ResolveSecureStoragePaths(
+                    @"C:\ProgramData\WireSockUI",
+                    @"C:\ProgramData\WireSockUI-Notifications",
+                    @"C:\Program Files",
+                    validator,
+                    path => false),
+                "Program Files root is unsafe");
         }
 
         private static void ReleaseVersionParserHandlesSemVerTags()
@@ -4284,11 +4750,18 @@ namespace WireSockUI.Tests
 
         private static void AssertDialogUsesSystemFont(Form dialog, string description)
         {
-            AssertTrue(
-                string.Equals(dialog.Font.Name, SystemFonts.MessageBoxFont.Name,
-                    StringComparison.OrdinalIgnoreCase) &&
-                dialog.Font.SizeInPoints >= SystemFonts.MessageBoxFont.SizeInPoints,
-                $"Expected the {description} dialog to use the Windows message font.");
+            if (UiFonts.TryGetMessageBoxFont(out var messageBoxFont))
+            {
+                AssertTrue(
+                    string.Equals(dialog.Font.Name, messageBoxFont.Name,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    dialog.Font.SizeInPoints >= messageBoxFont.SizeInPoints,
+                    $"Expected the {description} dialog to use the Windows message font.");
+                return;
+            }
+
+            AssertTrue(dialog.Font != null && dialog.Font.SizeInPoints > 0,
+                $"Expected the {description} dialog to retain a usable fallback font.");
         }
 
         private static void AssertControlFits(Control parent, Control child, string description)
@@ -4297,6 +4770,105 @@ namespace WireSockUI.Tests
                        child.Right <= parent.ClientSize.Width &&
                        child.Bottom <= parent.ClientSize.Height,
                 $"Expected {description} to remain inside its parent bounds.");
+        }
+
+        private static void MainWindowProfileDetailsRetainVisualOrderAfterScaling()
+        {
+            using (var host = new Panel
+            {
+                Padding = new Padding(8),
+                Size = new Size(600, 500)
+            })
+            using (var state = new GroupBox
+            {
+                Dock = DockStyle.Top,
+                Height = 70,
+                Text = "State",
+                Visible = false
+            })
+            using (var peer = new GroupBox
+            {
+                Dock = DockStyle.Top,
+                Height = 90,
+                Text = "Peer",
+                Visible = false
+            })
+            using (var interfaceGroup = new GroupBox
+            {
+                Dock = DockStyle.Top,
+                Height = 80,
+                Text = "Interface",
+                Visible = false
+            })
+            using (var prompt = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "Select a profile"
+            })
+            {
+                // Match the designer and runtime insertion sequence.
+                host.Controls.Add(state);
+                host.Controls.Add(peer);
+                host.Controls.Add(interfaceGroup);
+                host.Controls.Add(prompt);
+                prompt.BringToFront();
+
+                FrmMain.ArrangeProfileDetails(host, state, interfaceGroup, peer);
+                AssertEqual(0, host.Controls.GetChildIndex(prompt));
+
+                prompt.Visible = false;
+                interfaceGroup.Visible = true;
+                peer.Visible = true;
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, false, "initial inactive layout");
+
+                state.Visible = true;
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, true, "initial active layout");
+
+                host.Scale(new SizeF(1.5F, 1.5F));
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, true, "scaled active layout");
+
+                state.Visible = false;
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, false, "scaled inactive layout");
+
+                state.Visible = true;
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, true, "reshown scaled active layout");
+            }
+        }
+
+        private static void AssertProfileDetailOrder(
+            Panel host,
+            Control state,
+            Control interfaceGroup,
+            Control peer,
+            bool stateVisible,
+            string scenario)
+        {
+            host.PerformLayout();
+
+            var stateIndex = host.Controls.GetChildIndex(state);
+            var interfaceIndex = host.Controls.GetChildIndex(interfaceGroup);
+            var peerIndex = host.Controls.GetChildIndex(peer);
+            AssertTrue(stateIndex > interfaceIndex && interfaceIndex > peerIndex,
+                $"Expected deterministic State, Interface, Peer z-order for {scenario}.");
+
+            AssertTrue(interfaceGroup.Top < peer.Top && interfaceGroup.Bottom <= peer.Top,
+                $"Expected Interface to remain above Peer for {scenario}.");
+            if (stateVisible)
+            {
+                AssertTrue(state.Visible,
+                    $"Expected State to be visible for {scenario}.");
+                AssertTrue(state.Top < interfaceGroup.Top && state.Bottom <= interfaceGroup.Top,
+                    $"Expected State to remain above Interface for {scenario}.");
+            }
+            else
+            {
+                AssertFalse(state.Visible,
+                    $"Expected State to be hidden for {scenario}.");
+            }
         }
 
         private static void MainWindowActionRowsRemainVisibleAfterScaling()
@@ -7498,6 +8070,242 @@ namespace WireSockUI.Tests
                 AssertTrue(images.Images.ContainsKey("profile"),
                     "Expected the cloned icon to retain its profile key.");
             }
+        }
+
+        private static void ManagedHostBoundaryReturnsDeterministicStartupFailures()
+        {
+            var hostedMain = typeof(WireSockUI.Program).GetMethod(
+                "HostedMain",
+                BindingFlags.Public | BindingFlags.Static,
+                null,
+                new[] { typeof(string) },
+                null);
+            AssertTrue(hostedMain != null,
+                "Expected the CLR host to find one public static HostedMain(string) method.");
+            AssertTrue(hostedMain.ReturnType == typeof(int),
+                "Expected the managed host entry point to return an integer exit code.");
+            AssertTrue(hostedMain.GetCustomAttributes(typeof(STAThreadAttribute), false).Any(),
+                "Expected the managed host entry point to retain its STA contract.");
+
+            Exception reported = null;
+            var success = WireSockUI.Program.ExecuteHostedMainBoundary(
+                "normal",
+                argument => string.Equals(argument, "normal", StringComparison.Ordinal) ? 17 : 18,
+                exception => reported = exception,
+                71);
+            AssertEqual(17, success);
+            AssertTrue(reported == null, "A successful managed entry point must not report a failure.");
+
+            var failure = new ArgumentException("Windows 7 startup failure");
+            var failed = WireSockUI.Program.ExecuteHostedMainBoundary(
+                "normal",
+                argument =>
+                {
+                    throw failure;
+                },
+                exception => reported = exception,
+                72);
+            AssertEqual(72, failed);
+            AssertTrue(ReferenceEquals(failure, reported),
+                "Expected the host boundary to report the original managed exception.");
+
+            var reporterFailed = WireSockUI.Program.ExecuteHostedMainBoundary(
+                "normal",
+                argument =>
+                {
+                    throw new InvalidOperationException("managed failure");
+                },
+                exception =>
+                {
+                    throw new InvalidOperationException("reporter failure");
+                },
+                73);
+            AssertEqual(73, reporterFailed);
+
+            var formatted = WireSockUI.Program.FormatStartupException(
+                new ArgumentException(new string('x', 4096)));
+            AssertTrue(formatted.StartsWith(
+                    typeof(ArgumentException).FullName + ": ",
+                    StringComparison.Ordinal),
+                "Expected the bounded startup diagnostic to identify the exception type.");
+            AssertTrue(formatted.Length <= 2051,
+                "Expected the startup diagnostic to remain bounded.");
+            AssertEqual(
+                "An unknown managed startup error occurred.",
+                WireSockUI.Program.FormatStartupException(null));
+        }
+
+        private static void WindowsShellIconsAreOptionalOnLegacyWindows()
+        {
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new ArgumentException("invalid legacy icon")),
+                "Legacy icon format failures should be recoverable.");
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new ExternalException("GDI rejected icon")),
+                "GDI conversion failures should be recoverable.");
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new IOException("resource unavailable")),
+                "Shell resource I/O failures should be recoverable.");
+            AssertTrue(WindowsIcons.IsRecoverableIconException(
+                    new UnauthorizedAccessException("resource unavailable")),
+                "Shell resource access failures should be recoverable.");
+            AssertTrue(!WindowsIcons.IsRecoverableIconException(
+                    new InvalidOperationException("programming error")),
+                "Unrelated programming errors must not be swallowed.");
+
+            using (var missingIcon = WindowsIcons.TryLoadOptionalResource<Icon>(() =>
+                   {
+                       throw new ArgumentException("legacy icon conversion failed");
+                   }))
+            {
+                AssertTrue(missingIcon == null,
+                    "A rejected legacy shell icon must remain optional.");
+            }
+            using (var missingBitmap = WindowsIcons.TryLoadOptionalResource<Bitmap>(() =>
+                   {
+                       throw new ExternalException("legacy bitmap conversion failed");
+                   }))
+            {
+                AssertTrue(missingBitmap == null,
+                    "A rejected legacy shell bitmap must remain optional.");
+            }
+
+            AssertThrows<InvalidOperationException>(() =>
+                WindowsIcons.TryLoadOptionalResource<Icon>(() =>
+                {
+                    throw new InvalidOperationException("programming error");
+                }), "programming error");
+
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIcon(WindowsIcons.Icons.Refresh, 0), null);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIconBitmap(WindowsIcons.Icons.Refresh, 0), null);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIcon((WindowsIcons.Icons)int.MaxValue, 16), null);
+            AssertThrows<ArgumentOutOfRangeException>(() =>
+                WindowsIcons.GetWindowsIconBitmap((WindowsIcons.Icons)int.MaxValue, 16), null);
+        }
+
+        private static void WindowsMessageFontIsOptionalOnLegacyWindows()
+        {
+            AssertFalse(
+                UiFonts.TryGetMessageBoxFont(
+                    () => throw new ArgumentException("Font '?' cannot be found."),
+                    out var missingFont),
+                "Expected an unavailable Windows message font to be optional.");
+            AssertTrue(missingFont == null,
+                "Expected an unavailable Windows message font to return no font.");
+
+            AssertFalse(
+                UiFonts.TryGetMessageBoxFont(
+                    () => throw new ExternalException("GDI+ could not resolve the system font."),
+                    out var failedFont),
+                "Expected a recoverable GDI+ font failure to be optional.");
+            AssertTrue(failedFont == null,
+                "Expected a recoverable GDI+ font failure to return no font.");
+
+            var existingFont = Control.DefaultFont;
+            AssertTrue(
+                UiFonts.TryGetMessageBoxFont(() => existingFont, out var selectedFont),
+                "Expected a valid Windows message font to be selected.");
+            AssertTrue(ReferenceEquals(existingFont, selectedFont),
+                "Expected font selection to retain the provider-owned font instance.");
+
+            AssertFalse(
+                UiFonts.TryApplyMessageBoxFont(
+                    () => existingFont,
+                    _ => throw new ArgumentException("Font '?' cannot be found.")),
+                "Expected a failure while applying a Windows message font to be optional.");
+        }
+
+        private static void WinFormsDefaultFontsFallbackBeforeControlConstruction()
+        {
+            var helperPath = Assembly.GetExecutingAssembly().Location;
+            var startInfo = new ProcessStartInfo(helperPath, WinFormsFontFallbackHelperSwitch)
+            {
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+            using (var helper = new Process { StartInfo = startInfo })
+            {
+                AssertTrue(helper.Start(),
+                    "Expected the real WinForms font fallback helper to start.");
+                var standardOutputTask = helper.StandardOutput.ReadToEndAsync();
+                var standardErrorTask = helper.StandardError.ReadToEndAsync();
+                if (!helper.WaitForExit(30000))
+                {
+                    try
+                    {
+                        helper.Kill();
+                        helper.WaitForExit(5000);
+                    }
+                    catch
+                    {
+                        // The timeout remains the primary test failure.
+                    }
+
+                    throw new Exception("The real WinForms font fallback helper timed out.");
+                }
+
+                AssertTrue(
+                    Task.WaitAll(
+                        new Task[] { standardOutputTask, standardErrorTask },
+                        5000),
+                    "Expected the real WinForms font fallback helper output to drain.");
+                var standardOutput = standardOutputTask.Result;
+                var standardError = standardErrorTask.Result;
+                AssertTrue(helper.ExitCode == 0,
+                    $"The real WinForms font fallback helper failed with exit code " +
+                    $"{helper.ExitCode}. stdout='{standardOutput}' stderr='{standardError}'");
+            }
+
+            var mainDesignerSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "frmMain.Designer.cs"));
+            var contextMenuConstruction = mainDesignerSource.IndexOf(
+                "this.mnuContext = new System.Windows.Forms.ContextMenuStrip",
+                StringComparison.Ordinal);
+            var firstExplicitFontConstruction = mainDesignerSource.IndexOf(
+                "new System.Drawing.Font(",
+                StringComparison.Ordinal);
+            AssertTrue(contextMenuConstruction >= 0,
+                "Expected the main form designer to construct its context menu.");
+            AssertTrue(firstExplicitFontConstruction < 0 ||
+                       firstExplicitFontConstruction > contextMenuConstruction,
+                "The main form designer must not resolve an explicit font before its context menu.");
+
+            var editDesignerSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "frmEdit.Designer.cs"));
+            AssertFalse(
+                editDesignerSource.Contains("new System.Drawing.Font(\""),
+                "The edit-form designer must not perform an unguarded font-family lookup.");
+            var editFormSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "frmEdit.cs"));
+            AssertFalse(
+                editFormSource.Contains("new Font(txtEditor.Font"),
+                "The edit form must guard optional font-style creation.");
+
+            var profileScriptWarningSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "ProfileScriptWarning.cs"));
+            AssertFalse(
+                profileScriptWarningSource.Contains("FontFamily.Generic"),
+                "The profile-script warning must not perform an unguarded generic-font lookup.");
+
+            var programSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Program.cs"));
+            var defaultFontInitialization = programSource.IndexOf(
+                "UiFonts.TryEnsureWinFormsDefaultFonts(",
+                StringComparison.Ordinal);
+            var mainFormConstruction = programSource.IndexOf(
+                "new FrmMain()",
+                StringComparison.Ordinal);
+            AssertTrue(defaultFontInitialization >= 0,
+                "Expected startup to initialize the WinForms default fonts.");
+            AssertTrue(mainFormConstruction >= 0,
+                "Expected startup to construct the main form.");
+            AssertTrue(defaultFontInitialization < mainFormConstruction,
+                "Startup must initialize WinForms default fonts before constructing the main form.");
         }
 
         private static void SdkSyntheticSmokePermitsInactiveTunnel()

@@ -110,7 +110,7 @@ namespace WireSockUI.Forms
             // 
             this.trayIcon.ContextMenuStrip = this.mnuContext;
             this.trayIcon.Text = "WireSock: Inactive";
-            this.trayIcon.Visible = true;
+            this.trayIcon.Visible = false;
             this.trayIcon.DoubleClick += new System.EventHandler(this.OnFormShow);
             // 
             // mnuContext
@@ -171,7 +171,7 @@ namespace WireSockUI.Forms
             // 
             // cmiManageTunnels
             // 
-            this.cmiManageTunnels.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Bold);
+            this.cmiManageTunnels.Font = new System.Drawing.Font(this.cmiManageTunnels.Font, System.Drawing.FontStyle.Bold);
             this.cmiManageTunnels.Name = "cmiManageTunnels";
             this.resMenu.SetResourceKey(this.cmiManageTunnels, null);
             this.cmiManageTunnels.Size = new System.Drawing.Size(210, 22);
@@ -380,7 +380,6 @@ namespace WireSockUI.Forms
             this.lstProfiles.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
             this.colProfile});
             this.lstProfiles.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.lstProfiles.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lstProfiles.FullRowSelect = true;
             this.lstProfiles.HeaderStyle = System.Windows.Forms.ColumnHeaderStyle.None;
             this.lstProfiles.HideSelection = false;

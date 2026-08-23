@@ -190,8 +190,14 @@ function Invoke-NativeHostProbe {
 
         [string] $BcryptSentinelMarker,
 
-        [switch] $ExpectValidationFailure
+        [switch] $ExpectValidationFailure,
+
+        [switch] $ExpectManagedBoundaryFailure
     )
+
+    if ($ExpectValidationFailure -and $ExpectManagedBoundaryFailure) {
+        throw 'A native-host probe cannot expect two different failure contracts.'
+    }
 
     $startInfo = New-Object Diagnostics.ProcessStartInfo
     $startInfo.FileName = $Path
@@ -217,6 +223,10 @@ function Invoke-NativeHostProbe {
     $startInfo.EnvironmentVariables['DEVPATH'] = 'C:\nonexistent\devpath'
     $startInfo.EnvironmentVariables['WIRESOCKUI_DEVELOPMENT_SELF_TEST_NO_UI'] = '1'
     $startInfo.EnvironmentVariables['WIRESOCKUI_NATIVE_SELF_TEST_DIAGNOSTICS'] = '1'
+    if ($ExpectManagedBoundaryFailure) {
+        $startInfo.EnvironmentVariables[
+            'WIRESOCKUI_DEVELOPMENT_MANAGED_BOUNDARY_FAILURE'] = '1'
+    }
     if (-not [string]::IsNullOrWhiteSpace($BcryptSentinelMarker)) {
         $startInfo.EnvironmentVariables['WIRESOCKUI_BCRYPT_SENTINEL'] =
             $BcryptSentinelMarker
@@ -279,6 +289,30 @@ function Invoke-NativeHostProbe {
                     'The deliberately invalid payload did not produce the ' +
                     "native pre-CLR validation contract (exit 40). Actual exit " +
                     "$($process.ExitCode).$detail")
+            }
+            return
+        }
+        if ($ExpectManagedBoundaryFailure) {
+            $managedBoundaryDiagnostic =
+                'WireSockUI native self-test: phase: managed entry point returned'
+            if ($process.ExitCode -ne 31 -or
+                -not $standardError.Contains($managedBoundaryDiagnostic)) {
+                $detail = if ([string]::IsNullOrWhiteSpace($standardError)) {
+                    ''
+                }
+                else {
+                    " Diagnostic: $standardError"
+                }
+                throw (
+                    'The injected managed failure did not produce the ' +
+                    "managed boundary contract (exit 31). Actual exit " +
+                    "$($process.ExitCode).$detail")
+            }
+            if ($standardError.Contains(
+                    'The validated WireSock UI managed entry point failed:')) {
+                throw (
+                    'The injected managed failure escaped through ' +
+                    'ExecuteInDefaultAppDomain as an HRESULT.')
             }
             return
         }
@@ -384,6 +418,9 @@ if (-not $SkipBcryptSentinel) {
             -Destination $testLauncherPath
         Set-PrivateTestTreeAcl -Root $testRoot
         Invoke-NativeHostProbe -Path $testLauncherPath
+        Invoke-NativeHostProbe `
+            -Path $testLauncherPath `
+            -ExpectManagedBoundaryFailure
 
         Initialize-VisualCppEnvironment -Platform $platform
         $sentinelSourcePath = Join-Path $buildDirectory 'bcrypt-sentinel.cpp'

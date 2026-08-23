@@ -193,7 +193,7 @@ namespace WireSockUI.Forms
                     txtEditor.SelectionLength = profileText.Length;
                     txtEditor.SelectionColor = originalColor;
 
-                    txtEditor.SelectionFont = _editorRegularFont;
+                    txtEditor.SelectionFont = _editorRegularFont ?? txtEditor.Font;
 
                     foreach (Match m in ProfileMatch.Matches(profileText))
                     {
@@ -201,7 +201,8 @@ namespace WireSockUI.Forms
                         {
                             txtEditor.SelectionStart = m.Groups["comment"].Index;
                             txtEditor.SelectionLength = m.Groups["comment"].Length;
-                            txtEditor.SelectionFont = _editorItalicFont;
+                            txtEditor.SelectionFont =
+                                _editorItalicFont ?? _editorRegularFont ?? txtEditor.Font;
 
                             switch (m.Groups["comment"].Value[0])
                             {
@@ -221,7 +222,8 @@ namespace WireSockUI.Forms
                             txtEditor.SelectionStart = m.Groups["section"].Index;
                             txtEditor.SelectionLength = m.Groups["section"].Length;
                             txtEditor.SelectionColor = Color.DarkBlue;
-                            txtEditor.SelectionFont = _editorBoldFont;
+                            txtEditor.SelectionFont =
+                                _editorBoldFont ?? _editorRegularFont ?? txtEditor.Font;
 
                             var sectionToken = m.Groups["section"].Value;
                             currentSection = sectionToken.Substring(1, sectionToken.Length - 2).Trim();
@@ -520,10 +522,13 @@ namespace WireSockUI.Forms
         private void Initialize()
         {
             InitializeComponent();
-            Font = SystemFonts.MessageBoxFont;
-            _editorRegularFont = new Font(txtEditor.Font, FontStyle.Regular);
-            _editorItalicFont = new Font(txtEditor.Font, FontStyle.Italic);
-            _editorBoldFont = new Font(txtEditor.Font, FontStyle.Bold);
+            UiFonts.TryApplyMessageBoxFont(messageBoxFont => Font = messageBoxFont);
+            if (!UiFonts.TryCreateFont("Consolas", 10F, out _editorRegularFont))
+                UiFonts.TryCreateFont(txtEditor.Font, FontStyle.Regular, out _editorRegularFont);
+            if (_editorRegularFont != null)
+                txtEditor.Font = _editorRegularFont;
+            UiFonts.TryCreateFont(txtEditor.Font, FontStyle.Italic, out _editorItalicFont);
+            UiFonts.TryCreateFont(txtEditor.Font, FontStyle.Bold, out _editorBoldFont);
             _highlightTimer = new Timer { Interval = 150 };
             _highlightTimer.Tick += OnHighlightTimerTick;
 
@@ -764,10 +769,7 @@ namespace WireSockUI.Forms
 
         private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
         {
-            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
-            {
-                return windowsIcon?.ToBitmap();
-            }
+            return WindowsIcons.GetWindowsIconBitmap(icon, size);
         }
     }
 }

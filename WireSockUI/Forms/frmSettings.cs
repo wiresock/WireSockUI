@@ -88,7 +88,7 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
-            Font = SystemFonts.MessageBoxFont;
+            UiFonts.TryApplyMessageBoxFont(messageBoxFont => Font = messageBoxFont);
 
             Icon = Resources.ico;
 

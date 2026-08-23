@@ -5,6 +5,7 @@ using System.IO;
 using System.Security.AccessControl;
 using System.Security.Principal;
 using System.Threading;
+using Microsoft.Win32;
 using WireSockUI.Native;
 
 namespace WireSockUI
@@ -12,6 +13,11 @@ namespace WireSockUI
     internal static class Global
     {
         private const string ApplicationFolderName = "WireSockUI";
+        private const string FallbackDataFolderName = "WireSock Foundation WireSock UI Data";
+        private const string FallbackNotificationFolderName = "WireSock Foundation WireSock UI Notifications";
+        private const string WindowsCurrentVersionRegistryPath =
+            @"SOFTWARE\Microsoft\Windows\CurrentVersion";
+        private const string ProgramFilesDirectoryRegistryValue = "ProgramFilesDir";
         internal const int MaxSecuredTreeEntries = 4096;
         private static readonly string ApplicationDataRoot =
             Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
@@ -51,7 +57,38 @@ namespace WireSockUI
 
         internal static bool AllowUnsecuredConfigFolderOverrideForTests { get; set; }
 
+        internal static bool IsUsingSecureStorageFallback { get; private set; }
+
+        internal static string SecureStorageFallbackDiagnostic { get; private set; }
+
         public static EventWaitHandle AlreadyRunning;
+
+        internal delegate bool TrustedDirectoryCreationValidator(
+            string directory,
+            string label,
+            out string diagnostic);
+
+        internal delegate bool PathEntryExistenceProbe(string path);
+
+        internal sealed class SecureStoragePaths
+        {
+            internal SecureStoragePaths(
+                string secureMainFolder,
+                string notificationAssetsFolder,
+                bool usesFallback,
+                string fallbackDiagnostic)
+            {
+                SecureMainFolder = secureMainFolder;
+                NotificationAssetsFolder = notificationAssetsFolder;
+                UsesFallback = usesFallback;
+                FallbackDiagnostic = fallbackDiagnostic;
+            }
+
+            internal string SecureMainFolder { get; }
+            internal string NotificationAssetsFolder { get; }
+            internal bool UsesFallback { get; }
+            internal string FallbackDiagnostic { get; }
+        }
 
         internal static void ValidateSpecialFolderRoots()
         {
@@ -118,6 +155,135 @@ namespace WireSockUI
         public static void EnsureApplicationFolders()
         {
             EnsureConfigsFolder();
+        }
+
+        internal static void SelectSecureStorageRoot()
+        {
+            var selection = ResolveSecureStoragePaths(
+                Path.Combine(CommonApplicationDataRoot, ApplicationFolderName),
+                Path.Combine(CommonApplicationDataRoot, ApplicationFolderName + "-Notifications"),
+                GetArchitectureStableProgramFilesRoot(),
+                Program.TryValidateTrustedDirectoryCreationPath,
+                PathEntryExists);
+
+            ApplySecureStoragePaths(selection);
+        }
+
+        internal static SecureStoragePaths ResolveSecureStoragePaths(
+            string preferredSecureMainFolder,
+            string preferredNotificationAssetsFolder,
+            string fallbackParentDirectory,
+            TrustedDirectoryCreationValidator validator,
+            PathEntryExistenceProbe pathEntryExists)
+        {
+            if (validator == null) throw new ArgumentNullException(nameof(validator));
+            if (pathEntryExists == null) throw new ArgumentNullException(nameof(pathEntryExists));
+
+            var preferredRoot = RequireAbsoluteSpecialFolderRoot(
+                preferredSecureMainFolder,
+                "the preferred WireSock UI data folder");
+            var preferredNotifications = RequireAbsoluteSpecialFolderRoot(
+                preferredNotificationAssetsFolder,
+                "the preferred WireSock UI notification folder");
+
+            var fallbackParent = RequireAbsoluteSpecialFolderRoot(
+                fallbackParentDirectory,
+                "the architecture-stable Program Files folder");
+
+            var fallbackRoot = Path.Combine(fallbackParent, FallbackDataFolderName);
+            var fallbackNotifications = Path.Combine(fallbackParent, FallbackNotificationFolderName);
+
+            // Once the fallback exists, keep using it even if ProgramData is
+            // repaired later. Silently switching back would make existing profiles appear
+            // to have disappeared. An existing fallback must still pass the full trust check.
+            if (pathEntryExists(fallbackRoot))
+            {
+                if (!validator(fallbackRoot, "existing fallback WireSock UI data directory",
+                        out var existingFallbackDiagnostic))
+                {
+                    throw new UnauthorizedAccessException(
+                        $"The existing protected WireSock UI fallback data directory is unsafe: " +
+                        (existingFallbackDiagnostic ?? "no diagnostic was provided"));
+                }
+
+                return new SecureStoragePaths(
+                    fallbackRoot,
+                    fallbackNotifications,
+                    true,
+                    "Continuing to use the existing protected fallback data directory.");
+            }
+
+            if (validator(preferredRoot, "preferred WireSock UI data directory", out var preferredDiagnostic))
+                return new SecureStoragePaths(
+                    preferredRoot,
+                    preferredNotifications,
+                    false,
+                    null);
+
+            // A pre-existing but untrusted application data tree may contain attacker-
+            // controlled profiles. Do not hide that condition by selecting another root,
+            // and never copy or repair anything from it automatically.
+            if (pathEntryExists(preferredRoot))
+            {
+                throw new UnauthorizedAccessException(
+                    $"The existing preferred WireSock UI data directory is unsafe: " +
+                    (preferredDiagnostic ?? "no diagnostic was provided"));
+            }
+
+            if (!validator(fallbackRoot, "fallback WireSock UI data directory", out var fallbackDiagnostic))
+            {
+                throw new UnauthorizedAccessException(
+                    $"The preferred WireSock UI data directory is unsafe: {preferredDiagnostic ?? "no diagnostic was provided"} " +
+                    $"The protected Program Files fallback is also unavailable: {fallbackDiagnostic ?? "no diagnostic was provided"}");
+            }
+
+            return new SecureStoragePaths(
+                fallbackRoot,
+                fallbackNotifications,
+                true,
+                preferredDiagnostic ?? "The preferred WireSock UI data directory is not trusted.");
+        }
+
+        internal static string GetArchitectureStableProgramFilesRoot()
+        {
+            // Environment.SpecialFolder.ProgramFiles and the standard known-folder API
+            // redirect 32-bit processes to Program Files (x86). Read the machine's native
+            // registry view so x86, x64, and ARM64 builds share one fallback data root.
+            var registryView = Environment.Is64BitOperatingSystem
+                ? RegistryView.Registry64
+                : RegistryView.Registry32;
+            using (var localMachine = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, registryView))
+            using (var currentVersion = localMachine.OpenSubKey(
+                       WindowsCurrentVersionRegistryPath,
+                       writable: false))
+            {
+                var programFiles = currentVersion?.GetValue(
+                    ProgramFilesDirectoryRegistryValue,
+                    null,
+                    RegistryValueOptions.DoNotExpandEnvironmentNames) as string;
+                if (string.IsNullOrWhiteSpace(programFiles))
+                {
+                    throw new DirectoryNotFoundException(
+                        "Windows did not provide its architecture-stable Program Files folder in the machine registry.");
+                }
+
+                return RequireAbsoluteSpecialFolderRoot(
+                    programFiles,
+                    "the architecture-stable Program Files folder");
+            }
+        }
+
+        internal static void ApplySecureStoragePaths(SecureStoragePaths selection)
+        {
+            if (selection == null) throw new ArgumentNullException(nameof(selection));
+
+            SecureMainFolder = selection.SecureMainFolder;
+            ConfigsFolder = Path.Combine(SecureMainFolder, "Configs");
+            PendingLegacyProfilesFolder = Path.Combine(SecureMainFolder, "PendingLegacyProfiles");
+            DiagnosticsFolder = Path.Combine(SecureMainFolder, "Logs");
+            NotificationAssetsFolder = selection.NotificationAssetsFolder;
+            IsUsingSecureStorageFallback = selection.UsesFallback;
+            SecureStorageFallbackDiagnostic = selection.FallbackDiagnostic;
         }
 
         public static void EnsureConfigsFolder()

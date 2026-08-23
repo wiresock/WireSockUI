@@ -2,6 +2,7 @@
 using System.Drawing;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Security;
 
 namespace WireSockUI.Native
 {
@@ -177,22 +178,70 @@ namespace WireSockUI.Native
         /// </param>
         /// <param name="size">Icon size/width in pixels</param>
         /// <returns><see cref="Icon" /> or null</returns>
-        /// <exception cref="FileNotFoundException">Windows ImageRes resource could not be located.</exception>
         public static Icon GetWindowsIcon(Icons icon, int size)
         {
             if (size <= 0) throw new ArgumentOutOfRangeException(nameof(size));
+            var resourceId = (int)icon;
+            if (resourceId <= 0 || resourceId > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(icon));
 
-            // Windows 11
-            var library = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "SystemResources",
-                "imageres.dll.mun");
+            return TryLoadOptionalResource(() =>
+            {
+                // Windows 11
+                var library = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
+                    "SystemResources", "imageres.dll.mun");
 
-            if (!File.Exists(library))
-                library = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "imageres.dll");
+                if (!File.Exists(library))
+                    library = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "imageres.dll");
 
-            if (!File.Exists(library))
-                throw new FileNotFoundException("Unable to locate imageres.dll for Windows Icons");
+                if (!File.Exists(library))
+                    return null;
 
-            return GetIconFromGroup(library, (int)icon, size);
+                return GetIconFromGroup(library, resourceId, size);
+            });
+        }
+
+        public static Bitmap GetWindowsIconBitmap(Icons icon, int size)
+        {
+            if (size <= 0) throw new ArgumentOutOfRangeException(nameof(size));
+            var resourceId = (int)icon;
+            if (resourceId <= 0 || resourceId > ushort.MaxValue)
+                throw new ArgumentOutOfRangeException(nameof(icon));
+
+            return TryLoadOptionalResource(() =>
+            {
+                using (var windowsIcon = GetWindowsIcon(icon, size))
+                {
+                    return windowsIcon?.ToBitmap();
+                }
+            });
+        }
+
+        internal static T TryLoadOptionalResource<T>(Func<T> loader) where T : class
+        {
+            if (loader == null) throw new ArgumentNullException(nameof(loader));
+
+            try
+            {
+                return loader();
+            }
+            catch (Exception ex) when (IsRecoverableIconException(ex))
+            {
+                // Shell resource IDs and encodings differ across supported
+                // Windows releases. These icons are decorative, so an older
+                // imageres.dll must not prevent the application from starting.
+                return null;
+            }
+        }
+
+        internal static bool IsRecoverableIconException(Exception exception)
+        {
+            return exception is ArgumentException ||
+                   exception is ExternalException ||
+                   exception is IOException ||
+                   exception is NotSupportedException ||
+                   exception is SecurityException ||
+                   exception is UnauthorizedAccessException;
         }
     }
 }

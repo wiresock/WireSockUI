@@ -210,7 +210,6 @@
             this.txtEditor.BorderStyle = System.Windows.Forms.BorderStyle.FixedSingle;
             this.txtEditor.DetectUrls = false;
             this.txtEditor.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.txtEditor.Font = new System.Drawing.Font("Consolas", 10F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.txtEditor.Location = new System.Drawing.Point(0, 68);
             this.txtEditor.Name = "txtEditor";
             this.resControls.SetResourceKey(this.txtEditor, null);

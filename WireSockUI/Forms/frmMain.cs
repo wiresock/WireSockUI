@@ -135,6 +135,7 @@ namespace WireSockUI.Forms
 
             // Update the list of available configurations.
             LoadProfiles();
+            trayIcon.Visible = true;
         }
 
         internal static string BuildWindowTitle(string productName, string informationalVersion)
@@ -155,8 +156,12 @@ namespace WireSockUI.Forms
 
         private void ConfigureMainWindowLayout()
         {
-            Font = SystemFonts.MessageBoxFont;
-            lstProfiles.Font = SystemFonts.MessageBoxFont;
+            UiFonts.TryApplyMessageBoxFont(messageBoxFont =>
+            {
+                Font = messageBoxFont;
+                lstProfiles.Font = messageBoxFont;
+                lstLog.Font = messageBoxFont;
+            });
             lstProfiles.SizeChanged += OnProfileListResize;
 
             ConfigureDetailsGroup(gbxInterface, layoutInterface, 110F);
@@ -177,10 +182,10 @@ namespace WireSockUI.Forms
             };
             pnlRight.Controls.Add(_profileSelectionPrompt);
             _profileSelectionPrompt.BringToFront();
+            ArrangeProfileDetails(pnlRight, gbxState, gbxInterface, gbxPeer);
             SetProfileDetailsAvailable(false);
 
             lstLog.BorderStyle = BorderStyle.FixedSingle;
-            lstLog.Font = SystemFonts.MessageBoxFont;
         }
 
         internal static void ConfigureBottomActionRow(
@@ -205,6 +210,39 @@ namespace WireSockUI.Forms
             actions.Margin = Padding.Empty;
             actions.Padding = new Padding(0, 8, 8, 10);
             actions.WrapContents = false;
+        }
+
+        internal static void ArrangeProfileDetails(
+            Panel host,
+            Control state,
+            Control interfaceGroup,
+            Control peer)
+        {
+            if (host == null)
+                throw new ArgumentNullException(nameof(host));
+            if (state == null)
+                throw new ArgumentNullException(nameof(state));
+            if (interfaceGroup == null)
+                throw new ArgumentNullException(nameof(interfaceGroup));
+            if (peer == null)
+                throw new ArgumentNullException(nameof(peer));
+            if (state.Parent != host || interfaceGroup.Parent != host || peer.Parent != host)
+                throw new ArgumentException("All profile detail groups must belong to the supplied host.");
+
+            host.SuspendLayout();
+            try
+            {
+                // Top-docked controls are laid out from the back of the z-order.
+                // Send the groups back from visual bottom to visual top so their
+                // order remains stable when the State group is hidden or shown.
+                peer.SendToBack();
+                interfaceGroup.SendToBack();
+                state.SendToBack();
+            }
+            finally
+            {
+                host.ResumeLayout(true);
+            }
         }
 
         private static void ConfigureDetailsGroup(GroupBox groupBox, TableLayoutPanel layout, float labelWidth)
@@ -271,10 +309,7 @@ namespace WireSockUI.Forms
 
         private static Bitmap GetWindowsIconBitmap(WindowsIcons.Icons icon, int size)
         {
-            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
-            {
-                return windowsIcon?.ToBitmap();
-            }
+            return WindowsIcons.GetWindowsIconBitmap(icon, size);
         }
 
         private void SetOwnedMenuImage(ToolStripItem item, WindowsIcons.Icons icon)
@@ -287,10 +322,18 @@ namespace WireSockUI.Forms
 
         private void AddProfileIcon(string key, WindowsIcons.Icons icon, int size)
         {
-            using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+            try
             {
-                if (windowsIcon != null)
-                    imlProfiles.Images.AddClonedIcon(key, windowsIcon);
+                using (var windowsIcon = WindowsIcons.GetWindowsIcon(icon, size))
+                {
+                    if (windowsIcon != null)
+                        imlProfiles.Images.AddClonedIcon(key, windowsIcon);
+                }
+            }
+            catch (Exception ex) when (WindowsIcons.IsRecoverableIconException(ex))
+            {
+                Trace.TraceWarning(
+                    $"Unable to load decorative Windows icon {icon} for this Windows release: {ex.Message}");
             }
         }
 

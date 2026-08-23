@@ -30,7 +30,11 @@ param(
 
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string] $AssetDirectory
+    [string] $AssetDirectory,
+
+    [Parameter()]
+    [AllowEmptyString()]
+    [string] $ReleaseNotesPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -40,10 +44,8 @@ $maximumReleasePages = 10
 $maximumAssetPages = 10
 $maximumAssetBytes = 512MB
 $maximumAggregateBytes = 2GB
+$maximumReleaseNotesBytes = 128KB
 $expectedReleaseName = "WireSockUI-$ReleaseTag"
-$expectedReleaseBody = (
-    "WireSockUI $ReleaseTag. Verify every artifact with its adjacent SHA-256 " +
-    'sidecar, the immutable GitHub release attestation, and repository provenance attestations.')
 
 if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN)) {
     throw 'GH_TOKEN is required for release publication or verification.'
@@ -53,6 +55,47 @@ if ($Repository -cne 'wiresock/WireSockUI') {
 }
 if ($ReleaseTag -cne "release-v$Version") {
     throw "Release tag '$ReleaseTag' does not match package version '$Version'."
+}
+
+if ([string]::IsNullOrWhiteSpace($ReleaseNotesPath)) {
+    $ReleaseNotesPath = Join-Path `
+        (Split-Path -Parent $PSScriptRoot) `
+        "docs/release-notes/$ReleaseTag.md"
+}
+$releaseNotesFile = Get-Item `
+    -LiteralPath ([IO.Path]::GetFullPath($ReleaseNotesPath)) `
+    -Force
+$releaseNotesLinkType = $releaseNotesFile.PSObject.Properties['LinkType']
+if ($releaseNotesFile.PSIsContainer -or
+    ($releaseNotesFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 -or
+    ($null -ne $releaseNotesLinkType -and
+        -not [string]::IsNullOrEmpty([string]$releaseNotesLinkType.Value))) {
+    throw "Release notes '$($releaseNotesFile.FullName)' must be an ordinary file."
+}
+if ([Int64]$releaseNotesFile.Length -lt 1 -or
+    [Int64]$releaseNotesFile.Length -gt $maximumReleaseNotesBytes) {
+    throw "Release notes must be between 1 and $maximumReleaseNotesBytes bytes."
+}
+$strictUtf8 = [Text.UTF8Encoding]::new($false, $true)
+try {
+    $releaseNotes = [IO.File]::ReadAllText(
+        $releaseNotesFile.FullName,
+        $strictUtf8)
+}
+catch [Text.DecoderFallbackException] {
+    throw "Release notes '$($releaseNotesFile.FullName)' must contain valid UTF-8."
+}
+$expectedReleaseBody = ($releaseNotes -replace '\r\n?', "`n").Trim()
+if ([string]::IsNullOrWhiteSpace($expectedReleaseBody)) {
+    throw 'Release notes must contain non-empty text.'
+}
+$expectedReleaseHeading = "## WireSock UI $Version"
+$releaseHeading = ($expectedReleaseBody -split "`n", 2)[0]
+if ($releaseHeading -cne $expectedReleaseHeading) {
+    throw "Release notes must start with the exact heading '$expectedReleaseHeading'."
+}
+if ($expectedReleaseBody -match '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]') {
+    throw 'Release notes contain a disallowed control character.'
 }
 
 $apiUri = $null
