@@ -304,14 +304,14 @@ function Invoke-NativeHostProbe {
                     " Diagnostic: $standardError"
                 }
                 throw (
-                    'The injected managed exception did not produce the ' +
+                    'The injected managed failure did not produce the ' +
                     "managed boundary contract (exit 31). Actual exit " +
                     "$($process.ExitCode).$detail")
             }
             if ($standardError.Contains(
                     'The validated WireSock UI managed entry point failed:')) {
                 throw (
-                    'The injected managed exception escaped through ' +
+                    'The injected managed failure escaped through ' +
                     'ExecuteInDefaultAppDomain as an HRESULT.')
             }
             return
