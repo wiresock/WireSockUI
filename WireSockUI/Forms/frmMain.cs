@@ -182,6 +182,7 @@ namespace WireSockUI.Forms
             };
             pnlRight.Controls.Add(_profileSelectionPrompt);
             _profileSelectionPrompt.BringToFront();
+            ArrangeProfileDetails(pnlRight, gbxState, gbxInterface, gbxPeer);
             SetProfileDetailsAvailable(false);
 
             lstLog.BorderStyle = BorderStyle.FixedSingle;
@@ -209,6 +210,39 @@ namespace WireSockUI.Forms
             actions.Margin = Padding.Empty;
             actions.Padding = new Padding(0, 8, 8, 10);
             actions.WrapContents = false;
+        }
+
+        internal static void ArrangeProfileDetails(
+            Panel host,
+            Control state,
+            Control interfaceGroup,
+            Control peer)
+        {
+            if (host == null)
+                throw new ArgumentNullException(nameof(host));
+            if (state == null)
+                throw new ArgumentNullException(nameof(state));
+            if (interfaceGroup == null)
+                throw new ArgumentNullException(nameof(interfaceGroup));
+            if (peer == null)
+                throw new ArgumentNullException(nameof(peer));
+            if (state.Parent != host || interfaceGroup.Parent != host || peer.Parent != host)
+                throw new ArgumentException("All profile detail groups must belong to the supplied host.");
+
+            host.SuspendLayout();
+            try
+            {
+                // Top-docked controls are laid out from the back of the z-order.
+                // Send the groups back from visual bottom to visual top so their
+                // order remains stable when the State group is hidden or shown.
+                peer.SendToBack();
+                interfaceGroup.SendToBack();
+                state.SendToBack();
+            }
+            finally
+            {
+                host.ResumeLayout(true);
+            }
         }
 
         private static void ConfigureDetailsGroup(GroupBox groupBox, TableLayoutPanel layout, float labelWidth)

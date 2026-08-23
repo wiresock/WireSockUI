@@ -285,6 +285,7 @@ namespace WireSockUI.Tests
                 { "Image lists clone icons before delayed handle creation", ImageListsCloneIconsBeforeDelayedHandleCreation },
                 { "WinForms dialogs initialize and dispose on an STA thread", WinFormsDialogsInitializeAndDisposeOnStaThread },
                 { "WinForms dialogs use readable responsive layouts", WinFormsDialogsUseReadableResponsiveLayouts },
+                { "Main window profile details retain visual order after scaling", MainWindowProfileDetailsRetainVisualOrderAfterScaling },
                 { "Main window action rows remain visible after scaling", MainWindowActionRowsRemainVisibleAfterScaling },
                 { "Settings copies the secured profiles path without shell activation", SettingsCopiesSecuredProfilesPathWithoutShellActivation },
                 { "Editor bounds synchronous syntax highlighting", EditorBoundsSynchronousSyntaxHighlighting },
@@ -4769,6 +4770,105 @@ namespace WireSockUI.Tests
                        child.Right <= parent.ClientSize.Width &&
                        child.Bottom <= parent.ClientSize.Height,
                 $"Expected {description} to remain inside its parent bounds.");
+        }
+
+        private static void MainWindowProfileDetailsRetainVisualOrderAfterScaling()
+        {
+            using (var host = new Panel
+            {
+                Padding = new Padding(8),
+                Size = new Size(600, 500)
+            })
+            using (var state = new GroupBox
+            {
+                Dock = DockStyle.Top,
+                Height = 70,
+                Text = "State",
+                Visible = false
+            })
+            using (var peer = new GroupBox
+            {
+                Dock = DockStyle.Top,
+                Height = 90,
+                Text = "Peer",
+                Visible = false
+            })
+            using (var interfaceGroup = new GroupBox
+            {
+                Dock = DockStyle.Top,
+                Height = 80,
+                Text = "Interface",
+                Visible = false
+            })
+            using (var prompt = new Label
+            {
+                Dock = DockStyle.Fill,
+                Text = "Select a profile"
+            })
+            {
+                // Match the designer and runtime insertion sequence.
+                host.Controls.Add(state);
+                host.Controls.Add(peer);
+                host.Controls.Add(interfaceGroup);
+                host.Controls.Add(prompt);
+                prompt.BringToFront();
+
+                FrmMain.ArrangeProfileDetails(host, state, interfaceGroup, peer);
+                AssertEqual(0, host.Controls.GetChildIndex(prompt));
+
+                prompt.Visible = false;
+                interfaceGroup.Visible = true;
+                peer.Visible = true;
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, false, "initial inactive layout");
+
+                state.Visible = true;
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, true, "initial active layout");
+
+                host.Scale(new SizeF(1.5F, 1.5F));
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, true, "scaled active layout");
+
+                state.Visible = false;
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, false, "scaled inactive layout");
+
+                state.Visible = true;
+                host.PerformLayout();
+                AssertProfileDetailOrder(host, state, interfaceGroup, peer, true, "reshown scaled active layout");
+            }
+        }
+
+        private static void AssertProfileDetailOrder(
+            Panel host,
+            Control state,
+            Control interfaceGroup,
+            Control peer,
+            bool stateVisible,
+            string scenario)
+        {
+            host.PerformLayout();
+
+            var stateIndex = host.Controls.GetChildIndex(state);
+            var interfaceIndex = host.Controls.GetChildIndex(interfaceGroup);
+            var peerIndex = host.Controls.GetChildIndex(peer);
+            AssertTrue(stateIndex > interfaceIndex && interfaceIndex > peerIndex,
+                $"Expected deterministic State, Interface, Peer z-order for {scenario}.");
+
+            AssertTrue(interfaceGroup.Top < peer.Top && interfaceGroup.Bottom <= peer.Top,
+                $"Expected Interface to remain above Peer for {scenario}.");
+            if (stateVisible)
+            {
+                AssertTrue(state.Visible,
+                    $"Expected State to be visible for {scenario}.");
+                AssertTrue(state.Top < interfaceGroup.Top && state.Bottom <= interfaceGroup.Top,
+                    $"Expected State to remain above Interface for {scenario}.");
+            }
+            else
+            {
+                AssertFalse(state.Visible,
+                    $"Expected State to be hidden for {scenario}.");
+            }
         }
 
         private static void MainWindowActionRowsRemainVisibleAfterScaling()
