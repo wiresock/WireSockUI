@@ -156,8 +156,12 @@ namespace WireSockUI.Forms
 
         private void ConfigureMainWindowLayout()
         {
-            Font = SystemFonts.MessageBoxFont;
-            lstProfiles.Font = SystemFonts.MessageBoxFont;
+            if (UiFonts.TryGetMessageBoxFont(out var messageBoxFont))
+            {
+                Font = messageBoxFont;
+                lstProfiles.Font = messageBoxFont;
+                lstLog.Font = messageBoxFont;
+            }
             lstProfiles.SizeChanged += OnProfileListResize;
 
             ConfigureDetailsGroup(gbxInterface, layoutInterface, 110F);
@@ -181,7 +185,6 @@ namespace WireSockUI.Forms
             SetProfileDetailsAvailable(false);
 
             lstLog.BorderStyle = BorderStyle.FixedSingle;
-            lstLog.Font = SystemFonts.MessageBoxFont;
         }
 
         internal static void ConfigureBottomActionRow(

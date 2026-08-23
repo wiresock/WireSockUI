@@ -52,7 +52,8 @@ namespace WireSockUI.Forms
         {
             InitializeComponent();
 
-            Font = SystemFonts.MessageBoxFont;
+            if (UiFonts.TryGetMessageBoxFont(out var messageBoxFont))
+                Font = messageBoxFont;
 
             using (var identity = WindowsIdentity.GetCurrent())
                 _currentUserSid = identity.User?.Value;

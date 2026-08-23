@@ -203,6 +203,7 @@ namespace WireSockUI.Tests
                 { "Program rejects over-the-shoulder elevation identities", ProgramRejectsOverTheShoulderElevationIdentities },
                 { "Managed host boundary returns deterministic startup failures", ManagedHostBoundaryReturnsDeterministicStartupFailures },
                 { "Windows shell icons are optional on legacy Windows", WindowsShellIconsAreOptionalOnLegacyWindows },
+                { "Windows message font is optional on legacy Windows", WindowsMessageFontIsOptionalOnLegacyWindows },
                 { "Program rejects replaceable trusted path ancestors", ProgramRejectsReplaceableTrustedPathAncestors },
                 { "Program rejects protected directory creation below writable parents", ProgramRejectsProtectedDirectoryCreationBelowWritableParents },
                 { "Program permits one protected leaf below a trusted shared root", ProgramPermitsSingleProtectedLeafBelowTrustedSharedRoot },
@@ -4563,11 +4564,18 @@ namespace WireSockUI.Tests
 
         private static void AssertDialogUsesSystemFont(Form dialog, string description)
         {
-            AssertTrue(
-                string.Equals(dialog.Font.Name, SystemFonts.MessageBoxFont.Name,
-                    StringComparison.OrdinalIgnoreCase) &&
-                dialog.Font.SizeInPoints >= SystemFonts.MessageBoxFont.SizeInPoints,
-                $"Expected the {description} dialog to use the Windows message font.");
+            if (UiFonts.TryGetMessageBoxFont(out var messageBoxFont))
+            {
+                AssertTrue(
+                    string.Equals(dialog.Font.Name, messageBoxFont.Name,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    dialog.Font.SizeInPoints >= messageBoxFont.SizeInPoints,
+                    $"Expected the {description} dialog to use the Windows message font.");
+                return;
+            }
+
+            AssertTrue(dialog.Font != null && dialog.Font.SizeInPoints > 0,
+                $"Expected the {description} dialog to retain a usable fallback font.");
         }
 
         private static void AssertControlFits(Control parent, Control child, string description)
@@ -7891,6 +7899,32 @@ namespace WireSockUI.Tests
                 WindowsIcons.GetWindowsIcon((WindowsIcons.Icons)int.MaxValue, 16), null);
             AssertThrows<ArgumentOutOfRangeException>(() =>
                 WindowsIcons.GetWindowsIconBitmap((WindowsIcons.Icons)int.MaxValue, 16), null);
+        }
+
+        private static void WindowsMessageFontIsOptionalOnLegacyWindows()
+        {
+            AssertFalse(
+                UiFonts.TryGetMessageBoxFont(
+                    () => throw new ArgumentException("Font '?' cannot be found."),
+                    out var missingFont),
+                "Expected an unavailable Windows message font to be optional.");
+            AssertTrue(missingFont == null,
+                "Expected an unavailable Windows message font to return no font.");
+
+            AssertFalse(
+                UiFonts.TryGetMessageBoxFont(
+                    () => throw new ExternalException("GDI+ could not resolve the system font."),
+                    out var failedFont),
+                "Expected a recoverable GDI+ font failure to be optional.");
+            AssertTrue(failedFont == null,
+                "Expected a recoverable GDI+ font failure to return no font.");
+
+            var existingFont = Control.DefaultFont;
+            AssertTrue(
+                UiFonts.TryGetMessageBoxFont(() => existingFont, out var selectedFont),
+                "Expected a valid Windows message font to be selected.");
+            AssertTrue(ReferenceEquals(existingFont, selectedFont),
+                "Expected font selection to retain the provider-owned font instance.");
         }
 
         private static void SdkSyntheticSmokePermitsInactiveTunnel()

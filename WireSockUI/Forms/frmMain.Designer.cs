@@ -380,7 +380,6 @@ namespace WireSockUI.Forms
             this.lstProfiles.Columns.AddRange(new System.Windows.Forms.ColumnHeader[] {
             this.colProfile});
             this.lstProfiles.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.lstProfiles.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
             this.lstProfiles.FullRowSelect = true;
             this.lstProfiles.HeaderStyle = System.Windows.Forms.ColumnHeaderStyle.None;
             this.lstProfiles.HideSelection = false;
