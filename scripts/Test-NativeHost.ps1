@@ -294,8 +294,7 @@ function Invoke-NativeHostProbe {
         }
         if ($ExpectManagedBoundaryFailure) {
             $managedBoundaryDiagnostic =
-                'The managed native-host entry point failed: ' +
-                'System.ArgumentException: Injected managed native-host boundary failure.'
+                'WireSockUI native self-test: phase: managed entry point returned'
             if ($process.ExitCode -ne 31 -or
                 -not $standardError.Contains($managedBoundaryDiagnostic)) {
                 $detail = if ([string]::IsNullOrWhiteSpace($standardError)) {

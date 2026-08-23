@@ -115,6 +115,25 @@ namespace WireSockUI
             {
                 nativeHostSelfTestRequested = string.Equals(
                     hostedArgument, NativeHostSelfTestToken, StringComparison.Ordinal);
+#if DEBUG
+                if (nativeHostSelfTestRequested &&
+                    string.Equals(
+                        Environment.GetEnvironmentVariable(
+                            "WIRESOCKUI_DEVELOPMENT_MANAGED_BOUNDARY_FAILURE"),
+                        "1",
+                        StringComparison.Ordinal))
+                {
+                    return ExecuteHostedMainBoundary(
+                        hostedArgument,
+                        argument =>
+                        {
+                            throw new ArgumentException(
+                                "Injected managed native-host boundary failure.");
+                        },
+                        exception => { },
+                        NativeHostSelfTestFailureExitCode);
+                }
+#endif
                 return ExecuteHostedMainBoundary(
                     hostedArgument,
                     HostedMainCore,
@@ -163,18 +182,6 @@ namespace WireSockUI
         {
             var nativeHostSelfTestRequested = string.Equals(
                 hostedArgument, NativeHostSelfTestToken, StringComparison.Ordinal);
-#if DEBUG
-            if (nativeHostSelfTestRequested &&
-                string.Equals(
-                    Environment.GetEnvironmentVariable(
-                        "WIRESOCKUI_DEVELOPMENT_MANAGED_BOUNDARY_FAILURE"),
-                    "1",
-                    StringComparison.Ordinal))
-            {
-                throw new ArgumentException(
-                    "Injected managed native-host boundary failure.");
-            }
-#endif
             if (!TryValidateApplicationPayload(Assembly.GetExecutingAssembly().Location, out var payloadDiagnostic))
             {
                 return ReportStartupFailure(
