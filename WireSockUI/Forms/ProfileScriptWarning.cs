@@ -89,7 +89,7 @@ namespace WireSockUI.Forms
                 Text = Resources.ProfileScriptWarningMessage
             };
 
-            var commandFont = new Font(FontFamily.GenericMonospace, 9F);
+            UiFonts.TryCreateFont("Consolas", 9F, out var commandFont);
             var commands = new TextBox
             {
                 Dock = DockStyle.Fill,
@@ -97,9 +97,10 @@ namespace WireSockUI.Forms
                 ReadOnly = true,
                 ScrollBars = ScrollBars.Both,
                 WordWrap = false,
-                Font = commandFont,
                 Text = hookSummary
             };
+            if (commandFont != null)
+                commands.Font = commandFont;
 
             var prompt = new Label
             {
@@ -153,7 +154,8 @@ namespace WireSockUI.Forms
             dialog.ActiveControl = noButton;
             dialog.ClientSizeChanged += (sender, args) =>
                 warning.MaximumSize = new Size(Math.Max(100, dialog.ClientSize.Width - 36), 0);
-            dialog.Disposed += (sender, args) => commandFont.Dispose();
+            if (commandFont != null)
+                dialog.Disposed += (sender, args) => commandFont.Dispose();
             return dialog;
         }
     }

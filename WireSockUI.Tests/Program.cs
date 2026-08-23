@@ -1921,11 +1921,15 @@ namespace WireSockUI.Tests
 
             try
             {
-                using (var healthyFont = new Font(
-                           "Tahoma",
-                           8.25F,
-                           FontStyle.Regular,
-                           GraphicsUnit.Point))
+                if (!UiFonts.TryCreatePrivateSystemFont(out var healthyFont))
+                {
+                    Console.Error.Write(
+                        "A usable Windows TrueType font file could not be loaded privately.");
+                    exitCode = 1;
+                    return true;
+                }
+
+                using (healthyFont)
                 {
                     var fallbackFactoryCalled = false;
                     if (!UiFonts.TryEnsureWinFormsDefaultFonts(
@@ -1944,24 +1948,25 @@ namespace WireSockUI.Tests
                     {
                         Console.Error.Write(
                             "Healthy WinForms defaults unexpectedly selected a fallback.");
-                        exitCode = 1;
+                        exitCode = 2;
                         return true;
                     }
                 }
 
-                var fallbackFont = new Font("Tahoma", 8.25F, FontStyle.Regular, GraphicsUnit.Point);
+                Font fallbackFont = null;
                 if (!UiFonts.TryEnsureWinFormsDefaultFonts(
                         () => throw new ArgumentException("Font '?' cannot be found."),
                         () => throw new InvalidOperationException(
                             "The menu font provider must not run after the default font fails."),
-                        () => fallbackFont,
+                        () => fallbackFont = UiFonts.CreateFallbackFont(),
                         out var installedFallback,
                         out var diagnostic) ||
                     !installedFallback ||
+                    fallbackFont == null ||
                     diagnostic?.Contains("Font '?' cannot be found.") != true)
                 {
                     Console.Error.Write(diagnostic);
-                    exitCode = 2;
+                    exitCode = 3;
                     return true;
                 }
 
@@ -1976,7 +1981,7 @@ namespace WireSockUI.Tests
                     {
                         Console.Error.Write(
                             "WinForms controls did not retain the installed fallback font.");
-                        exitCode = 3;
+                        exitCode = 4;
                     }
                 }
 
@@ -1995,7 +2000,7 @@ namespace WireSockUI.Tests
                 {
                     Console.Error.Write(
                         "The ToolStrip fallback cache did not cover every monitor DPI.");
-                    exitCode = 4;
+                    exitCode = 5;
                     return true;
                 }
 
@@ -2014,7 +2019,7 @@ namespace WireSockUI.Tests
                     {
                         Console.Error.Write(
                             "WinForms did not restore the fallback after a preference change.");
-                        exitCode = 5;
+                        exitCode = 6;
                     }
                 }
 
@@ -2072,7 +2077,7 @@ namespace WireSockUI.Tests
                 {
                     Console.Error.Write(
                         "WinForms did not restore the fallback after a color preference change.");
-                    exitCode = 6;
+                    exitCode = 7;
                 }
 
                 return true;
@@ -2080,7 +2085,7 @@ namespace WireSockUI.Tests
             catch (Exception ex)
             {
                 Console.Error.Write(ex);
-                exitCode = 7;
+                exitCode = 8;
                 return true;
             }
         }
@@ -8169,6 +8174,23 @@ namespace WireSockUI.Tests
             AssertTrue(firstExplicitFontConstruction < 0 ||
                        firstExplicitFontConstruction > contextMenuConstruction,
                 "The main form designer must not resolve an explicit font before its context menu.");
+
+            var editDesignerSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "frmEdit.Designer.cs"));
+            AssertFalse(
+                editDesignerSource.Contains("new System.Drawing.Font(\""),
+                "The edit-form designer must not perform an unguarded font-family lookup.");
+            var editFormSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "frmEdit.cs"));
+            AssertFalse(
+                editFormSource.Contains("new Font(txtEditor.Font"),
+                "The edit form must guard optional font-style creation.");
+
+            var profileScriptWarningSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "ProfileScriptWarning.cs"));
+            AssertFalse(
+                profileScriptWarningSource.Contains("FontFamily.Generic"),
+                "The profile-script warning must not perform an unguarded generic-font lookup.");
 
             var programSource = File.ReadAllText(
                 FindRepositoryFile("WireSockUI", "Program.cs"));

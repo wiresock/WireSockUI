@@ -3,6 +3,8 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Text;
+using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -13,7 +15,25 @@ namespace WireSockUI.Forms
 {
     internal static class UiFonts
     {
+        private const int AnsiVariableFontStockObject = 12;
+        private const int SystemFontStockObject = 13;
+        private const int DefaultGuiFontStockObject = 17;
+        private const int NormalFontWeight = 400;
+        private const uint DefaultCharacterSet = 1;
+        private const uint TrueTypeOnlyOutputPrecision = 7;
+        private const uint DefaultClipPrecision = 0;
+        private const uint DefaultFontQuality = 0;
+        private const uint VariablePitchSwissFamily = 0x22;
+        private static readonly string[] SystemTrueTypeFontFiles =
+        {
+            "segoeui.ttf",
+            "tahoma.ttf",
+            "arial.ttf",
+            "micross.ttf"
+        };
         private static readonly object InitializationSyncRoot = new object();
+        private static readonly List<PrivateFontCollection> OwnedPrivateFontCollections =
+            new List<PrivateFontCollection>();
         private static bool _defaultsInitialized;
         private static bool _installedFallback;
         private static string _initializationDiagnostic;
@@ -38,6 +58,34 @@ namespace WireSockUI.Forms
                 return 0;
             }
         }
+
+        [DllImport("gdi32.dll", ExactSpelling = true)]
+        private static extern IntPtr GetStockObject(int objectIndex);
+
+        [DllImport(
+            "gdi32.dll",
+            CharSet = CharSet.Unicode,
+            EntryPoint = "CreateFontW",
+            SetLastError = true)]
+        private static extern IntPtr CreateFont(
+            int height,
+            int width,
+            int escapement,
+            int orientation,
+            int weight,
+            uint italic,
+            uint underline,
+            uint strikeOut,
+            uint characterSet,
+            uint outputPrecision,
+            uint clipPrecision,
+            uint quality,
+            uint pitchAndFamily,
+            string faceName);
+
+        [DllImport("gdi32.dll", ExactSpelling = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        private static extern bool DeleteObject(IntPtr objectHandle);
 
         internal static bool TryEnsureWinFormsDefaultFonts(
             out bool installedFallback,
@@ -239,9 +287,15 @@ namespace WireSockUI.Forms
             }
         }
 
-        private static Font CreateFallbackFont()
+        internal static Font CreateFallbackFont()
         {
             Font font;
+            if (TryCreatePrivateSystemFont(out font))
+                return font;
+            if (TryCreateMappedTrueTypeFont(out font))
+                return font;
+            if (TryCreateStockGuiFont(out font))
+                return font;
             if (TryCreateFont("Segoe UI", 9F, out font))
                 return font;
             if (TryCreateFont("Tahoma", 8.25F, out font))
@@ -252,7 +306,151 @@ namespace WireSockUI.Forms
             return null;
         }
 
-        private static bool TryCreateFont(string familyName, float size, out Font font)
+        internal static bool TryCreatePrivateSystemFont(out Font font)
+        {
+            font = null;
+            var fontsFolder = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+            if (string.IsNullOrWhiteSpace(fontsFolder) || !Path.IsPathRooted(fontsFolder))
+                return false;
+
+            foreach (var fontFileName in SystemTrueTypeFontFiles)
+            {
+                var fontPath = Path.Combine(fontsFolder, fontFileName);
+                if (!File.Exists(fontPath))
+                    continue;
+
+                PrivateFontCollection collection = null;
+                var retainedCollection = false;
+                try
+                {
+                    collection = new PrivateFontCollection();
+                    collection.AddFontFile(fontPath);
+                    foreach (var family in collection.Families)
+                    {
+                        if (!family.IsStyleAvailable(FontStyle.Regular))
+                            continue;
+
+                        var candidate = new Font(
+                            family,
+                            9F,
+                            FontStyle.Regular,
+                            GraphicsUnit.Point);
+                        if (!IsUsableFont(candidate))
+                        {
+                            candidate.Dispose();
+                            continue;
+                        }
+
+                        lock (InitializationSyncRoot)
+                            OwnedPrivateFontCollections.Add(collection);
+                        retainedCollection = true;
+                        font = candidate;
+                        return true;
+                    }
+                }
+                catch (Exception ex) when (IsRecoverablePrivateFontException(ex))
+                {
+                    // Try the next protected Windows font file.
+                }
+                finally
+                {
+                    if (!retainedCollection)
+                        collection?.Dispose();
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsRecoverablePrivateFontException(Exception exception)
+        {
+            return IsRecoverableFontException(exception) ||
+                   exception is IOException ||
+                   exception is UnauthorizedAccessException ||
+                   exception is System.Security.SecurityException;
+        }
+
+        internal static bool TryCreateMappedTrueTypeFont(out Font font)
+        {
+            font = null;
+            var mappedFontHandle = CreateFont(
+                0,
+                0,
+                0,
+                0,
+                NormalFontWeight,
+                0,
+                0,
+                0,
+                DefaultCharacterSet,
+                TrueTypeOnlyOutputPrecision,
+                DefaultClipPrecision,
+                DefaultFontQuality,
+                VariablePitchSwissFamily,
+                string.Empty);
+            if (mappedFontHandle == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                var candidate = Font.FromHfont(mappedFontHandle);
+                if (!IsUsableFont(candidate))
+                {
+                    candidate?.Dispose();
+                    return false;
+                }
+
+                font = candidate;
+                return true;
+            }
+            catch (Exception ex) when (IsRecoverableFontException(ex))
+            {
+                return false;
+            }
+            finally
+            {
+                // CreateFont returns an application-owned HFONT. Font.FromHfont
+                // copies its LOGFONT into a managed GDI+ Font before this point.
+                DeleteObject(mappedFontHandle);
+            }
+        }
+
+        internal static bool TryCreateStockGuiFont(out Font font)
+        {
+            return TryCreateStockFont(DefaultGuiFontStockObject, out font) ||
+                   TryCreateStockFont(SystemFontStockObject, out font) ||
+                   TryCreateStockFont(AnsiVariableFontStockObject, out font);
+        }
+
+        private static bool TryCreateStockFont(int stockObjectIndex, out Font font)
+        {
+            font = null;
+            var stockFontHandle = GetStockObject(stockObjectIndex);
+            if (stockFontHandle == IntPtr.Zero)
+                return false;
+
+            try
+            {
+                // GetStockObject returns a shared system-owned HFONT. Font.FromHfont
+                // copies its LOGFONT into a managed GDI+ Font, so the stock handle
+                // must never be released with DeleteObject.
+                var candidate = Font.FromHfont(stockFontHandle);
+                if (!IsUsableFont(candidate))
+                {
+                    candidate?.Dispose();
+                    return false;
+                }
+
+                font = candidate;
+                return true;
+            }
+            catch (Exception ex) when (IsRecoverableFontException(ex))
+            {
+                return false;
+            }
+        }
+
+        internal static bool TryCreateFont(string familyName, float size, out Font font)
         {
             font = null;
             try
@@ -262,6 +460,33 @@ namespace WireSockUI.Forms
                     size,
                     FontStyle.Regular,
                     GraphicsUnit.Point);
+                if (!IsUsableFont(candidate))
+                {
+                    candidate.Dispose();
+                    return false;
+                }
+
+                font = candidate;
+                return true;
+            }
+            catch (Exception ex) when (IsRecoverableFontException(ex))
+            {
+                return false;
+            }
+        }
+
+        internal static bool TryCreateFont(Font prototype, FontStyle style, out Font font)
+        {
+            font = null;
+            if (!IsUsableFont(prototype))
+                return false;
+
+            try
+            {
+                if (!prototype.FontFamily.IsStyleAvailable(style))
+                    return false;
+
+                var candidate = new Font(prototype, style);
                 if (!IsUsableFont(candidate))
                 {
                     candidate.Dispose();
