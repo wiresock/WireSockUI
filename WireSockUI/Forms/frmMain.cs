@@ -156,12 +156,12 @@ namespace WireSockUI.Forms
 
         private void ConfigureMainWindowLayout()
         {
-            if (UiFonts.TryGetMessageBoxFont(out var messageBoxFont))
+            UiFonts.TryApplyMessageBoxFont(messageBoxFont =>
             {
                 Font = messageBoxFont;
                 lstProfiles.Font = messageBoxFont;
                 lstLog.Font = messageBoxFont;
-            }
+            });
             lstProfiles.SizeChanged += OnProfileListResize;
 
             ConfigureDetailsGroup(gbxInterface, layoutInterface, 110F);

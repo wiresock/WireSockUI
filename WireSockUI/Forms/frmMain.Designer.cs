@@ -171,7 +171,7 @@ namespace WireSockUI.Forms
             // 
             // cmiManageTunnels
             // 
-            this.cmiManageTunnels.Font = new System.Drawing.Font("Segoe UI", 9F, System.Drawing.FontStyle.Bold);
+            this.cmiManageTunnels.Font = new System.Drawing.Font(this.cmiManageTunnels.Font, System.Drawing.FontStyle.Bold);
             this.cmiManageTunnels.Name = "cmiManageTunnels";
             this.resMenu.SetResourceKey(this.cmiManageTunnels, null);
             this.cmiManageTunnels.Size = new System.Drawing.Size(210, 22);

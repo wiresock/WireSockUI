@@ -35,6 +35,8 @@ namespace WireSockUI.Tests
         private const int SymbolicLinkFlagAllowUnprivilegedCreate = 2;
         private const int TestTimeoutMilliseconds = 120000;
         private const int MoveFileWriteThrough = 0x8;
+        private const string WinFormsFontFallbackHelperSwitch =
+            "--winforms-font-fallback-helper";
 
         private sealed class TestExecutionResult
         {
@@ -106,6 +108,9 @@ namespace WireSockUI.Tests
 
         private static int Main(string[] args)
         {
+            if (TryRunWinFormsFontFallbackTestHelper(args, out var fontFallbackHelperExitCode))
+                return fontFallbackHelperExitCode;
+
             if (TryRunAutoRunServiceTestHelper(args, out var autoRunHelperExitCode))
                 return autoRunHelperExitCode;
 
@@ -204,6 +209,7 @@ namespace WireSockUI.Tests
                 { "Managed host boundary returns deterministic startup failures", ManagedHostBoundaryReturnsDeterministicStartupFailures },
                 { "Windows shell icons are optional on legacy Windows", WindowsShellIconsAreOptionalOnLegacyWindows },
                 { "Windows message font is optional on legacy Windows", WindowsMessageFontIsOptionalOnLegacyWindows },
+                { "WinForms default fonts fall back before control construction", WinFormsDefaultFontsFallbackBeforeControlConstruction },
                 { "Program rejects replaceable trusted path ancestors", ProgramRejectsReplaceableTrustedPathAncestors },
                 { "Program rejects protected directory creation below writable parents", ProgramRejectsProtectedDirectoryCreationBelowWritableParents },
                 { "Program permits one protected leaf below a trusted shared root", ProgramPermitsSingleProtectedLeafBelowTrustedSharedRoot },
@@ -1902,6 +1908,180 @@ namespace WireSockUI.Tests
             {
                 Global.ConfigsFolder = originalConfigsFolder;
                 Global.AllowUnsecuredConfigFolderOverrideForTests = originalOverride;
+            }
+        }
+
+        private static bool TryRunWinFormsFontFallbackTestHelper(string[] args, out int exitCode)
+        {
+            exitCode = 0;
+            if (args == null ||
+                args.Length != 1 ||
+                !string.Equals(args[0], WinFormsFontFallbackHelperSwitch, StringComparison.Ordinal))
+                return false;
+
+            try
+            {
+                using (var healthyFont = new Font(
+                           "Tahoma",
+                           8.25F,
+                           FontStyle.Regular,
+                           GraphicsUnit.Point))
+                {
+                    var fallbackFactoryCalled = false;
+                    if (!UiFonts.TryEnsureWinFormsDefaultFonts(
+                            () => healthyFont,
+                            () => healthyFont,
+                            () =>
+                            {
+                                fallbackFactoryCalled = true;
+                                return null;
+                            },
+                            out var unnecessaryFallback,
+                            out var healthyDiagnostic) ||
+                        unnecessaryFallback ||
+                        fallbackFactoryCalled ||
+                        !string.IsNullOrEmpty(healthyDiagnostic))
+                    {
+                        Console.Error.Write(
+                            "Healthy WinForms defaults unexpectedly selected a fallback.");
+                        exitCode = 1;
+                        return true;
+                    }
+                }
+
+                var fallbackFont = new Font("Tahoma", 8.25F, FontStyle.Regular, GraphicsUnit.Point);
+                if (!UiFonts.TryEnsureWinFormsDefaultFonts(
+                        () => throw new ArgumentException("Font '?' cannot be found."),
+                        () => throw new InvalidOperationException(
+                            "The menu font provider must not run after the default font fails."),
+                        () => fallbackFont,
+                        out var installedFallback,
+                        out var diagnostic) ||
+                    !installedFallback ||
+                    diagnostic?.Contains("Font '?' cannot be found.") != true)
+                {
+                    Console.Error.Write(diagnostic);
+                    exitCode = 2;
+                    return true;
+                }
+
+                using (var contextMenu = new ContextMenuStrip())
+                using (var toolStrip = new ToolStrip())
+                {
+                    contextMenu.GripStyle = ToolStripGripStyle.Hidden;
+                    toolStrip.GripStyle = ToolStripGripStyle.Hidden;
+                    if (!ReferenceEquals(fallbackFont, Control.DefaultFont) ||
+                        !ReferenceEquals(fallbackFont, contextMenu.Font) ||
+                        !ReferenceEquals(fallbackFont, toolStrip.Font))
+                    {
+                        Console.Error.Write(
+                            "WinForms controls did not retain the installed fallback font.");
+                        exitCode = 3;
+                    }
+                }
+
+                const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Static;
+                var controlDefaultFontField = typeof(Control).GetField("defaultFont", flags);
+                var toolStripDefaultFontField =
+                    typeof(ToolStripManager).GetField("defaultFont", flags);
+                var toolStripDefaultFontCache =
+                    typeof(ToolStripManager).GetField("defaultFontCache", flags)?.GetValue(null)
+                    as System.Collections.Concurrent.ConcurrentDictionary<int, Font>;
+                if (toolStripDefaultFontCache != null &&
+                    (!toolStripDefaultFontCache.TryGetValue(96, out var standardDpiFont) ||
+                     !toolStripDefaultFontCache.TryGetValue(384, out var highDpiFont) ||
+                     !ReferenceEquals(fallbackFont, standardDpiFont) ||
+                     !ReferenceEquals(fallbackFont, highDpiFont)))
+                {
+                    Console.Error.Write(
+                        "The ToolStrip fallback cache did not cover every monitor DPI.");
+                    exitCode = 4;
+                    return true;
+                }
+
+                controlDefaultFontField?.SetValue(null, null);
+                toolStripDefaultFontField?.SetValue(null, null);
+                toolStripDefaultFontCache?.Clear();
+                UiFonts.RestoreFallbackAfterPreferenceChange(
+                    null,
+                    new Microsoft.Win32.UserPreferenceChangingEventArgs(
+                        Microsoft.Win32.UserPreferenceCategory.Window));
+                using (var refreshedContextMenu = new ContextMenuStrip())
+                {
+                    refreshedContextMenu.GripStyle = ToolStripGripStyle.Hidden;
+                    if (!ReferenceEquals(fallbackFont, Control.DefaultFont) ||
+                        !ReferenceEquals(fallbackFont, refreshedContextMenu.Font))
+                    {
+                        Console.Error.Write(
+                            "WinForms did not restore the fallback after a preference change.");
+                        exitCode = 5;
+                    }
+                }
+
+                controlDefaultFontField?.SetValue(null, null);
+                Microsoft.Win32.UserPreferenceChangedEventHandler simulatedLateControlHandler =
+                    (sender, eventArgs) =>
+                    {
+                        if (eventArgs.Category ==
+                            Microsoft.Win32.UserPreferenceCategory.Color)
+                            controlDefaultFontField?.SetValue(null, null);
+                    };
+                Microsoft.Win32.SystemEvents.UserPreferenceChanged +=
+                    simulatedLateControlHandler;
+                try
+                {
+                    UiFonts.RestoreFallbackAfterPreferenceChange(
+                        null,
+                        new Microsoft.Win32.UserPreferenceChangingEventArgs(
+                            Microsoft.Win32.UserPreferenceCategory.Color));
+
+                    var systemEventsType = typeof(Microsoft.Win32.SystemEvents);
+                    var preferenceChangedEventKey = systemEventsType.GetField(
+                        "OnUserPreferenceChangedEvent",
+                        flags)?.GetValue(null);
+                    var raiseEvent = systemEventsType.GetMethod(
+                        "RaiseEvent",
+                        flags,
+                        null,
+                        new[] { typeof(object), typeof(object[]) },
+                        null);
+                    if (preferenceChangedEventKey == null || raiseEvent == null)
+                        throw new MissingMemberException(
+                            "The .NET Framework SystemEvents test seam was unavailable.");
+
+                    raiseEvent.Invoke(
+                        null,
+                        new object[]
+                        {
+                            preferenceChangedEventKey,
+                            new object[]
+                            {
+                                null,
+                                new Microsoft.Win32.UserPreferenceChangedEventArgs(
+                                    Microsoft.Win32.UserPreferenceCategory.Color)
+                            }
+                        });
+                }
+                finally
+                {
+                    Microsoft.Win32.SystemEvents.UserPreferenceChanged -=
+                        simulatedLateControlHandler;
+                }
+
+                if (!ReferenceEquals(fallbackFont, Control.DefaultFont))
+                {
+                    Console.Error.Write(
+                        "WinForms did not restore the fallback after a color preference change.");
+                    exitCode = 6;
+                }
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Console.Error.Write(ex);
+                exitCode = 7;
+                return true;
             }
         }
 
@@ -7925,6 +8105,85 @@ namespace WireSockUI.Tests
                 "Expected a valid Windows message font to be selected.");
             AssertTrue(ReferenceEquals(existingFont, selectedFont),
                 "Expected font selection to retain the provider-owned font instance.");
+
+            AssertFalse(
+                UiFonts.TryApplyMessageBoxFont(
+                    () => existingFont,
+                    _ => throw new ArgumentException("Font '?' cannot be found.")),
+                "Expected a failure while applying a Windows message font to be optional.");
+        }
+
+        private static void WinFormsDefaultFontsFallbackBeforeControlConstruction()
+        {
+            var helperPath = Assembly.GetExecutingAssembly().Location;
+            var startInfo = new ProcessStartInfo(helperPath, WinFormsFontFallbackHelperSwitch)
+            {
+                CreateNoWindow = true,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false
+            };
+            using (var helper = new Process { StartInfo = startInfo })
+            {
+                AssertTrue(helper.Start(),
+                    "Expected the real WinForms font fallback helper to start.");
+                var standardOutputTask = helper.StandardOutput.ReadToEndAsync();
+                var standardErrorTask = helper.StandardError.ReadToEndAsync();
+                if (!helper.WaitForExit(30000))
+                {
+                    try
+                    {
+                        helper.Kill();
+                        helper.WaitForExit(5000);
+                    }
+                    catch
+                    {
+                        // The timeout remains the primary test failure.
+                    }
+
+                    throw new Exception("The real WinForms font fallback helper timed out.");
+                }
+
+                AssertTrue(
+                    Task.WaitAll(
+                        new Task[] { standardOutputTask, standardErrorTask },
+                        5000),
+                    "Expected the real WinForms font fallback helper output to drain.");
+                var standardOutput = standardOutputTask.Result;
+                var standardError = standardErrorTask.Result;
+                AssertTrue(helper.ExitCode == 0,
+                    $"The real WinForms font fallback helper failed with exit code " +
+                    $"{helper.ExitCode}. stdout='{standardOutput}' stderr='{standardError}'");
+            }
+
+            var mainDesignerSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Forms", "frmMain.Designer.cs"));
+            var contextMenuConstruction = mainDesignerSource.IndexOf(
+                "this.mnuContext = new System.Windows.Forms.ContextMenuStrip",
+                StringComparison.Ordinal);
+            var firstExplicitFontConstruction = mainDesignerSource.IndexOf(
+                "new System.Drawing.Font(",
+                StringComparison.Ordinal);
+            AssertTrue(contextMenuConstruction >= 0,
+                "Expected the main form designer to construct its context menu.");
+            AssertTrue(firstExplicitFontConstruction < 0 ||
+                       firstExplicitFontConstruction > contextMenuConstruction,
+                "The main form designer must not resolve an explicit font before its context menu.");
+
+            var programSource = File.ReadAllText(
+                FindRepositoryFile("WireSockUI", "Program.cs"));
+            var defaultFontInitialization = programSource.IndexOf(
+                "UiFonts.TryEnsureWinFormsDefaultFonts(",
+                StringComparison.Ordinal);
+            var mainFormConstruction = programSource.IndexOf(
+                "new FrmMain()",
+                StringComparison.Ordinal);
+            AssertTrue(defaultFontInitialization >= 0,
+                "Expected startup to initialize the WinForms default fonts.");
+            AssertTrue(mainFormConstruction >= 0,
+                "Expected startup to construct the main form.");
+            AssertTrue(defaultFontInitialization < mainFormConstruction,
+                "Startup must initialize WinForms default fonts before constructing the main form.");
         }
 
         private static void SdkSyntheticSmokePermitsInactiveTunnel()

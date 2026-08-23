@@ -520,8 +520,7 @@ namespace WireSockUI.Forms
         private void Initialize()
         {
             InitializeComponent();
-            if (UiFonts.TryGetMessageBoxFont(out var messageBoxFont))
-                Font = messageBoxFont;
+            UiFonts.TryApplyMessageBoxFont(messageBoxFont => Font = messageBoxFont);
             _editorRegularFont = new Font(txtEditor.Font, FontStyle.Regular);
             _editorItalicFont = new Font(txtEditor.Font, FontStyle.Italic);
             _editorBoldFont = new Font(txtEditor.Font, FontStyle.Bold);

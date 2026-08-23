@@ -293,6 +293,23 @@ namespace WireSockUI
                 return 1;
             }
 
+            if (!UiFonts.TryEnsureWinFormsDefaultFonts(
+                    out var installedFontFallback,
+                    out var fontDiagnostic))
+            {
+                Trace.TraceError($"Unable to initialize compatible WinForms fonts: {fontDiagnostic}");
+                MessageBox.Show(
+                    $"WireSock UI cannot initialize a compatible Windows interface font." +
+                    $"{Environment.NewLine}{Environment.NewLine}{fontDiagnostic}",
+                    "WireSock UI startup error",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Error);
+                return 1;
+            }
+
+            if (installedFontFallback)
+                Trace.TraceWarning(fontDiagnostic);
+
             try
             {
                 UpgradeUserSettings();
