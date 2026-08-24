@@ -4630,16 +4630,37 @@ namespace WireSockUI.Tests
             using (var settings = new FrmSettings())
             {
                 AssertDialogUsesSystemFont(settings, "settings");
-                AssertTrue(settings.ClientSize.Width >= 340 && settings.ClientSize.Height >= 310,
-                    "Expected the settings dialog to remain readable without oversized gaps.");
+                AssertTrue(settings.ClientSize.Width >= 340 && settings.ClientSize.Height >= 250,
+                    "Expected the settings dialog to remain readable after compacting optional rows.");
                 AssertTrue(settings.FormBorderStyle == FormBorderStyle.FixedDialog,
                     "Expected the settings window to use dialog chrome.");
 
+                var autoRun = GetRequiredPrivateControl<CheckBox>(settings, "chkAutorun");
+                var autoMinimize = GetRequiredPrivateControl<CheckBox>(settings, "chkAutoMinimize");
+                var autoConnect = GetRequiredPrivateControl<CheckBox>(settings, "chkAutoConnect");
+                var autoUpdate = GetRequiredPrivateControl<CheckBox>(settings, "chkAutoUpdate");
+                var useAdapter = GetRequiredPrivateControl<CheckBox>(settings, "chkUseAdapter");
+                var notify = GetRequiredPrivateControl<CheckBox>(settings, "chkNotify");
                 var save = GetRequiredPrivateControl<Button>(settings, "btnSave");
                 var copy = GetRequiredPrivateControl<Button>(settings, "btnCopyProfilesFolderPath");
                 var killSwitch = GetRequiredPrivateControl<CheckBox>(settings, "chkEnableKillSwitch");
                 var logLevel = GetRequiredPrivateControl<ComboBox>(settings, "ddlLogLevel");
                 settings.PerformLayout();
+#if WIRESOCKUI_ENABLE_UWP
+                AssertTrue(settings.ClientSize.Height >= 310,
+                    "Expected the UWP settings dialog to retain its full layout.");
+                var settingsRows = new[]
+                {
+                    autoRun, autoMinimize, autoConnect, autoUpdate, useAdapter, notify, killSwitch
+                };
+#else
+                var settingsRows = new[]
+                {
+                    autoRun, autoMinimize, autoConnect, useAdapter, killSwitch
+                };
+#endif
+                AssertControlsUseUniformVerticalPitch(settingsRows, "settings option rows");
+                AssertSettingsActionsFollowContent(settings, logLevel, save, copy);
                 AssertControlFits(settings, killSwitch, "settings Kill Switch");
                 AssertControlFits(settings, logLevel, "settings log level");
                 AssertControlFits(settings, save, "settings Save action");
@@ -4649,6 +4670,7 @@ namespace WireSockUI.Tests
 
                 settings.Scale(new SizeF(1.5F, 1.5F));
                 settings.PerformLayout();
+                AssertControlsUseUniformVerticalPitch(settingsRows, "scaled settings option rows");
                 AssertControlFits(settings, killSwitch, "scaled settings Kill Switch");
                 AssertControlFits(settings, logLevel, "scaled settings log level");
                 AssertControlFits(settings, save, "scaled settings Save action");
@@ -4770,6 +4792,40 @@ namespace WireSockUI.Tests
                        child.Right <= parent.ClientSize.Width &&
                        child.Bottom <= parent.ClientSize.Height,
                 $"Expected {description} to remain inside its parent bounds.");
+        }
+
+        private static void AssertControlsUseUniformVerticalPitch(
+            IReadOnlyList<Control> controls,
+            string description)
+        {
+            if (controls == null || controls.Count < 2)
+                throw new InvalidOperationException($"At least two controls are required for {description}.");
+
+            var expectedPitch = controls[1].Top - controls[0].Top;
+            AssertTrue(expectedPitch > 0, $"Expected {description} to advance vertically.");
+            for (var index = 2; index < controls.Count; index++)
+            {
+                var actualPitch = controls[index].Top - controls[index - 1].Top;
+                AssertTrue(Math.Abs(actualPitch - expectedPitch) <= 1,
+                    $"Expected compact {description}; row {index} advanced by {actualPitch}px instead of {expectedPitch}px.");
+            }
+        }
+
+        private static void AssertSettingsActionsFollowContent(
+            Form settings,
+            Control logLevel,
+            params Button[] actions)
+        {
+            var maximumGap = Math.Max(24, Math.Max(logLevel.Height, settings.Font.Height * 2));
+            foreach (var action in actions)
+            {
+                var contentGap = action.Top - logLevel.Bottom;
+                AssertTrue(contentGap > 0 && contentGap <= maximumGap,
+                    $"Expected settings action '{action.Name}' to follow the log level without an empty row; " +
+                    $"gap was {contentGap}px and the scaled limit was {maximumGap}px.");
+                AssertTrue(settings.ClientSize.Height - action.Bottom <= maximumGap,
+                    $"Expected settings action '{action.Name}' to retain a compact bottom margin.");
+            }
         }
 
         private static void MainWindowProfileDetailsRetainVisualOrderAfterScaling()
