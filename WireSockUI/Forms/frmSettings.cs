@@ -113,10 +113,40 @@ namespace WireSockUI.Forms
             chkAutoUpdate.Visible = false;
             chkNotify.Enabled = false;
             chkNotify.Visible = false;
+            CompactClassicSettingsLayout();
 #endif
 
             Shown += OnSettingsShown;
         }
+
+#if !WIRESOCKUI_ENABLE_UWP
+        private void CompactClassicSettingsLayout()
+        {
+            // Measure the already-scaled designer rows so the classic layout remains compact
+            // with legacy Windows fonts and non-default DPI settings.
+            var autoUpdateOffset = Math.Max(0, chkUseAdapter.Top - chkAutoUpdate.Top);
+            var notificationOffset = Math.Max(0, chkEnableKillSwitch.Top - chkNotify.Top);
+            var contentOffset = autoUpdateOffset + notificationOffset;
+            if (contentOffset == 0)
+                return;
+
+            SuspendLayout();
+            try
+            {
+                chkUseAdapter.Top -= autoUpdateOffset;
+                chkEnableKillSwitch.Top -= contentOffset;
+                lblLogLevel.Top -= contentOffset;
+                ddlLogLevel.Top -= contentOffset;
+                ClientSize = new Size(ClientSize.Width, Math.Max(1, ClientSize.Height - contentOffset));
+            }
+            finally
+            {
+                // The action buttons are bottom-anchored, so this single layout pass moves them
+                // with the resized client area while preserving their existing bottom margin.
+                ResumeLayout(true);
+            }
+        }
+#endif
 
         public bool RequestedEnableKillSwitch => chkEnableKillSwitch.Checked;
         public string RequestedLogLevel => ddlLogLevel.SelectedItem as string ?? "Error";
