@@ -11,7 +11,9 @@ namespace WireSockUI.Forms
     {
         Inspect,
         Enable,
+        EnableMigratingLegacyTask,
         Disable,
+        DisableMigratingLegacyTask,
         DeleteLegacyShortcut
     }
 
@@ -433,8 +435,12 @@ namespace WireSockUI.Forms
                     return "inspect";
                 case AutoRunHelperOperation.Enable:
                     return "enable";
+                case AutoRunHelperOperation.EnableMigratingLegacyTask:
+                    return "enable-migrating-legacy-task";
                 case AutoRunHelperOperation.Disable:
                     return "disable";
+                case AutoRunHelperOperation.DisableMigratingLegacyTask:
+                    return "disable-migrating-legacy-task";
                 case AutoRunHelperOperation.DeleteLegacyShortcut:
                     return "delete-legacy-shortcut";
                 default:
@@ -452,8 +458,14 @@ namespace WireSockUI.Forms
                 case "enable":
                     operation = AutoRunHelperOperation.Enable;
                     return true;
+                case "enable-migrating-legacy-task":
+                    operation = AutoRunHelperOperation.EnableMigratingLegacyTask;
+                    return true;
                 case "disable":
                     operation = AutoRunHelperOperation.Disable;
+                    return true;
+                case "disable-migrating-legacy-task":
+                    operation = AutoRunHelperOperation.DisableMigratingLegacyTask;
                     return true;
                 case "delete-legacy-shortcut":
                     operation = AutoRunHelperOperation.DeleteLegacyShortcut;
