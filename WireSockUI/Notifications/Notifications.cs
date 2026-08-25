@@ -7,6 +7,7 @@ using System.Security.Principal;
 using System.Windows.Forms;
 using Windows.Data.Xml.Dom;
 using Windows.UI.Notifications;
+using WireSockUI.Forms;
 using WireSockUI.Native;
 using WireSockUI.Properties;
 
@@ -294,6 +295,12 @@ namespace WireSockUI.Notifications
                 {
                     if (form.IsDisposed || form.Disposing)
                         return;
+
+                    if (form is FrmMain mainForm)
+                    {
+                        mainForm.TryShowMainWindow();
+                        return;
+                    }
 
                     form.ShowInTaskbar = true;
                     form.Show();

@@ -287,6 +287,8 @@ namespace WireSockUI.Tests
                 { "WinForms dialogs use readable responsive layouts", WinFormsDialogsUseReadableResponsiveLayouts },
                 { "Main window profile details retain visual order after scaling", MainWindowProfileDetailsRetainVisualOrderAfterScaling },
                 { "Main window action rows remain visible after scaling", MainWindowActionRowsRemainVisibleAfterScaling },
+                { "Main window concealment hides before handle recreation", MainWindowConcealmentHidesBeforeHandleRecreation },
+                { "Main window activation is suppressed during shutdown", MainWindowActivationIsSuppressedDuringShutdown },
                 { "Settings copies the secured profiles path without shell activation", SettingsCopiesSecuredProfilesPathWithoutShellActivation },
                 { "Editor bounds synchronous syntax highlighting", EditorBoundsSynchronousSyntaxHighlighting },
                 { "Editor application-rule insertion is section aware", EditorApplicationRuleInsertionIsSectionAware },
@@ -305,6 +307,7 @@ namespace WireSockUI.Tests
                 { "Program rejects non-local application paths", ProgramRejectsNonLocalApplicationPaths },
                 { "Autorun task name is path and user seeded", AutoRunTaskNameIsPathAndUserSeeded },
                 { "Autorun validates the complete task definition", AutoRunValidatesCompleteTaskDefinition },
+                { "Autorun recognizes only the historical WireSock UI task shape", AutoRunRecognizesHistoricalTaskShape },
                 { "Process picker preserves executable match names", ProcessPickerPreservesExecutableMatchNames },
                 { "Process snapshots are cached serialized and SID based", ProcessSnapshotsAreCachedSerializedAndSidBased },
                 { "Process picker loads executable icons and main title shows version", ProcessPickerLoadsExecutableIconsAndMainTitleShowsVersion },
@@ -4377,6 +4380,15 @@ namespace WireSockUI.Tests
                 AssertTrue(
                     failedMutation.OperationStarted,
                     "Expected a failed helper mutation to require state verification.");
+                var verifiedFailureDiagnostic = FrmSettings.BuildVerifiedIncompleteAutoRunDiagnostic(
+                    AutoRunHelperOperation.Enable,
+                    failedMutation.Diagnostic);
+                AssertTrue(
+                    verifiedFailureDiagnostic.Contains("simulated autorun helper failure"),
+                    "Expected verified helper failures to retain their original diagnostic.");
+                AssertFalse(
+                    verifiedFailureDiagnostic.Contains("timed-out"),
+                    "Expected a non-timeout helper failure not to be mislabeled as a timeout.");
 
                 Environment.SetEnvironmentVariable(behaviorVariable, "success");
                 var blockedAfterFailure = service.ExecuteAsync(
@@ -4987,6 +4999,88 @@ namespace WireSockUI.Tests
                 $"Expected the action button to retain its bottom inset at {scenario}.");
             AssertTrue(button.Right <= actions.ClientSize.Width - actions.Padding.Right,
                 $"Expected the action button to retain its right inset at {scenario}.");
+        }
+
+        private static void MainWindowConcealmentHidesBeforeHandleRecreation()
+        {
+            using (var form = new Form
+            {
+                Location = new Point(-32000, -32000),
+                ShowInTaskbar = true,
+                Size = new Size(320, 200),
+                StartPosition = FormStartPosition.Manual
+            })
+            {
+                var handleDestroyedWhileVisible = false;
+                var handleCreatedWhileVisible = false;
+                var recreatedHandleCount = 0;
+                form.HandleDestroyed += (sender, args) =>
+                    handleDestroyedWhileVisible |= form.Visible;
+
+                form.Show();
+                AssertTrue(form.Visible,
+                    "Expected the test window to be visible before concealment.");
+                AssertTrue(form.IsHandleCreated,
+                    "Expected the test window to own a native handle before concealment.");
+                form.HandleCreated += (sender, args) =>
+                {
+                    recreatedHandleCount++;
+                    handleCreatedWhileVisible |= form.Visible;
+                };
+
+                FrmMain.ConcealFromTaskbar(form);
+
+                AssertFalse(form.Visible,
+                    "Expected concealment to hide the window.");
+                AssertFalse(form.ShowInTaskbar,
+                    "Expected concealment to remove the window from the taskbar.");
+                AssertFalse(handleDestroyedWhileVisible,
+                    "Expected any ShowInTaskbar handle recreation to occur only after the window was hidden.");
+                AssertTrue(recreatedHandleCount > 0,
+                    "Expected changing ShowInTaskbar on .NET Framework to recreate the native window handle.");
+                AssertFalse(handleCreatedWhileVisible,
+                    "Expected the recreated native window never to become visible during concealment.");
+            }
+        }
+
+        private static void MainWindowActivationIsSuppressedDuringShutdown()
+        {
+            using (var form = new Form
+            {
+                Location = new Point(-32000, -32000),
+                ShowInTaskbar = false,
+                Size = new Size(320, 200),
+                StartPosition = FormStartPosition.Manual
+            })
+            {
+                AssertFalse(FrmMain.TryShowMainWindow(form, true, false),
+                    "Expected an exit request to suppress tray activation.");
+                AssertFalse(form.Visible,
+                    "Expected the exit-suppressed window to remain hidden.");
+                AssertFalse(form.TopMost,
+                    "Expected suppressed activation not to alter topmost state.");
+
+                AssertFalse(FrmMain.TryShowMainWindow(form, false, true),
+                    "Expected completed shutdown to suppress tray activation.");
+                AssertFalse(form.Visible,
+                    "Expected the shutdown-suppressed window to remain hidden.");
+                AssertFalse(form.TopMost,
+                    "Expected shutdown suppression not to alter topmost state.");
+
+                AssertTrue(FrmMain.TryShowMainWindow(form, false, false),
+                    "Expected tray activation to show a live main window.");
+                AssertTrue(form.Visible,
+                    "Expected a live main window to become visible.");
+                AssertTrue(form.ShowInTaskbar,
+                    "Expected a restored main window to return to the taskbar.");
+
+                FrmMain.ConcealFromTaskbar(form);
+            }
+
+            var disposedForm = new Form();
+            disposedForm.Dispose();
+            AssertFalse(FrmMain.TryShowMainWindow(disposedForm, false, false),
+                "Expected a disposed main window to reject activation.");
         }
 
         private static void SettingsCopiesSecuredProfilesPathWithoutShellActivation()
@@ -9058,46 +9152,29 @@ namespace WireSockUI.Tests
             using (var taskService = new Microsoft.Win32.TaskScheduler.TaskService())
             using (var definition = taskService.NewTask())
             {
-                definition.Principal.UserId = currentUserId;
-                definition.Principal.LogonType = Microsoft.Win32.TaskScheduler.TaskLogonType.InteractiveToken;
-                definition.Principal.RunLevel = Microsoft.Win32.TaskScheduler.TaskRunLevel.Highest;
-                definition.Principal.ProcessTokenSidType =
-                    Microsoft.Win32.TaskScheduler.TaskProcessTokenSidType.Default;
-                definition.Settings.ExecutionTimeLimit = TimeSpan.Zero;
-                definition.Settings.DisallowStartIfOnBatteries = false;
-                definition.Settings.StopIfGoingOnBatteries = false;
-                definition.Settings.WakeToRun = true;
-                definition.Settings.IdleSettings.StopOnIdleEnd = false;
-                definition.Settings.RunOnlyIfIdle = false;
-                definition.Settings.RunOnlyIfNetworkAvailable = false;
-                definition.Settings.RestartCount = 0;
-                definition.Settings.RestartInterval = TimeSpan.Zero;
-                definition.Settings.MultipleInstances =
-                    Microsoft.Win32.TaskScheduler.TaskInstancesPolicy.IgnoreNew;
-                definition.Settings.StartWhenAvailable = true;
-                definition.Settings.Enabled = true;
-                definition.Settings.Hidden = false;
-                definition.Settings.AllowDemandStart = true;
-                definition.Settings.DeleteExpiredTaskAfter = TimeSpan.Zero;
-                definition.Settings.Priority = FrmSettings.AutoRunTaskPriorityClass;
-                definition.Settings.Volatile = false;
-                definition.Settings.DisallowStartOnRemoteAppSession = false;
-                var logonTrigger = new Microsoft.Win32.TaskScheduler.LogonTrigger
-                {
-                    UserId = currentUserId,
-                    Delay = TimeSpan.Zero,
-                    Enabled = true,
-                    StartBoundary = DateTime.MinValue,
-                    EndBoundary = DateTime.MaxValue,
-                    ExecutionTimeLimit = TimeSpan.Zero
-                };
-                definition.Triggers.Add(logonTrigger);
-                definition.Actions.Add(new Microsoft.Win32.TaskScheduler.ExecAction(executablePath));
+                FrmSettings.ConfigureAutoRunTaskDefinition(
+                    definition,
+                    "WireSockUI",
+                    currentUserId,
+                    executablePath);
+                var logonTrigger =
+                    (Microsoft.Win32.TaskScheduler.LogonTrigger)definition.Triggers[0];
 
                 AssertTrue(FrmSettings.IsTaskDefinitionOwnedByExecutable(
                         definition, true, executablePath),
                     "Expected the exact elevated logon task shape to be recognized.");
-                var serializedPriority = XDocument.Parse(definition.XmlText)
+                var serializedDefinition = XDocument.Parse(definition.XmlText);
+                AssertEqual("1.3", serializedDefinition.Root?.Attribute("version")?.Value);
+                AssertFalse(
+                    serializedDefinition.Descendants()
+                        .Any(element => element.Name.LocalName == "Volatile"),
+                    "Expected the Windows 7 definition not to emit the Windows 8 Volatile setting.");
+                AssertEqual(
+                    (int)Microsoft.Win32.TaskScheduler.TaskCompatibility.V2_1,
+                    (int)definition.Settings.Compatibility);
+                AssertFalse(FrmSettings.IsAutoRunTaskVolatile(definition.Settings),
+                    "Expected a Windows 7 task definition to be inherently non-volatile.");
+                var serializedPriority = serializedDefinition
                     .Descendants()
                     .Single(element => element.Name.LocalName == "Priority");
                 AssertEqual(7, XmlConvert.ToInt32(serializedPriority.Value));
@@ -9224,6 +9301,183 @@ namespace WireSockUI.Tests
                 "O:BAG:BAD:P(A;IO;FA;;;SY)(A;;FA;;;BA)");
             AssertFalse(FrmSettings.IsAutoRunTaskSecurityCanonical(inheritOnlySystemSecurity),
                 "Expected an inherit-only SYSTEM ACE not to satisfy the task DACL.");
+        }
+
+        private static void AutoRunRecognizesHistoricalTaskShape()
+        {
+            string currentUserId;
+            using (var identity = WindowsIdentity.GetCurrent())
+                currentUserId = identity.User?.Value ??
+                                throw new InvalidOperationException("Current user SID unavailable.");
+
+            var otherUserId = new SecurityIdentifier(
+                WellKnownSidType.LocalSystemSid,
+                null).Value;
+            if (FrmSettings.IsSameTaskUser(currentUserId, otherUserId))
+                otherUserId = new SecurityIdentifier(
+                    WellKnownSidType.LocalServiceSid,
+                    null).Value;
+
+            using (var taskService = new Microsoft.Win32.TaskScheduler.TaskService())
+            using (var definition = taskService.NewTask())
+            {
+                definition.RegistrationInfo.Description = "Auto start for WireSockUI";
+                definition.Principal.UserId = currentUserId;
+                definition.Principal.LogonType =
+                    Microsoft.Win32.TaskScheduler.TaskLogonType.InteractiveToken;
+                definition.Principal.RunLevel =
+                    Microsoft.Win32.TaskScheduler.TaskRunLevel.Highest;
+                definition.Triggers.Add(new Microsoft.Win32.TaskScheduler.LogonTrigger
+                {
+                    UserId = currentUserId,
+                    Enabled = true
+                });
+                definition.Actions.Add(new Microsoft.Win32.TaskScheduler.ExecAction(
+                    @"C:\Former WireSock UI\WireSockUI.exe"));
+
+                AssertTrue(
+                    FrmSettings.IsLegacyAutoRunTaskDefinitionMigratable(
+                        definition,
+                        "WireSockUI.exe",
+                        "Auto start for WireSockUI"),
+                    "Expected the exact historical elevated WireSock UI task to remain migratable after its install path changes.");
+                AssertFalse(
+                    FrmSettings.ShouldApplyAutoRunChange(
+                        FrmSettings.AutoRunStatus.LegacyEnabled,
+                        true,
+                        false,
+                        false,
+                        false,
+                        true,
+                        false),
+                    "Expected historical-task migration to remain blocked until the user approves it.");
+                AssertTrue(
+                    FrmSettings.ShouldApplyAutoRunChange(
+                        FrmSettings.AutoRunStatus.LegacyEnabled,
+                        true,
+                        false,
+                        false,
+                        false,
+                        true,
+                        true),
+                    "Expected approval to migrate an enabled historical task to the current protected task.");
+                AssertFalse(
+                    FrmSettings.ShouldOfferLegacyProductTaskMigration(
+                        true,
+                        false,
+                        FrmSettings.AutoRunStatus.Conflict,
+                        false,
+                        false),
+                    "Expected a conflicting autorun status not to offer a migration that cannot run.");
+                AssertFalse(
+                    FrmSettings.ShouldOfferLegacyProductTaskMigration(
+                        true,
+                        false,
+                        FrmSettings.AutoRunStatus.LegacyEnabled,
+                        true,
+                        false),
+                    "Expected legacy-task migration to wait until opaque Startup cleanup is approved.");
+                AssertTrue(
+                    FrmSettings.ShouldOfferLegacyProductTaskMigration(
+                        true,
+                        false,
+                        FrmSettings.AutoRunStatus.LegacyEnabled,
+                        true,
+                        true),
+                    "Expected legacy-task migration to be offered after all mutation prerequisites are approved.");
+                AssertEqual(
+                    (int)AutoRunHelperOperation.Enable,
+                    (int)FrmSettings.GetAutoRunMutationOperation(true, false));
+                AssertEqual(
+                    (int)AutoRunHelperOperation.EnableMigratingLegacyTask,
+                    (int)FrmSettings.GetAutoRunMutationOperation(true, true));
+                AssertEqual(
+                    (int)AutoRunHelperOperation.Disable,
+                    (int)FrmSettings.GetAutoRunMutationOperation(false, false));
+                AssertEqual(
+                    (int)AutoRunHelperOperation.DisableMigratingLegacyTask,
+                    (int)FrmSettings.GetAutoRunMutationOperation(false, true));
+
+                AssertTrue(
+                    FrmSettings.TryResolveMutationOutcome(
+                        AutoRunHelperOperation.EnableMigratingLegacyTask,
+                        FrmSettings.AutoRunStatus.Enabled,
+                        true,
+                        false,
+                        true,
+                        out var partialEnableMigrationSucceeded),
+                    "Expected the canonical current task plus a remaining historical task to be a verifiable partial migration.");
+                AssertFalse(
+                    partialEnableMigrationSucceeded,
+                    "Expected a remaining historical task to prevent successful enable-migration verification.");
+                AssertTrue(
+                    FrmSettings.TryResolveMutationOutcome(
+                        AutoRunHelperOperation.DisableMigratingLegacyTask,
+                        FrmSettings.AutoRunStatus.Disabled,
+                        false,
+                        false,
+                        true,
+                        out var partialDisableMigrationSucceeded),
+                    "Expected disabled autorun plus a remaining historical task to be a verifiable partial migration.");
+                AssertFalse(
+                    partialDisableMigrationSucceeded,
+                    "Expected a remaining historical task to prevent successful disable-migration verification.");
+                AssertTrue(
+                    FrmSettings.TryResolveMutationOutcome(
+                        AutoRunHelperOperation.EnableMigratingLegacyTask,
+                        FrmSettings.AutoRunStatus.Enabled,
+                        true,
+                        false,
+                        false,
+                        out var completedEnableMigrationSucceeded) &&
+                    completedEnableMigrationSucceeded,
+                    "Expected canonical autorun with no historical task to verify completed migration.");
+
+                var action = (Microsoft.Win32.TaskScheduler.ExecAction)definition.Actions[0];
+                action.Path = @"C:\Former WireSock UI\not-wiresock.exe";
+                AssertFalse(
+                    FrmSettings.IsLegacyAutoRunTaskDefinitionMigratable(
+                        definition,
+                        "WireSockUI.exe",
+                        "Auto start for WireSockUI"),
+                    "Expected a different executable name to remain a conflict.");
+                action.Path = @"C:\Former WireSock UI\WireSockUI.exe";
+
+                action.Arguments = "--unexpected";
+                AssertFalse(
+                    FrmSettings.IsLegacyAutoRunTaskDefinitionMigratable(
+                        definition,
+                        "WireSockUI.exe",
+                        "Auto start for WireSockUI"),
+                    "Expected an argument-bearing task not to be migrated.");
+                action.Arguments = null;
+
+                definition.RegistrationInfo.Description = "Another application";
+                AssertFalse(
+                    FrmSettings.IsLegacyAutoRunTaskDefinitionMigratable(
+                        definition,
+                        "WireSockUI.exe",
+                        "Auto start for WireSockUI"),
+                    "Expected a task without the historical product description to remain a conflict.");
+                definition.RegistrationInfo.Description = "Auto start for WireSockUI";
+
+                definition.Principal.UserId = otherUserId;
+                AssertFalse(
+                    FrmSettings.IsLegacyAutoRunTaskDefinitionMigratable(
+                        definition,
+                        "WireSockUI.exe",
+                        "Auto start for WireSockUI"),
+                    "Expected another user's historical task not to be migrated.");
+                definition.Principal.UserId = currentUserId;
+
+                definition.Actions.Add(new Microsoft.Win32.TaskScheduler.ExecAction("cmd.exe"));
+                AssertFalse(
+                    FrmSettings.IsLegacyAutoRunTaskDefinitionMigratable(
+                        definition,
+                        "WireSockUI.exe",
+                        "Auto start for WireSockUI"),
+                    "Expected a task with an additional action to remain a conflict.");
+            }
         }
 
         private static void ShellLinkHresultValidationUsesSignedFailureSemantics()

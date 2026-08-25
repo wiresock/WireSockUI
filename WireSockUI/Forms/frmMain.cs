@@ -212,6 +212,43 @@ namespace WireSockUI.Forms
             actions.WrapContents = false;
         }
 
+        internal static void ConcealFromTaskbar(Form form)
+        {
+            if (form == null)
+                throw new ArgumentNullException(nameof(form));
+
+            // ShowInTaskbar recreates an existing WinForms top-level handle.
+            // Hide first so the replacement handle can never be painted as an
+            // empty frame while the window is being minimized or closed.
+            form.Hide();
+            form.ShowInTaskbar = false;
+        }
+
+        internal static bool TryShowMainWindow(
+            Form form,
+            bool exitRequested,
+            bool shutdownComplete)
+        {
+            if (form == null)
+                throw new ArgumentNullException(nameof(form));
+            if (exitRequested || shutdownComplete || form.IsDisposed || form.Disposing)
+                return false;
+
+            form.TopMost = true;
+            form.ShowInTaskbar = true;
+            form.Show();
+            form.WindowState = FormWindowState.Normal;
+            form.BringToFront();
+            form.Activate();
+            form.TopMost = false;
+            return true;
+        }
+
+        internal bool TryShowMainWindow()
+        {
+            return TryShowMainWindow(this, _exitRequested, _shutdownComplete);
+        }
+
         internal static void ArrangeProfileDetails(
             Panel host,
             Control state,
@@ -2211,8 +2248,7 @@ namespace WireSockUI.Forms
             if (Settings.Default.AutoMinimize)
             {
                 WindowState = FormWindowState.Minimized;
-                ShowInTaskbar = false;
-                Hide();
+                ConcealFromTaskbar(this);
             }
 
             if (lstProfiles.Items.ContainsKey(PrivilegedSettingsStore.LastProfile))
@@ -2332,8 +2368,7 @@ namespace WireSockUI.Forms
             if (e.CloseReason == CloseReason.UserClosing && !_exitRequested)
             {
                 e.Cancel = true;
-                ShowInTaskbar = false;
-                Hide();
+                ConcealFromTaskbar(this);
                 return;
             }
 
@@ -2342,8 +2377,11 @@ namespace WireSockUI.Forms
 
             e.Cancel = true;
             _exitRequested = true;
+            trayIcon.Visible = false;
             Enabled = false;
-            ShowInTaskbar = false;
+            // The form is about to be disposed, so hiding it is sufficient to
+            // remove its taskbar button. Avoid changing ShowInTaskbar here: it
+            // would recreate the handle and briefly restart handle-bound work.
             Hide();
             CloseOwnedFormsForShutdown();
             BeginShutdownAndClose();
@@ -2404,21 +2442,14 @@ namespace WireSockUI.Forms
         /// <param name="e">An EventArgs that contains the event data.</param>
         private void OnFormShow(object sender, EventArgs e)
         {
-            TopMost = true;
-            ShowInTaskbar = true;
-            Show();
-            WindowState = FormWindowState.Normal;
-            BringToFront();
-            Activate();
-            TopMost = false;
+            TryShowMainWindow();
         }
 
         private void OnFormMinimize(object sender, EventArgs e)
         {
             if (WindowState == FormWindowState.Minimized)
             {
-                ShowInTaskbar = false;
-                Hide();
+                ConcealFromTaskbar(this);
             }
         }
 
