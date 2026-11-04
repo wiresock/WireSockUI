@@ -137,13 +137,15 @@ function Assert-Throws {
 
     try {
         & $Action
-        throw "Expected failure containing '$ExpectedMessage', but the command succeeded."
     }
     catch {
         if ($_.Exception.Message -notlike "*$ExpectedMessage*") {
             throw "Expected failure containing '$ExpectedMessage', got '$($_.Exception.Message)'."
         }
+        return
     }
+
+    throw "Expected failure containing '$ExpectedMessage', but the command succeeded."
 }
 
 function Invoke-Resolver {
