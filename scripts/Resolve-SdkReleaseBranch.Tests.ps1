@@ -101,17 +101,29 @@ function global:Invoke-RestMethod {
 
     $page = [int]$pageMatch.Groups['page'].Value
     if ($global:SdkReleaseFixtureRepeatFullPage) {
-        return @(
+        $pageBranches = @(
             1..100 | ForEach-Object {
                 New-FixtureBranch `
                     -Name ('release/v1.{0}.{1}' -f $page, $_) `
                     -Sha (New-FixtureSha -Page $page -Index $_)
             })
+        # return @(...) enumerates. Invoke-RestMethod emits the JSON array
+        # as one pipeline object, and @() around the request does not unwrap it.
+        Write-Output -NoEnumerate -InputObject $pageBranches
+        return
     }
     if ($global:SdkReleaseFixturePages.ContainsKey($page)) {
-        return @($global:SdkReleaseFixturePages[$page])
+        $storedPage = $global:SdkReleaseFixturePages[$page]
+        # A stored branch object is emitted as itself so @() still wraps one
+        # scalar result. Arrays, including an empty page, stay one pipeline object.
+        if ($storedPage -isnot [Array]) {
+            return $storedPage
+        }
+        Write-Output -NoEnumerate -InputObject @($storedPage)
+        return
     }
-    return $null
+    Write-Output -NoEnumerate -InputObject @()
+    return
 }
 
 function Assert-Throws {
@@ -213,6 +225,17 @@ try {
         $resolved.Output[1] -cne ('release_sha=' + (New-FixtureSha -Page 2 -Index 2)) -or
         $resolved.Calls.Count -ne 3) {
         throw "Paginated resolution selected '$($resolved.Output -join ' | ')' after $($resolved.Calls.Count) calls."
+    }
+
+    Reset-SdkReleaseFixture
+    $global:SdkReleaseFixturePages[1] = New-FixtureBranch `
+        -Name 'release/v3.8.2' `
+        -Sha (New-FixtureSha -Page 1 -Index 3)
+    $resolved = Invoke-Resolver
+    if ($resolved.Output[0] -cne 'release_branch=release/v3.8.2' -or
+        $resolved.Output[1] -cne ('release_sha=' + (New-FixtureSha -Page 1 -Index 3)) -or
+        $resolved.Calls.Count -ne 2) {
+        throw "A single branch object selected '$($resolved.Output -join ' | ')' after $($resolved.Calls.Count) calls."
     }
 
     Reset-SdkReleaseFixture
