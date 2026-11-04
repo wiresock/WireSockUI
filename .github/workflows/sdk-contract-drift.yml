@@ -81,10 +81,27 @@ jobs:
           repositories: wiresock-vpn-client
           permission-contents: read
 
-      - name: Checkout current WireSock SDK
+      # The SDK default branch contains unreleased contract changes.
+      # Measure drift against the highest release/vMAJOR.MINOR.PATCH branch.
+      - name: Resolve latest WireSock SDK release branch
+        id: sdk-release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ steps.sdk-token.outputs.token }}
+          SDK_REPOSITORY: Wiresock-Foundation/wiresock-vpn-client
+          SDK_API_URL: ${{ github.api_url }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./wiresockui/scripts/Resolve-SdkReleaseBranch.ps1 `
+            -Repository $env:SDK_REPOSITORY `
+            -GitHubApiUrl $env:SDK_API_URL `
+            -OutputPath $env:GITHUB_OUTPUT
+
+      - name: Checkout latest WireSock SDK release
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           repository: Wiresock-Foundation/wiresock-vpn-client
+          ref: ${{ steps.sdk-release.outputs.release_branch }}
           path: wiresock-sdk
           token: ${{ steps.sdk-token.outputs.token }}
           persist-credentials: false
@@ -95,11 +112,27 @@ jobs:
 
       - name: Detect upstream SDK contract drift
         shell: pwsh
+        env:
+          SDK_RELEASE_BRANCH: ${{ steps.sdk-release.outputs.release_branch }}
+          SDK_RELEASE_SHA: ${{ steps.sdk-release.outputs.release_sha }}
         run: |
+          $ErrorActionPreference = 'Stop'
+          $releaseBranch = [string]$env:SDK_RELEASE_BRANCH
+          $releaseSha = [string]$env:SDK_RELEASE_SHA
+          if ($releaseBranch -cnotmatch '\Arelease/v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\z' -or
+              $releaseSha -cnotmatch '\A[0-9a-f]{40}\z') {
+            throw 'The resolved WireSock SDK release branch or commit is not canonical.'
+          }
+
+          $upstreamRevision = (git -C ./wiresock-sdk rev-parse 'HEAD^{commit}').Trim()
+          if ($LASTEXITCODE -ne 0 -or $upstreamRevision -cne $releaseSha) {
+            throw "Checked out WireSock SDK revision '$upstreamRevision' is not $releaseBranch at $releaseSha."
+          }
+
+          Write-Output "Comparing the pinned contract with WireSock SDK $releaseBranch ($releaseSha)."
           $pinnedRevision = (Get-Content ./wiresockui/sdk-contract/SDK_REVISION)[1].Trim()
-          $upstreamRevision = (git -C ./wiresock-sdk rev-parse HEAD).Trim()
-          if ($pinnedRevision -ne $upstreamRevision) {
-            Write-Warning "WireSock SDK moved from pinned revision $pinnedRevision to $upstreamRevision."
+          if ($pinnedRevision -cne $upstreamRevision) {
+            Write-Warning "WireSock SDK release $releaseBranch moved from pinned revision $pinnedRevision to $upstreamRevision."
           }
 
           git diff --no-index --ignore-all-space --exit-code `
