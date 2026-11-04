@@ -22,12 +22,12 @@ $productionWorkflowDigests = @{
     # These are intentionally exact contracts for production control flow. A
     # digest is not an authenticity mechanism; it makes every workflow change
     # explicit and subject to focused trust-boundary review.
-    'ci.yml' = 'cd7cce3d8d389af13b4b25ee4b29d6783ee010a4a96dc01c48325144e8b6f115'
+    'ci.yml' = 'b838162e3f30d319a357e8969a2a99e718988687314e87b77528ceb817839720'
     'hosted-sdk-experiment.yml' =
         'bf33b7604f89031f7030f791d2dbaa87df9c16b6ef5e7a6d45eca60eb17d7e79'
     'main.yml' = '72ef02fcc5c7a7247a10b395e6d3240d57e1b725c674e4b4810b1a5d1a82a344'
     'sdk-contract-drift.yml' =
-        '0d47460aa8e978157d397d26d40dcae9a6c300457b2695d104ff158e61cad771'
+        'b02956d5946b5a09611f828104deeaa9571010e60ae267996795aca28842c0b8'
     'sdk-integration-schedule.yml' =
         '08757634d63467c5181120d97ecfe17c71393cb4238f42508e6a694dcf4c2de7'
     'sdk-integration.yml' =
@@ -828,6 +828,81 @@ if (Test-Path -LiteralPath $hostedSdkExperimentPath -PathType Leaf) {
             '(?m)^\s+run:\s+\./scripts/Invoke-HostedSdkExperiment\.ps1\s').Count -ne 1) {
         throw 'The hosted SDK matrix must invoke its architecture-validated experiment script exactly once.'
     }
+}
+
+$sdkContractDriftPath =
+    Join-Path $workflowRoot.FullName 'sdk-contract-drift.yml'
+if (Test-Path -LiteralPath $sdkContractDriftPath -PathType Leaf) {
+    $sdkContractDriftWorkflow = Get-Content `
+        -LiteralPath $sdkContractDriftPath `
+        -Raw `
+        -Encoding UTF8
+    foreach ($criticalDriftStep in @(
+            'Resolve latest WireSock SDK release branch',
+            'Detect upstream SDK contract drift')) {
+        Assert-WorkflowCriticalStep `
+            -WorkflowText $sdkContractDriftWorkflow `
+            -StepName $criticalDriftStep `
+            -Description 'The SDK contract drift workflow'
+    }
+    $driftLines = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::Ordinal)
+    foreach ($driftLine in ($sdkContractDriftWorkflow -split '\r?\n')) {
+        [void]$driftLines.Add($driftLine.Trim())
+    }
+    foreach ($requiredDriftLine in @(
+            'repository: Wiresock-Foundation/wiresock-vpn-client',
+            'ref: ${{ steps.sdk-release.outputs.release_branch }}',
+            'GH_TOKEN: ${{ steps.sdk-token.outputs.token }}',
+            'SDK_REPOSITORY: Wiresock-Foundation/wiresock-vpn-client',
+            'SDK_API_URL: ${{ github.api_url }}',
+            'SDK_RELEASE_BRANCH: ${{ steps.sdk-release.outputs.release_branch }}',
+            'SDK_RELEASE_SHA: ${{ steps.sdk-release.outputs.release_sha }}',
+            './wiresockui/scripts/Resolve-SdkReleaseBranch.ps1 `',
+            '-Repository $env:SDK_REPOSITORY `',
+            '-GitHubApiUrl $env:SDK_API_URL `',
+            '-OutputPath $env:GITHUB_OUTPUT')) {
+        if (-not $driftLines.Contains($requiredDriftLine)) {
+            throw "The SDK contract drift workflow is missing release-branch boundary '$requiredDriftLine'."
+        }
+    }
+    if ([regex]::Matches(
+            $sdkContractDriftWorkflow,
+            [regex]::Escape('./wiresockui/scripts/Resolve-SdkReleaseBranch.ps1')).Count -ne 1 -or
+        [regex]::Matches(
+            $sdkContractDriftWorkflow,
+            '(?m)^\s+ref:\s*\$\{\{\s*steps\.sdk-release\.outputs\.release_branch\s*\}\}\s*$').Count -ne 1) {
+        throw 'The SDK contract drift workflow must resolve and check out one release branch.'
+    }
+    $driftResolutionScript = Get-WorkflowLiteralRunScript `
+        -WorkflowText $sdkContractDriftWorkflow `
+        -StepName 'Resolve latest WireSock SDK release branch' `
+        -Description 'The SDK contract drift workflow'
+    Assert-PowerShellExecutableLines `
+        -Script $driftResolutionScript `
+        -Description 'The SDK release-branch resolution step' `
+        -RequiredLines @(
+            '$ErrorActionPreference = ''Stop''',
+            './wiresockui/scripts/Resolve-SdkReleaseBranch.ps1 `',
+            '-Repository $env:SDK_REPOSITORY `',
+            '-GitHubApiUrl $env:SDK_API_URL `',
+            '-OutputPath $env:GITHUB_OUTPUT')
+    $driftComparisonScript = Get-WorkflowLiteralRunScript `
+        -WorkflowText $sdkContractDriftWorkflow `
+        -StepName 'Detect upstream SDK contract drift' `
+        -Description 'The SDK contract drift workflow'
+    Assert-PowerShellExecutableLines `
+        -Script $driftComparisonScript `
+        -Description 'The SDK contract comparison step' `
+        -RequiredLines @(
+            '$releaseBranch = [string]$env:SDK_RELEASE_BRANCH',
+            '$releaseSha = [string]$env:SDK_RELEASE_SHA',
+            'if ($releaseBranch -cnotmatch ''\Arelease/v(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\.(0|[1-9][0-9]{0,8})\z'' -or',
+            '$releaseSha -cnotmatch ''\A[0-9a-f]{40}\z'') {',
+            'if ($LASTEXITCODE -ne 0 -or $upstreamRevision -cne $releaseSha) {',
+            'git diff --no-index --ignore-all-space --exit-code `',
+            'throw ''The upstream wgbooster.h differs from the pinned contract. Review and update sdk-contract explicitly.''',
+            'throw ''The upstream wgbooster.def differs from the pinned contract. Review and update sdk-contract explicitly.''')
 }
 
 $sdkIntegrationPath =

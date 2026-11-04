@@ -46,6 +46,7 @@ jobs:
       - name: Verify workflow dependency and credential policy
         shell: pwsh
         run: |
+          ./scripts/Resolve-SdkReleaseBranch.Tests.ps1
           ./scripts/Test-WorkflowSecurity.Tests.ps1
           ./scripts/Test-WorkflowSecurity.ps1
 
