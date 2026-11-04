@@ -176,6 +176,41 @@ Reset-SdkReleaseFixture
 $env:GH_TOKEN = 'fixture-token'
 
 try {
+    # Test Assert-Throws without using the helper to assert its own failures.
+    $successfulActionRejected = $false
+    try {
+        Assert-Throws -Action {} -ExpectedMessage 'fixture failure'
+    }
+    catch {
+        if ($_.Exception.Message -cne "Expected failure containing 'fixture failure', but the command succeeded.") {
+            throw
+        }
+        $successfulActionRejected = $true
+    }
+    if (-not $successfulActionRejected) {
+        throw 'Assert-Throws accepted an action that did not throw.'
+    }
+
+    $wrongExceptionRejected = $false
+    try {
+        Assert-Throws `
+            -Action { throw 'different fixture failure' } `
+            -ExpectedMessage 'expected fixture failure'
+    }
+    catch {
+        if ($_.Exception.Message -cne "Expected failure containing 'expected fixture failure', got 'different fixture failure'.") {
+            throw
+        }
+        $wrongExceptionRejected = $true
+    }
+    if (-not $wrongExceptionRejected) {
+        throw 'Assert-Throws accepted an exception with the wrong message.'
+    }
+
+    Assert-Throws `
+        -Action { throw 'prefix expected fixture failure suffix' } `
+        -ExpectedMessage 'expected fixture failure'
+
     $resolved = Invoke-Resolver
     $expectedSha = New-FixtureSha -Page 1 -Index 3
     if ($resolved.Output.Count -ne 2 -or
