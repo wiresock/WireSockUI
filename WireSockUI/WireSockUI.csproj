@@ -168,6 +168,15 @@
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
     <Content Include="Resources\template.conf" />
+    <!--
+      WireSock SDK library placed in the repository root by the developer (not committed:
+      the WireSock EULA does not allow redistributing it separately). Loaded before the
+      registered WireSock installation; the WireSock driver must still be installed.
+    -->
+    <None Include="..\wgbooster.dll" Link="wgbooster.dll" Condition="Exists('..\wgbooster.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <!-- VK TURN core, built from ../core by scripts/Build-Core.ps1 -->
     <None Include="..\out\vkturn-core.exe" Link="vkturn-core.exe" Condition="Exists('..\out\vkturn-core.exe')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -209,7 +218,7 @@
           Condition="'$(WireSockUIAllowManagedOnlyBuild)' != 'true' and '$(Platform)' != 'AnyCPU' and '$(Platform)' != 'Any CPU' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(_IsPublishing)' != 'true'">
     <Error Condition="!Exists('$(TargetPath).config')"
            Text="The generated managed configuration with binding redirects was not produced." />
-    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(TargetDir).&quot;" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(TargetDir).&quot; -Preserve wgbooster.dll" />
     <Copy SourceFiles="$(TargetPath).config"
           DestinationFiles="$(TargetDir)WireSockUI.exe.config" />
     <ItemGroup>
@@ -218,6 +227,7 @@
       <_NativeBuildPayloadRelativePath Include="WireSockUI.exe.config" />
       <_NativeBuildPayloadRelativePath Include="@(ReferenceCopyLocalPaths->'%(DestinationSubDirectory)%(Filename)%(Extension)')" />
       <_NativeBuildPayloadRelativePath Include="vkturn-core.exe" Condition="Exists('$(TargetDir)vkturn-core.exe')" />
+      <_NativeBuildPayloadRelativePath Include="wgbooster.dll" Condition="Exists('$(TargetDir)wgbooster.dll')" />
       <_VkTurnWebView2Loader Include="$(TargetDir)runtimes\**\WebView2Loader.dll" />
       <_NativeBuildPayloadRelativePath Include="@(_VkTurnWebView2Loader->'runtimes\%(RecursiveDir)%(Filename)%(Extension)')" />
     </ItemGroup>
@@ -247,7 +257,7 @@
     -->
     <Delete Files="$(PublishDir)WireSockUI.Managed.dll.config"
             TreatErrorsAsWarnings="false" />
-    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(PublishDir).&quot;" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(PublishDir).&quot; -Preserve wgbooster.dll" />
     <ItemGroup>
       <_NativePublishPayloadRelativePath Include="@(ResolvedFileToPublish->'%(RelativePath)')" />
       <_NativePublishPayloadRelativePath Remove="WireSockUI.Managed.dll.config" />

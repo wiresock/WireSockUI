@@ -407,3 +407,6 @@ FodyWeavers.xsd
 *.sln.iml
 
 /out/
+
+# WireSock SDK binary: local only, the WireSock EULA forbids redistributing it separately
+/wgbooster.dll

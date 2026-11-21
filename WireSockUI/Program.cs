@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Security.AccessControl;
@@ -1097,7 +1098,12 @@ namespace WireSockUI
 
         private static IEnumerable<string> EnumerateWireSockLibraryDirectoryCandidates()
         {
-            return EnumerateWireSockLibraryDirectoryCandidates(GetInstallLocations());
+            // cronixWG ships wgbooster.dll next to the application. It is tried first and passes the
+            // same trusted-path validation as an SDK install (admin-owned, not user-writable), so
+            // a development copy in a user-writable folder is skipped and the registered WireSock
+            // installation is used instead.
+            var bundled = new List<string> { AppDomain.CurrentDomain.BaseDirectory };
+            return bundled.Concat(EnumerateWireSockLibraryDirectoryCandidates(GetInstallLocations()));
         }
 
         internal static IEnumerable<string> EnumerateWireSockLibraryDirectoryCandidates(
