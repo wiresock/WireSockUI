@@ -252,18 +252,7 @@ if ($ExpectedPlatform -eq 'x86') {
                 -Value 0
         }
 }
-elseif ($ExpectedPlatform -eq 'x64') {
-    Assert-NativeValidatorRejectsMutation `
-        -Name 'the CETCOMPAT debug directory' `
-        -OriginalBytes $launcherBytes `
-        -Mutation {
-            param($bytes)
-            [Array]::Clear(
-                $bytes,
-                $testLayout.DataDirectoryOffset + (6 * 8),
-                8)
-        }
-}
+# cronixWG: the launcher intentionally has no CETCOMPAT record (see Build-NativeBootstrap.ps1).
 
 & (Join-Path $PSScriptRoot 'Test-UnsignedArtifacts.ps1') `
     -Path $result.Path |

@@ -307,11 +307,11 @@ function Assert-ExtendedDllCharacteristics {
         [string] $Platform
     )
 
+    # cronixWG: the launcher hosts the .NET Framework CLR, which breaks under CET
+    # shadow stacks (managed exceptions fail fast with 0xC0000409), so the launcher
+    # must NOT claim CETCOMPAT on any platform.
     if ($DirectoryRva -eq 0 -and $DirectorySize -eq 0) {
-        if ($Platform -eq 'ARM64') {
-            return
-        }
-        throw 'The x86/x64 portable executable has no CETCOMPAT debug directory.'
+        return
     }
     if ($DirectoryRva -eq 0 -or
         $DirectorySize -eq 0 -or
@@ -362,13 +362,8 @@ function Assert-ExtendedDllCharacteristics {
         }
     }
 
-    if ($Platform -eq 'ARM64') {
-        if ($extendedCharacteristicsCount -ne 0) {
-            throw 'The ARM64 launcher unexpectedly claims unsupported CETCOMPAT metadata.'
-        }
-    }
-    elseif ($extendedCharacteristicsCount -ne 1) {
-        throw 'The x86/x64 launcher does not contain exactly one CETCOMPAT debug record.'
+    if ($extendedCharacteristicsCount -ne 0) {
+        throw 'The launcher claims CETCOMPAT, which the hosted .NET Framework CLR does not support.'
     }
 }
 

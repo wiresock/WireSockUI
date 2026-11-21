@@ -766,9 +766,10 @@ END
         'delayimp.lib',
         'ole32.lib',
         'user32.lib')
-    if ($Platform -ne 'ARM64') {
-        $linkerArguments += '/CETCOMPAT'
-    }
+    # No /CETCOMPAT: the launcher hosts the .NET Framework CLR, which is not
+    # compatible with CET shadow stacks. On CET-capable CPUs every managed
+    # exception (even a caught one) then fails fast with 0xC0000409 /
+    # FAST_FAIL_SET_CONTEXT_DENIED while the CLR unwinds into JIT code.
     if ($Platform -ne 'x86') {
         $linkerArguments += '/HIGHENTROPYVA'
     }
