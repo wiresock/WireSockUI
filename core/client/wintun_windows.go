@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/tun"
 )
 
@@ -44,11 +45,22 @@ func listenWintun(peer string) (net.PacketConn, error) {
 		return nil, err
 	}
 	// netsh keeps this dependency-free; the adapter disappears with the process.
+	// Duplicate address detection would keep the address "tentative" (and the /30 route
+	// missing) for about a second; WireSock started in that window routes the Endpoint
+	// through the default gateway instead of this adapter, so turn it off.
+	if out, err := exec.Command("netsh", "interface", "ipv4", "set", "interface", name,
+		"dadtransmits=0", "routerdiscovery=disabled").CombinedOutput(); err != nil {
+		log.Printf("[WINTUN] could not disable duplicate address detection: %v: %s", err, out)
+	}
 	out, err := exec.Command("netsh", "interface", "ipv4", "set", "address",
 		"name="+name, "source=static", "address="+local.String(), "mask=255.255.255.252").CombinedOutput()
 	if err != nil {
 		_ = dev.Close()
 		return nil, fmt.Errorf("assign %s/30 to %q: %v: %s", local, name, err, out)
+	}
+	if err := waitForWintunRoute(name, fake.IP, 15*time.Second); err != nil {
+		_ = dev.Close()
+		return nil, err
 	}
 	log.Printf("[WINTUN] adapter %q up: local %s/30, fake WireGuard peer %s", name, local, fake)
 
@@ -61,6 +73,30 @@ func listenWintun(peer string) (net.PacketConn, error) {
 	}
 	go c.statsLoop()
 	return c, nil
+}
+
+// waitForWintunRoute blocks until Windows routes peer through the named adapter, so the
+// WireSock tunnel is never started before its Endpoint resolves to this adapter.
+func waitForWintunRoute(name string, peer net.IP, timeout time.Duration) error {
+	sa := &windows.SockaddrInet4{}
+	copy(sa.Addr[:], peer.To4())
+	start := time.Now()
+	for {
+		iface, ifErr := net.InterfaceByName(name)
+		var best uint32
+		routeErr := windows.GetBestInterfaceEx(sa, &best)
+		if ifErr == nil && routeErr == nil && int(best) == iface.Index {
+			// Give the NDIS filter of WireSock a moment to attach to the new adapter too.
+			time.Sleep(500 * time.Millisecond)
+			log.Printf("[WINTUN] route to %s via %q ready after %v", peer, name, time.Since(start).Truncate(time.Millisecond))
+			return nil
+		}
+		if time.Since(start) > timeout {
+			return fmt.Errorf("Windows did not route %s through %q within %v (interface: %v, best interface %d, route error: %v)",
+				peer, name, timeout, ifErr, best, routeErr)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (c *wintunPacketConn) statsLoop() {
