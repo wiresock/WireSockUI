@@ -68,6 +68,8 @@
   <ItemGroup Condition=" $(TargetFramework.StartsWith('net472')) ">
     <PackageReference Include="System.Resources.Extensions" Version="10.0.10" />
     <PackageReference Include="TaskScheduler" Version="2.12.2" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <Reference Include="System.Web.Extensions" />
     <Reference Include="Microsoft.CSharp" />
     <Reference Include="System" />
     <Reference Include="System.Configuration" />
@@ -166,6 +168,11 @@
       <DesignTimeSharedInput>True</DesignTimeSharedInput>
     </Compile>
     <Content Include="Resources\template.conf" />
+    <!-- VK TURN core, built from ../core by scripts/Build-Core.ps1 -->
+    <None Include="..\out\vkturn-core.exe" Link="vkturn-core.exe" Condition="Exists('..\out\vkturn-core.exe')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <Content Include="Resources\wiresock.ico" />
     <None Include="..\WireSockUI.Bootstrap\bootstrap.cpp" Link="Bootstrap\bootstrap.cpp" />
     <None Include="..\WireSockUI.Bootstrap\bootstrap.manifest" Link="Bootstrap\bootstrap.manifest" />
@@ -210,6 +217,9 @@
       <_NativeBuildPayloadRelativePath Include="$(TargetFileName).config" />
       <_NativeBuildPayloadRelativePath Include="WireSockUI.exe.config" />
       <_NativeBuildPayloadRelativePath Include="@(ReferenceCopyLocalPaths->'%(DestinationSubDirectory)%(Filename)%(Extension)')" />
+      <_NativeBuildPayloadRelativePath Include="vkturn-core.exe" Condition="Exists('$(TargetDir)vkturn-core.exe')" />
+      <_VkTurnWebView2Loader Include="$(TargetDir)runtimes\**\WebView2Loader.dll" />
+      <_NativeBuildPayloadRelativePath Include="@(_VkTurnWebView2Loader->'runtimes\%(RecursiveDir)%(Filename)%(Extension)')" />
     </ItemGroup>
     <WriteLinesToFile
       File="$(IntermediateOutputPath)native-bootstrap-payload.txt"

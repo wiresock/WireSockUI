@@ -351,6 +351,8 @@ namespace WireSockUI.Tests
                 { "WireSock log callback decodes UTF-8 explicitly", WireSockLogCallbackDecodesUtf8Explicitly },
                 { "Stats struct matches wgbooster ABI", StatsStructMatchesWgboosterAbi }
             };
+            foreach (var vkTest in VkTurnTests())
+                tests.Add(vkTest.Key, vkTest.Value);
 
             if (args?.Any(arg => string.Equals(arg, "--list-tests", StringComparison.OrdinalIgnoreCase)) == true)
             {

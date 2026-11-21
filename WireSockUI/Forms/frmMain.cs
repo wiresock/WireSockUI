@@ -15,6 +15,7 @@ using WireSockUI.Config;
 using WireSockUI.Extensions;
 using WireSockUI.Native;
 using WireSockUI.Properties;
+using WireSockUI.VkTurn;
 using static WireSockUI.Native.WireguardBoosterExports;
 
 namespace WireSockUI.Forms
@@ -47,6 +48,8 @@ namespace WireSockUI.Forms
          * @brief The manager that handles the Wireguard connections.
          */
         private readonly TunnelLifecycleController _tunnelLifecycle;
+        private readonly VkTurnController _vkTurn;
+        private bool _vkTurnPreparing;
         private readonly TunnelMonitor _tunnelMonitor;
         private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
         private readonly SettingsUpdateCoordinator _settingsUpdateCoordinator;
@@ -95,6 +98,9 @@ namespace WireSockUI.Forms
                 TryScheduleLogDrain,
                 AppendWireSockLogMessages);
             _tunnelLifecycle = new TunnelLifecycleController(OnWireSockLogMessage);
+            _vkTurn = new VkTurnController(this,
+                message => _uiLogBuffer.Enqueue(new WireSockManager.LogMessage { Message = message }));
+            _vkTurn.UnexpectedExit += OnVkTurnUnexpectedExit;
             Volatile.Write(ref _configuredLogLevel, (int)_tunnelLifecycle.ConfiguredLogLevel);
             _settingsUpdateCoordinator = new SettingsUpdateCoordinator(
                 ApplyLogLevelSettingAsync,
@@ -822,6 +828,7 @@ namespace WireSockUI.Forms
                 return;
 
             _shutdownComplete = true;
+            _vkTurn.StopInBackground();
             _uiLogBuffer.Dispose();
             _tunnelMonitor.Dispose();
             _activeSettingsForm?.CancelPendingOperations();
@@ -2085,6 +2092,8 @@ namespace WireSockUI.Forms
                     break;
                 case ConnectionState.Disconnected:
                     CancelTunnelMonitoring();
+                    if (!_vkTurnPreparing)
+                        _vkTurn?.StopInBackground();
 
                     cmiStatus.Image = _inactiveStatusImage;
                     SetTrayIcon(Resources.ico, false);
@@ -2343,6 +2352,14 @@ namespace WireSockUI.Forms
 
         private async void OnDisconnectClick(object sender, EventArgs e)
         {
+            // While VK TURN is still connecting the tunnel operation is in progress;
+            // cancelling the core makes that operation finish as "disconnected".
+            if (_vkTurnPreparing)
+            {
+                _vkTurn.StopInBackground();
+                return;
+            }
+
             if (!TryBeginTunnelOperation())
                 return;
 
@@ -2355,6 +2372,30 @@ namespace WireSockUI.Forms
             {
                 EndTunnelOperation();
             }
+        }
+
+        private async void OnVkTurnUnexpectedExit(string profile, string error)
+        {
+            if (_shutdownComplete || !string.Equals(profile, _tunnelLifecycle.ProfileName, StringComparison.OrdinalIgnoreCase))
+                return;
+            if (_currentState != ConnectionState.Connected && _currentState != ConnectionState.Connecting)
+                return;
+            if (!TryBeginTunnelOperation(false))
+                return;
+
+            try
+            {
+                // Without the core the tunnel endpoint is dead; drop it so traffic is not black-holed
+                // (with the Kill Switch on, WireSock keeps blocking until the user reconnects).
+                await DisconnectCurrentTunnelAsync(true, PrivilegedSettingsStore.EnableKillSwitch);
+            }
+            finally
+            {
+                EndTunnelOperation();
+            }
+
+            MessageBox.Show($"VK TURN stopped, the tunnel was disconnected.{Environment.NewLine}{Environment.NewLine}{error}",
+                Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void OnExitClick(object sender, EventArgs e)
@@ -3028,6 +3069,34 @@ namespace WireSockUI.Forms
                     var connectGeneration = CurrentTunnelGeneration();
                     _activeTunnelAddresses = ProfileDisplayFormatter.FormatText(profileSettings.Address);
                     UpdateState(ConnectionState.Connecting, true, profile);
+
+                    // VK TURN profiles: bring up vkturn-core (and solve the captcha) first.
+                    VkPrepareResult vkResult;
+                    _vkTurnPreparing = true;
+                    try
+                    {
+                        vkResult = await _vkTurn.PrepareAsync(profile);
+                    }
+                    finally
+                    {
+                        _vkTurnPreparing = false;
+                    }
+
+                    if (vkResult == VkPrepareResult.Failed || vkResult == VkPrepareResult.Cancelled)
+                    {
+                        UpdateState(ConnectionState.Disconnected, false, profile);
+                        if (vkResult == VkPrepareResult.Failed)
+                            MessageBox.Show(_vkTurn.LastError ?? "VK TURN could not connect.",
+                                Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+
+                    if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
+                    {
+                        _vkTurn.StopInBackground();
+                        return;
+                    }
+
                     var connectTask = ConnectWithTimeoutAsync(profile, connectGeneration,
                         preservedNetworkLockPending);
                     preservedNetworkLockPending = false;

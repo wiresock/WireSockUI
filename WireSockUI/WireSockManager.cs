@@ -754,7 +754,8 @@ namespace WireSockUI
         /// <param name="profile">Profile identifier</param>
         public bool Connect(string profile)
         {
-            var profilePath = Profile.GetProfilePath(profile);
+            // VK TURN profiles connect through a runtime copy that points the peer at vkturn-core.
+            var profilePath = VkTurn.VkTurnController.ResolveConnectPath(profile) ?? Profile.GetProfilePath(profile);
             bool connected;
             Mode connectedMode;
             long connectedSequence;
