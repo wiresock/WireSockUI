@@ -63,10 +63,17 @@ function Test-Administrator {
 
 function Get-DriverFlavorFolder {
     param([string] $Base)
-    # The win10 builds are attestation-signed for Windows 10/11; the root builds target 7/8.x.
-    $build = [Environment]::OSVersion.Version
-    $win10 = Join-Path $Base 'win10'
-    if ($build.Major -ge 10 -and (Test-Path -LiteralPath $win10)) { return $win10 }
+    # WireSock CLI layout: drivers\win10 (attestation-signed, Windows 10/11), drivers\win8 (8/8.1),
+    # drivers\win7; wiresock-adapter\win10 and wiresock-adapter\legacy (7/8.x).
+    # Older Secure Connect copies kept the 7/8 build directly in the base folder.
+    $version = [Environment]::OSVersion.Version
+    $candidates = if ($version.Major -ge 10) { @('win10') }
+                  elseif ($version.Major -eq 6 -and $version.Minor -ge 2) { @('win8', 'legacy') }
+                  else { @('win7', 'legacy') }
+    foreach ($name in $candidates) {
+        $folder = Join-Path $Base $name
+        if (Test-Path -LiteralPath $folder -PathType Container) { return $folder }
+    }
     return $Base
 }
 
