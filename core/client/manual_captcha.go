@@ -393,6 +393,7 @@ func runCaptchaServerAndWait(handler http.Handler, captchaURL string, keyCh <-ch
 	fmt.Println("\n==============================================")
 	fmt.Println("ACTION REQUIRED: MANUAL CAPTCHA SOLVING NEEDED")
 	fmt.Println("Open this URL in your browser: " + localCaptchaOrigin())
+	fmt.Println("Full URL: " + captchaURL)
 	fmt.Println("==============================================")
 	fmt.Println()
 
@@ -403,7 +404,9 @@ func runCaptchaServerAndWait(handler http.Handler, captchaURL string, keyCh <-ch
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
-		return "", err
+		// browser may keep connections open; the key is already received, so just force-close
+		log.Printf("[Captcha] local server shutdown: %v (ignored, forcing close)", err)
+		_ = srv.Close()
 	}
 
 	return key, nil
@@ -571,12 +574,31 @@ func solveCaptchaViaProxy(redirectURI string, dialer *dnsdialer.Dialer) (string,
 				req.Out.URL.RawQuery = targetParsed.RawQuery
 				rewriteProxyRequest(req.Out, targetParsed)
 			},
+			ModifyResponse: func(res *http.Response) error {
+				log.Printf("[Captcha Proxy] GENERIC %s %s -> %d %q", r.Method, targetAuthURL, res.StatusCode, res.Header.Get("Content-Type"))
+				res.Header.Del("Cross-Origin-Resource-Policy")
+				return nil
+			},
+			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+				log.Printf("[Captcha Proxy] GENERIC ERROR %s: %v", targetAuthURL, err)
+				w.WriteHeader(http.StatusBadGateway)
+			},
 		}
 		genericReverse.ServeHTTP(w, r)
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[Captcha Proxy] HTTP %s %s", r.Method, r.URL.String())
+		if strings.HasPrefix(r.URL.Path, "/chunks/") {
+			// VK captcha webpack chunks live on the static CDN, not on id.vk.ru
+			cdn := "https://st.vk.ru/vkid/vkid-bff/dist/projects/notRobotCaptcha-web" + r.URL.Path
+			if r.URL.RawQuery != "" {
+				cdn += "?" + r.URL.RawQuery
+			}
+			log.Printf("[Captcha Proxy] CHUNK -> %s", cdn)
+			http.Redirect(w, r, "/generic_proxy?proxy_url="+neturl.QueryEscape(cdn), http.StatusTemporaryRedirect)
+			return
+		}
 		if r.URL.Path == "/" && targetURL.Path != "" && targetURL.Path != "/" && r.URL.RawQuery == "" {
 			log.Printf("[Captcha Proxy] Redirecting ROOT to: %s", localCaptchaURLForTarget(targetURL))
 			http.Redirect(w, r, localCaptchaURLForTarget(targetURL), http.StatusTemporaryRedirect)
@@ -599,7 +621,7 @@ func openBrowser(url string) {
 func browserOpenCommands(goos string, url string) []browserCommand {
 	switch goos {
 	case "windows":
-		return []browserCommand{{name: "cmd", args: []string{"/c", "start", url}}}
+		return []browserCommand{{name: "rundll32", args: []string{"url.dll,FileProtocolHandler", url}}}
 	case "darwin":
 		return []browserCommand{{name: "open", args: []string{url}}}
 	case "linux":

@@ -1184,7 +1184,7 @@ func getTokenChain(ctx context.Context, link string, streamID int, creds VKCrede
 					}
 				case captchaSolveModeManual:
 					log.Printf("[STREAM %d] [Captcha] Triggering manual captcha fallback...", streamID)
-					manualCtx, manualCancel := context.WithTimeout(ctx, 60*time.Second)
+					manualCtx, manualCancel := context.WithTimeout(ctx, 300*time.Second)
 
 					type manualRes struct {
 						token string
@@ -1212,7 +1212,7 @@ func getTokenChain(ctx context.Context, link string, streamID int, creds VKCrede
 						captchaKey = res.key
 						solveErr = res.err
 					case <-manualCtx.Done():
-						solveErr = fmt.Errorf("manual captcha timed out after 60s")
+						solveErr = fmt.Errorf("manual captcha timed out after 300s")
 					}
 					manualCancel()
 				}
