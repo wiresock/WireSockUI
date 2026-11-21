@@ -4,12 +4,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [ValidateNotNullOrEmpty()]
-    [string] $Path,
-
-    # Comma-separated file names (relative to Path) whose signatures must be kept,
-    # e.g. third-party binaries whose license forbids modification (wgbooster.dll).
-    [Parameter()]
-    [string] $Preserve = ''
+    [string] $Path
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,12 +36,6 @@ function Test-HasMzHeader {
     }
 }
 
-$preservedRelativePaths = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
-foreach ($name in @($Preserve -split ',')) {
-    $trimmed = $name.Trim()
-    if ($trimmed) { [void]$preservedRelativePaths.Add($trimmed.Replace('/', '')) }
-}
-
 $maximumEntries = 4096
 $modules = [Collections.Generic.List[IO.FileInfo]]::new()
 $pendingDirectories = [Collections.Generic.Queue[IO.DirectoryInfo]]::new()
@@ -67,9 +56,6 @@ while ($pendingDirectories.Count -gt 0) {
 
         if ($child.PSIsContainer) {
             $pendingDirectories.Enqueue([IO.DirectoryInfo]$child)
-        }
-        elseif ($preservedRelativePaths.Contains($child.FullName.Substring($root.FullName.TrimEnd('').Length + 1))) {
-            Write-Verbose "Keeping the signature of '$($child.FullName)'."
         }
         elseif (Test-HasMzHeader -File ([IO.FileInfo]$child)) {
             $modules.Add([IO.FileInfo]$child)

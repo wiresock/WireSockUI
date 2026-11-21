@@ -218,7 +218,7 @@
           Condition="'$(WireSockUIAllowManagedOnlyBuild)' != 'true' and '$(Platform)' != 'AnyCPU' and '$(Platform)' != 'Any CPU' and '$(DesignTimeBuild)' != 'true' and '$(IsCrossTargetingBuild)' != 'true' and '$(_IsPublishing)' != 'true'">
     <Error Condition="!Exists('$(TargetPath).config')"
            Text="The generated managed configuration with binding redirects was not produced." />
-    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(TargetDir).&quot; -Preserve wgbooster.dll" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(TargetDir).&quot;" />
     <Copy SourceFiles="$(TargetPath).config"
           DestinationFiles="$(TargetDir)WireSockUI.exe.config" />
     <ItemGroup>
@@ -257,7 +257,7 @@
     -->
     <Delete Files="$(PublishDir)WireSockUI.Managed.dll.config"
             TreatErrorsAsWarnings="false" />
-    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(PublishDir).&quot; -Preserve wgbooster.dll" />
+    <Exec Command="powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File &quot;$(MSBuildProjectDirectory)\..\scripts\Remove-AuthenticodeSignatures.ps1&quot; -Path &quot;$(PublishDir).&quot;" />
     <ItemGroup>
       <_NativePublishPayloadRelativePath Include="@(ResolvedFileToPublish->'%(RelativePath)')" />
       <_NativePublishPayloadRelativePath Remove="WireSockUI.Managed.dll.config" />
