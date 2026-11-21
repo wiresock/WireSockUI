@@ -41,7 +41,11 @@ type socks5PacketConn struct {
 	header   atomic.Value // []byte: SOCKS5 UDP header echoed on replies
 	readBuf  []byte
 	closed   atomic.Bool
+	done     chan struct{}
 	wg       sync.WaitGroup
+
+	rxPackets, rxBytes, rxDropped, txPackets, txBytes, txErrors atomic.Int64
+	dropLogs                                                    atomic.Int32
 }
 
 // listenSocks5UDP starts the TCP control listener and the UDP relay on the same loopback host.
@@ -62,11 +66,42 @@ func listenSocks5UDP(address string) (net.PacketConn, error) {
 		_ = listener.Close()
 		return nil, err
 	}
-	c := &socks5PacketConn{relay: relay, listener: listener, readBuf: make([]byte, 65535)}
-	c.wg.Add(1)
+	c := &socks5PacketConn{relay: relay, listener: listener, readBuf: make([]byte, 65535), done: make(chan struct{})}
+	c.wg.Add(2)
 	go c.acceptLoop()
+	go c.statsLoop()
 	log.Printf("[SOCKS5] listening on %s (UDP relay %s)", listener.Addr(), relay.LocalAddr())
 	return c, nil
+}
+
+// statsLoop logs relay traffic counters every 5 s while they change, so a stalled
+// WireGuard handshake shows whether packets reach the proxy and whether replies leave it.
+func (c *socks5PacketConn) statsLoop() {
+	defer c.wg.Done()
+	var last [6]int64
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-t.C:
+		}
+		cur := [6]int64{c.rxPackets.Load(), c.rxBytes.Load(), c.rxDropped.Load(),
+			c.txPackets.Load(), c.txBytes.Load(), c.txErrors.Load()}
+		if cur != last {
+			log.Printf("[SOCKS5] relay: from WireGuard %d pkts/%d B (dropped %d), to WireGuard %d pkts/%d B (errors %d)",
+				cur[0], cur[1], cur[2], cur[3], cur[4], cur[5])
+			last = cur
+		}
+	}
+}
+
+func (c *socks5PacketConn) logDrop(format string, args ...any) {
+	c.rxDropped.Add(1)
+	if c.dropLogs.Add(1) <= 10 || isDebug {
+		log.Printf("[SOCKS5] dropped datagram: "+format, args...)
+	}
 }
 
 func (c *socks5PacketConn) acceptLoop() {
@@ -207,14 +242,18 @@ func (c *socks5PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 			return 0, nil, err
 		}
 		if !addr.IP.IsLoopback() {
+			c.logDrop("non-loopback source %s", addr)
 			continue
 		}
 		h, err := parseSocks5UDPHeader(c.readBuf[:n])
 		if err != nil {
-			if isDebug {
-				log.Printf("[SOCKS5] dropping datagram from %s: %v", addr, err)
-			}
+			c.logDrop("from %s (%d bytes, first bytes % x): %v", addr, n, c.readBuf[:min(n, 12)], err)
 			continue
+		}
+		c.rxPackets.Add(1)
+		c.rxBytes.Add(int64(n - h))
+		if c.rxPackets.Load() == 1 {
+			log.Printf("[SOCKS5] first WireGuard datagram from %s, %d bytes, header % x", addr, n-h, c.readBuf[:h])
 		}
 		if prev, _ := c.header.Load().([]byte); len(prev) != h || string(prev) != string(c.readBuf[:h]) {
 			c.header.Store(append([]byte(nil), c.readBuf[:h]...))
@@ -232,13 +271,21 @@ func (c *socks5PacketConn) WriteTo(p []byte, addr net.Addr) (int, error) {
 	out = append(out, header...)
 	out = append(out, p...)
 	if _, err := c.relay.WriteTo(out, addr); err != nil {
+		if c.txErrors.Add(1) <= 10 {
+			log.Printf("[SOCKS5] reply to %s failed: %v", addr, err)
+		}
 		return 0, err
 	}
+	c.txPackets.Add(1)
+	c.txBytes.Add(int64(len(p)))
 	return len(p), nil
 }
 
 func (c *socks5PacketConn) Close() error {
-	c.closed.Store(true)
+	if c.closed.Swap(true) {
+		return nil
+	}
+	close(c.done)
 	err1 := c.listener.Close()
 	err2 := c.relay.Close()
 	c.wg.Wait()
