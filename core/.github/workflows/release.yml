@@ -1,0 +1,337 @@
+name: Release
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            cgo: 0
+          - goos: linux
+            goarch: arm64
+            cgo: 0
+          - goos: linux
+            goarch: 386
+            cgo: 0
+          - goos: linux
+            goarch: arm
+            goarm: "7"
+            cgo: 0
+          - goos: linux
+            goarch: mipsle
+            gomips: softfloat
+            cgo: 0
+          - goos: linux
+            goarch: mips
+            gomips: softfloat
+            cgo: 0
+          - goos: linux
+            goarch: mips64le
+            gomips: softfloat
+            cgo: 0
+          - goos: linux
+            goarch: riscv64
+            cgo: 0
+          - goos: darwin
+            goarch: amd64
+            cgo: 0
+          - goos: darwin
+            goarch: arm64
+            cgo: 0
+          - goos: windows
+            goarch: amd64
+            cgo: 0
+          - goos: windows
+            goarch: arm64
+            cgo: 0
+          - goos: windows
+            goarch: 386
+            cgo: 0
+          - goos: android
+            goarch: arm64
+            cgo: 1
+            api: 21
+          - goos: android
+            goarch: arm
+            cgo: 1
+            api: 21
+          - goos: freebsd
+            goarch: amd64
+            cgo: 0
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.25.5"
+
+      # Install Android NDK only for android rows
+      - name: Setup Android NDK
+        if: matrix.goos == 'android'
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: false
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOMIPS: ${{ matrix.gomips }}
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          ANDROID_API: ${{ matrix.api }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          echo "Building for $GOOS/$GOARCH${GOARM:+/arm$GOARM} (CGO_ENABLED=$CGO_ENABLED)"
+
+          if [ "$GOOS" = "android" ]; then
+            if [ -z "$ANDROID_NDK_HOME" ]; then
+              echo "ANDROID_NDK_HOME is not set – did setup-ndk run?"
+              exit 1
+            fi
+
+            TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+            if [ "$GOARCH" = "arm64" ]; then
+              export CC="$TOOLCHAIN_BIN/aarch64-linux-android${ANDROID_API}-clang"
+            elif [ "$GOARCH" = "arm" ]; then
+              export CC="$TOOLCHAIN_BIN/armv7a-linux-androideabi${ANDROID_API}-clang"
+            else
+              echo "Unsupported ANDROID GOARCH=$GOARCH"
+              exit 1
+            fi
+
+            echo "Using Android NDK CC=$CC"
+          fi
+
+          mkdir -p dist
+
+          # Set extension for windows
+          if [ "${GOOS}" = "windows" ]; then
+            EXT=.exe
+          else
+            EXT=
+          fi
+
+          GOOS=$GOOS GOARCH=$GOARCH GOARM=$GOARM GOMIPS=$GOMIPS \
+          go build -ldflags "-s -w -checklinkname=0" -trimpath \
+            -o "dist/client-${GOOS}-${GOARCH}${EXT}" \
+            ./client
+
+          GOOS=$GOOS GOARCH=$GOARCH GOARM=$GOARM GOMIPS=$GOMIPS \
+          go build -ldflags "-s -w -checklinkname=0" -trimpath \
+            -o "dist/server-${GOOS}-${GOARCH}${EXT}" \
+            ./server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: good-turn-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/**
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.meta.outputs.should_release }}
+      tag_name: ${{ steps.meta.outputs.tag_name }}
+    permissions:
+      contents: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: dist
+
+      - name: Prepare release metadata
+        id: meta
+        run: |
+          LATEST_TAG="$(git tag -l | grep -E '^(v)?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1 || true)"
+          PREFIX=""
+          BASE_VERSION="$LATEST_TAG"
+
+          if [ -z "$LATEST_TAG" ]; then
+            BASE_VERSION="0.0.0"
+          elif [ "${LATEST_TAG#v}" != "$LATEST_TAG" ]; then
+            PREFIX="v"
+            BASE_VERSION="${LATEST_TAG#v}"
+          fi
+
+          IFS=. read -r MAJOR MINOR PATCH <<< "$BASE_VERSION"
+
+          if [ -n "$LATEST_TAG" ]; then
+            RANGE="$LATEST_TAG..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          COMMITS="$(git log --no-merges --format='%s' "$RANGE")"
+          BUMP=""
+
+          if printf '%s\n' "$COMMITS" | grep -Eiq '^break([(:! ]|$)'; then
+            BUMP="major"
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif printf '%s\n' "$COMMITS" | grep -Eiq '^feat([(:! ]|$)'; then
+            BUMP="minor"
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          elif printf '%s\n' "$COMMITS" | grep -Eiq '^fix([(:! ]|$)'; then
+            BUMP="patch"
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEXT_VERSION="${MAJOR}.${MINOR}.${PATCH}"
+          NEXT_TAG="${PREFIX}${NEXT_VERSION}"
+
+          {
+            echo "previous_tag=$LATEST_TAG"
+            echo "range=$RANGE"
+            echo "bump=$BUMP"
+            echo "should_release=$([ -n "$BUMP" ] && echo true || echo false)"
+            echo "tag_name=$NEXT_TAG"
+            echo "release_name=$NEXT_TAG"
+            echo "body_path=release-notes.md"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate release notes from commit messages
+        id: notes
+        if: steps.meta.outputs.should_release == 'true'
+        env:
+          PREVIOUS_TAG: ${{ steps.meta.outputs.previous_tag }}
+          NEXT_TAG: ${{ steps.meta.outputs.tag_name }}
+          BUMP: ${{ steps.meta.outputs.bump }}
+          RANGE: ${{ steps.meta.outputs.range }}
+        run: |
+          strip_prefix() {
+            sed -E 's/^(feat|fix|break)([(!:]|[[:space:]])+[[:space:]]*//I'
+          }
+
+          FEATURES="$(git log --no-merges --format='%s (%h)' "$RANGE" | grep -Ei '^feat([(:! ]|$)' | strip_prefix | LC_ALL=C sort -f || true)"
+          FIXES="$(git log --no-merges --format='%s (%h)' "$RANGE" | grep -Ei '^fix([(:! ]|$)' | strip_prefix | LC_ALL=C sort -f || true)"
+          BREAKING="$(git log --no-merges --format='%s (%h)' "$RANGE" | grep -Ei '^break([(:! ]|$)' | strip_prefix | LC_ALL=C sort -f || true)"
+
+          {
+            echo "body_path=release-notes.md"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            if [ -n "$BREAKING" ]; then
+              echo "### Breaking Changes"
+              echo
+              printf '%s\n' "$BREAKING" | sed 's/^/- /'
+              echo
+            fi
+
+            if [ -n "$FEATURES" ]; then
+              echo "### Features"
+              echo
+              printf '%s\n' "$FEATURES" | sed 's/^/- /'
+              echo
+            fi
+
+            if [ -n "$FIXES" ]; then
+              echo "### Bug Fixes"
+              echo
+              printf '%s\n' "$FIXES" | sed 's/^/- /'
+              echo
+            fi
+          } > release-notes.md
+
+      - name: Create Release
+        if: steps.meta.outputs.should_release == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          # upload every file in dist/ including nested files
+          files: |
+            dist/**
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.meta.outputs.release_name }}
+          body_path: ${{ steps.meta.outputs.body_path }}
+          overwrite_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Skip release when no semantic commit is found
+        if: steps.meta.outputs.should_release != 'true'
+        run: |
+          echo "No new semantic release created."
+          echo "Add a commit starting with break, feat, or fix after the latest tag."
+
+  docker:
+    name: Publish Docker image
+    needs: release
+    if: needs.release.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Prepare image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          echo "name=ghcr.io/$(echo "$REPOSITORY" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=raw,value=latest
+            type=raw,value=${{ needs.release.outputs.tag_name }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

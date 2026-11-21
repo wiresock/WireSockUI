@@ -1,0 +1,153 @@
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  check:
+    name: Lint, fmt-check, and tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/go-build
+            # Module cache
+            ${{ github.workspace }}/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Run gofmt (check)
+        run: |
+          echo "Checking formatting with gofmt..."
+          fmt_output=$(gofmt -l . || true)
+          if [ -n "$fmt_output" ]; then
+            echo "The following files need formatting:"
+            echo "$fmt_output"
+            echo "Run 'gofmt -w .' to fix."
+            exit 1
+          fi
+
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+          args: --timeout=5m ./...
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run tests
+        run: |
+          go test ./... -v
+          
+  build:
+    name: Build binaries
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            cgo: 0
+          - goos: darwin
+            goarch: arm64
+            cgo: 0
+          - goos: android
+            goarch: arm64
+            cgo: 1
+            api: 21
+          - goos: android
+            goarch: arm
+            cgo: 1
+            api: 21
+          # you can add more (android/arm, windows, etc.) later
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v6
+        with:
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: 'stable'
+
+      # Install Android NDK for android rows and expose ndk-path output
+      - name: Setup Android NDK
+        if: matrix.goos == 'android'
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          add-to-path: false
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: ${{ matrix.cgo }}
+          ANDROID_API: ${{ matrix.api }}
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          echo "Building for $GOOS/$GOARCH (CGO_ENABLED=$CGO_ENABLED)"
+
+          # If this is an Android build, point CC at the NDK toolchain clang
+          if [ "$GOOS" = "android" ]; then
+            if [ -z "$ANDROID_NDK_HOME" ]; then
+              echo "ANDROID_NDK_HOME is not set – did setup-ndk run?"
+              exit 1
+            fi
+
+            TOOLCHAIN_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+
+            if [ "$GOARCH" = "arm64" ]; then
+              export CC="$TOOLCHAIN_BIN/aarch64-linux-android${ANDROID_API}-clang"
+            elif [ "$GOARCH" = "arm" ]; then
+              export CC="$TOOLCHAIN_BIN/armv7a-linux-androideabi${ANDROID_API}-clang"
+            else
+              echo "Unsupported ANDROID GOARCH=$GOARCH"
+              exit 1
+            fi
+
+            echo "Using Android NDK CC=$CC"
+          fi
+
+          mkdir -p dist
+
+          ext=""
+          if [ "$GOOS" = "windows" ]; then
+            ext=".exe"
+          fi
+
+          GOOS=$GOOS GOARCH=$GOARCH \
+          go build -ldflags "-s -w -checklinkname=0" -trimpath \
+            -o "dist/client-${GOOS}-${GOARCH}${ext}" \
+            ./client
+          
+          GOOS=$GOOS GOARCH=$GOARCH \
+          go build -ldflags "-s -w -checklinkname=0" -trimpath \
+            -o "dist/server-${GOOS}-${GOARCH}${ext}" \
+            ./server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: good-turn-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/**

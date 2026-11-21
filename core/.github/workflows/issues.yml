@@ -1,0 +1,28 @@
+name: "Close Stale Issues"
+on:
+  schedule:
+    - cron: "0 0 * * 3"
+  workflow_dispatch:
+
+jobs:
+  stale:
+    permissions:
+      issues: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@997185467fa4f803885201cee163a9f38240193d # v10
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          stale-issue-message: >
+            Привет! 👋
+            <br><br>
+            Данный issue давно не обновлялся. Если в течение недели здесь не будет больше активности, issue будет закрыт.
+            <br><br>
+            Спасибо!
+          close-issue-message: "Issue был закрыт из-за отсутствия активности."
+          days-before-stale: 120
+          days-before-close: 7
+          operations-per-run: 1000
+          ascending: true
+          enable-statistics: true
+          stale-issue-label: "Stale"
