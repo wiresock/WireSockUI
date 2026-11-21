@@ -106,7 +106,8 @@ function Get-AdapterDevices {
 
 function Get-Ownership {
     if (-not (Test-Path -LiteralPath $OwnershipKey)) { return @{ Filter = $false; Adapter = $false } }
-    $p = Get-ItemProperty -LiteralPath $OwnershipKey
+    $p = Get-ItemProperty -LiteralPath $OwnershipKey -ErrorAction SilentlyContinue
+    if (-not $p) { return @{ Filter = $false; Adapter = $false } }   # key exists but has no values
     return @{
         Filter  = ($p.PSObject.Properties.Name -contains 'FilterInstalledByCronix') -and $p.FilterInstalledByCronix -eq 1
         Adapter = ($p.PSObject.Properties.Name -contains 'AdapterInstalledByCronix') -and $p.AdapterInstalledByCronix -eq 1
