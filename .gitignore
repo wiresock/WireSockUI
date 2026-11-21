@@ -410,3 +410,7 @@ FodyWeavers.xsd
 
 # WireSock SDK binary: local only, the WireSock EULA forbids redistributing it separately
 /wgbooster.dll
+
+# WireSock drivers: local only (see third_party/wiresock/README.md)
+/third_party/wiresock/*
+!/third_party/wiresock/README.md
