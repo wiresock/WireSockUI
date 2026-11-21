@@ -29,6 +29,12 @@
     <OutputPath>..\bin\$(Platform)\$(Configuration)\</OutputPath>
   </PropertyGroup>
 
+  <PropertyGroup>
+    <WintunArch Condition="'$(Platform)' == 'x64'">amd64</WintunArch>
+    <WintunArch Condition="'$(Platform)' == 'x86'">x86</WintunArch>
+    <WintunArch Condition="'$(Platform)' == 'ARM64'">arm64</WintunArch>
+  </PropertyGroup>
+
   <PropertyGroup Condition="'$(Platform)' != 'AnyCPU' and '$(Platform)' != 'Any CPU'">
     <StartAction>Program</StartAction>
     <StartProgram>$(TargetDir)WireSockUI.exe</StartProgram>
@@ -177,6 +183,12 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
     </None>
+    <!-- Wintun (signed by WireGuard LLC) for vkturn-core's adapter, from third_party/wintun -->
+    <None Include="..\third_party\wintun\bin\$(WintunArch)\wintun.dll" Link="wintun.dll"
+          Condition="'$(WintunArch)' != '' and Exists('..\third_party\wintun\bin\$(WintunArch)\wintun.dll')">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+    </None>
     <!-- VK TURN core, built from ../core by scripts/Build-Core.ps1 -->
     <None Include="..\out\vkturn-core.exe" Link="vkturn-core.exe" Condition="Exists('..\out\vkturn-core.exe')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
@@ -228,6 +240,7 @@
       <_NativeBuildPayloadRelativePath Include="@(ReferenceCopyLocalPaths->'%(DestinationSubDirectory)%(Filename)%(Extension)')" />
       <_NativeBuildPayloadRelativePath Include="vkturn-core.exe" Condition="Exists('$(TargetDir)vkturn-core.exe')" />
       <_NativeBuildPayloadRelativePath Include="wgbooster.dll" Condition="Exists('$(TargetDir)wgbooster.dll')" />
+      <_NativeBuildPayloadRelativePath Include="wintun.dll" Condition="Exists('$(TargetDir)wintun.dll')" />
       <_VkTurnWebView2Loader Include="$(TargetDir)runtimes\**\WebView2Loader.dll" />
       <_NativeBuildPayloadRelativePath Include="@(_VkTurnWebView2Loader->'runtimes\%(RecursiveDir)%(Filename)%(Extension)')" />
     </ItemGroup>

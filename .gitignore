@@ -414,3 +414,6 @@ FodyWeavers.xsd
 # WireSock drivers: local only (see third_party/wiresock/README.md)
 /third_party/wiresock/*
 !/third_party/wiresock/README.md
+
+# Wintun (signed by WireGuard LLC), local only
+/third_party/wintun/

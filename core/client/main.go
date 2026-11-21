@@ -2121,6 +2121,7 @@ func main() {
 	genWrapKey := flag.Bool("gen-wrap-key", false, "print a fresh 64-character hex key for -wrap-key and exit")
 	eventsJSONFlag := flag.Bool("events-json", false, "host mode: JSON events on stdout, JSON commands on stdin (see events.go); exit when stdin closes")
 	externalCaptchaFlag := flag.Bool("external-captcha", false, "with -events-json: hand the captcha page to the host (captcha_required event) instead of the local proxy + system browser")
+	wintunPeer := flag.String("wintun", "", "Windows: own a Wintun adapter and act as the WireGuard peer at this private IPv4 (second host of a /30, e.g. 10.255.255.2:51820) instead of -listen (for WireSock, which cannot use loopback endpoints)")
 	socks5Listen := flag.String("socks5", "", "accept WireGuard traffic through a SOCKS5 UDP ASSOCIATE proxy on this loopback ip:port instead of -listen (for WireSock Socks5Proxy)")
 	credsCacheFlag := flag.String("creds-cache", "", "file to persist VK TURN credentials between runs (DPAPI-encrypted on Windows)")
 	flag.Parse()
@@ -2234,7 +2235,9 @@ func main() {
 	}
 
 	var listenConn net.PacketConn
-	if *socks5Listen != "" {
+	if *wintunPeer != "" {
+		listenConn, err = listenWintun(*wintunPeer)
+	} else if *socks5Listen != "" {
 		listenConn, err = listenSocks5UDP(*socks5Listen)
 	} else {
 		listenConn, err = net.ListenPacket("udp", *listen)

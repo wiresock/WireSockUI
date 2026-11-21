@@ -29,6 +29,14 @@ namespace WireSockUI.VkTurn
         internal const int MaxStreams = 64;
         internal const string DefaultListen = "127.0.0.1:9000";
 
+        /// <summary>
+        ///     The WireGuard peer that vkturn-core impersonates behind its own Wintun adapter
+        ///     (adapter address 10.255.255.1/30). WireSock sends WireGuard through its NDIS
+        ///     filter onto the adapter that routes to the Endpoint, so it cannot reach a
+        ///     loopback listener or proxy; an address behind an adapter the core owns works.
+        /// </summary>
+        internal const string WintunPeer = "10.255.255.2:51820";
+
         private static readonly Regex WrapKeyPattern = new Regex("^[0-9a-fA-F]{64}$", RegexOptions.CultureInvariant);
         private static readonly Regex HostPortPattern =
             new Regex(@"^[A-Za-z0-9.\-]+:\d{1,5}$|^\[[0-9A-Fa-f:.]+\]:\d{1,5}$", RegexOptions.CultureInvariant);
@@ -138,7 +146,7 @@ namespace WireSockUI.VkTurn
             {
                 "-peer", Server,
                 "-vk-link", Links[linkIndex % Links.Count],
-                "-socks5", Listen,
+                "-wintun", WintunPeer,
                 "-n", Streams.ToString(CultureInfo.InvariantCulture),
                 "-events-json"
             };
@@ -162,12 +170,11 @@ namespace WireSockUI.VkTurn
         }
 
         /// <summary>
-        ///     Produces the configuration handed to wgbooster.dll. WireSock refuses loopback
-        ///     endpoints (it looks up the physical route to the peer first), so the peer keeps a
-        ///     routable Endpoint - the VK TURN server - while Socks5Proxy/Socks5ProxyAllTraffic
-        ///     send every WireGuard datagram to vkturn-core's local SOCKS5 UDP relay instead.
-        ///     Unless the profile uses an AllowedApps allow-list, vkturn-core is also excluded
-        ///     from the tunnel so its own traffic to the VK TURN servers never loops back.
+        ///     Produces the configuration handed to wgbooster.dll: the peer Endpoint is the fake
+        ///     WireGuard server behind vkturn-core's Wintun adapter (<see cref="WintunPeer" />).
+        ///     SOCKS5 settings are dropped (WireSock relays them through NDIS as well, so a local
+        ///     proxy never works). Unless the profile uses an AllowedApps allow-list, vkturn-core
+        ///     is excluded from the tunnel so its own traffic to VK never loops back.
         /// </summary>
         public string BuildEffectiveConfig(string profileText)
         {
@@ -198,7 +205,7 @@ namespace WireSockUI.VkTurn
                 if (section == "Peer" && IsKey(line, "Endpoint", out _))
                 {
                     if (!endpointWritten)
-                        output.Add("Endpoint = " + Server);
+                        output.Add("Endpoint = " + WintunPeer);
                     endpointWritten = true;
                     continue;
                 }
@@ -207,7 +214,7 @@ namespace WireSockUI.VkTurn
                                           IsKey(line, "Socks5ProxyUsername", out _) ||
                                           IsKey(line, "Socks5ProxyPassword", out _) ||
                                           IsKey(line, "Socks5ProxyAllTraffic", out _)))
-                    continue; // replaced by the vkturn-core relay below
+                    continue; // a local proxy cannot work with WireSock (see above)
 
                 if (section == "Peer" && !disallowedAppsHandled && IsKey(line, "DisallowedApps", out var existing))
                 {
@@ -232,12 +239,9 @@ namespace WireSockUI.VkTurn
         {
             if (!endpointWritten)
             {
-                output.Add("Endpoint = " + Server);
+                output.Add("Endpoint = " + WintunPeer);
                 endpointWritten = true;
             }
-
-            output.Add("#@ws:Socks5Proxy = " + Listen);
-            output.Add("#@ws:Socks5ProxyAllTraffic = true");
 
             if (!disallowedAppsHandled)
             {
