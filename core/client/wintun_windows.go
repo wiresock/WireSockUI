@@ -128,7 +128,9 @@ func (c *wintunPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		}
 		payload, src, ok := parseIPv4UDP(c.bufs[0][:c.sizes[0]], c.fake)
 		if !ok {
-			c.ignored.Add(1)
+			if n := c.ignored.Add(1); n <= 30 || n%1000 == 0 {
+				log.Printf("[WINTUN] ignored #%d: %s", n, describePacket(c.bufs[0][:c.sizes[0]]))
+			}
 			continue
 		}
 		if c.rxPackets.Add(1) == 1 {

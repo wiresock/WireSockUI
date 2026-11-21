@@ -13,6 +13,7 @@ package main
 import (
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 )
 
@@ -120,4 +121,34 @@ func wintunLinkAddresses(peer string) (local net.IP, fake *net.UDPAddr, err erro
 	}
 	local = net.IPv4(ip[0], ip[1], ip[2], ip[3]-1).To4()
 	return local, fake, nil
+}
+
+// describePacket summarises an IP packet for diagnostics ("TCP 10.88.0.2:51234 -> 1.2.3.4:443, 60 bytes").
+func describePacket(pkt []byte) string {
+	if len(pkt) < 1 {
+		return "empty packet"
+	}
+	switch pkt[0] >> 4 {
+	case 4:
+		if len(pkt) < ipv4HeaderLen {
+			return fmt.Sprintf("short IPv4 packet, %d bytes", len(pkt))
+		}
+		ihl := int(pkt[0]&0x0f) * 4
+		src, dst := net.IP(pkt[12:16]), net.IP(pkt[16:20])
+		proto := map[byte]string{1: "ICMP", 2: "IGMP", 6: "TCP", 17: "UDP"}[pkt[9]]
+		if proto == "" {
+			proto = fmt.Sprintf("proto %d", pkt[9])
+		}
+		if (pkt[9] == 6 || pkt[9] == 17) && len(pkt) >= ihl+4 {
+			sp, dp := binary.BigEndian.Uint16(pkt[ihl:]), binary.BigEndian.Uint16(pkt[ihl+2:])
+			return fmt.Sprintf("%s %s:%d -> %s:%d, %d bytes", proto, src, sp, dst, dp, len(pkt))
+		}
+		return fmt.Sprintf("%s %s -> %s, %d bytes", proto, src, dst, len(pkt))
+	case 6:
+		if len(pkt) >= 40 {
+			return fmt.Sprintf("IPv6 next-header %d %s -> %s, %d bytes", pkt[6], net.IP(pkt[8:24]), net.IP(pkt[24:40]), len(pkt))
+		}
+		return "short IPv6 packet"
+	}
+	return fmt.Sprintf("non-IP packet, %d bytes", len(pkt))
 }
