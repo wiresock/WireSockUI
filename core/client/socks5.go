@@ -61,7 +61,10 @@ func listenSocks5UDP(address string) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	relay, err := net.ListenUDP("udp", &net.UDPAddr{IP: tcpAddr.IP, Port: 0})
+	// The UDP relay shares the TCP port: some SOCKS5 clients (WireSock among them, it
+	// seems) send datagrams to the proxy address itself instead of the BND.ADDR reply.
+	boundTCP := listener.Addr().(*net.TCPAddr)
+	relay, err := net.ListenUDP("udp", &net.UDPAddr{IP: boundTCP.IP, Port: boundTCP.Port})
 	if err != nil {
 		_ = listener.Close()
 		return nil, err
