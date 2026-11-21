@@ -63,3 +63,14 @@ func TestWintunLinkAddresses(t *testing.T) {
 		}
 	}
 }
+
+func TestIsUnicastIPv4ToRemote(t *testing.T) {
+	fake := net.IPv4(10, 255, 255, 2)
+	src := &net.UDPAddr{IP: net.IPv4(10, 255, 255, 1), Port: 1}
+	for dst, want := range map[string]bool{"142.250.1.1": true, "10.255.255.3": false, "239.255.255.250": false, "255.255.255.255": false, "169.254.1.1": false} {
+		p, _ := buildIPv4UDP(src, &net.UDPAddr{IP: net.ParseIP(dst), Port: 1}, nil, 1)
+		if got := isUnicastIPv4ToRemote(p, fake); got != want {
+			t.Fatalf("%s: got %v want %v", dst, got, want)
+		}
+	}
+}

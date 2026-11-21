@@ -25,8 +25,8 @@ type wintunPacketConn struct {
 	ipID   atomic.Uint32
 	closed atomic.Bool
 
-	rxPackets, txPackets, ignored atomic.Int64
-	done                          chan struct{}
+	rxPackets, txPackets, ignored, unicast atomic.Int64
+	done                                   chan struct{}
 }
 
 // listenWintun creates the adapter, gives it local/30 and serves fake as the WireGuard peer.
@@ -100,7 +100,7 @@ func waitForWintunRoute(name string, peer net.IP, timeout time.Duration) error {
 }
 
 func (c *wintunPacketConn) statsLoop() {
-	var last [3]int64
+	var last [4]int64
 	t := time.NewTicker(5 * time.Second)
 	defer t.Stop()
 	for {
@@ -109,9 +109,9 @@ func (c *wintunPacketConn) statsLoop() {
 			return
 		case <-t.C:
 		}
-		cur := [3]int64{c.rxPackets.Load(), c.txPackets.Load(), c.ignored.Load()}
+		cur := [4]int64{c.rxPackets.Load(), c.txPackets.Load(), c.ignored.Load(), c.unicast.Load()}
 		if cur != last {
-			log.Printf("[WINTUN] from WireGuard %d pkts, to WireGuard %d pkts, ignored %d other packets", cur[0], cur[1], cur[2])
+			log.Printf("[WINTUN] from WireGuard %d pkts, to WireGuard %d pkts, ignored %d other packets (%d unicast to remote hosts)", cur[0], cur[1], cur[2], cur[3])
 			last = cur
 		}
 	}
@@ -128,8 +128,12 @@ func (c *wintunPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 		}
 		payload, src, ok := parseIPv4UDP(c.bufs[0][:c.sizes[0]], c.fake)
 		if !ok {
-			if n := c.ignored.Add(1); n <= 30 || n%1000 == 0 {
-				log.Printf("[WINTUN] ignored #%d: %s", n, describePacket(c.bufs[0][:c.sizes[0]]))
+			c.ignored.Add(1)
+			pkt := c.bufs[0][:c.sizes[0]]
+			if isUnicastIPv4ToRemote(pkt, c.fake.IP) {
+				if n := c.unicast.Add(1); n <= 30 || n%500 == 0 {
+					log.Printf("[WINTUN] non-WireGuard unicast #%d: %s", n, describePacket(pkt))
+				}
 			}
 			continue
 		}

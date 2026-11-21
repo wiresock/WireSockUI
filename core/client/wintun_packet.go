@@ -152,3 +152,16 @@ func describePacket(pkt []byte) string {
 	}
 	return fmt.Sprintf("non-IP packet, %d bytes", len(pkt))
 }
+
+// isUnicastIPv4ToRemote reports whether pkt is IPv4 to a unicast host outside the
+// adapter's /30 (i.e. not multicast/broadcast/link-local chatter Windows sends to any
+// new adapter).
+func isUnicastIPv4ToRemote(pkt []byte, fake net.IP) bool {
+	if len(pkt) < ipv4HeaderLen || pkt[0]>>4 != 4 {
+		return false
+	}
+	dst := net.IP(pkt[16:20])
+	f := fake.To4()
+	sameLink := f != nil && dst[0] == f[0] && dst[1] == f[1] && dst[2] == f[2] && dst[3]&^3 == f[3]&^3
+	return !sameLink && !dst.IsMulticast() && !dst.Equal(net.IPv4bcast) && !dst.IsLinkLocalUnicast() && !dst.IsUnspecified()
+}
