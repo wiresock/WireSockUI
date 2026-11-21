@@ -3097,6 +3097,12 @@ namespace WireSockUI.Forms
                         return;
                     }
 
+                    // VK TURN needs virtual adapter mode: in transparent mode WireSock captures
+                    // application traffic only on the adapter that routes to the Endpoint, which
+                    // here is vkturn-core's Wintun adapter, so nothing would enter the tunnel.
+                    if (vkResult == VkPrepareResult.Ready)
+                        _tunnelLifecycle.TunnelMode = WireSockManager.Mode.VirtualAdapter;
+
                     var connectTask = ConnectWithTimeoutAsync(profile, connectGeneration,
                         preservedNetworkLockPending);
                     preservedNetworkLockPending = false;

@@ -326,10 +326,11 @@ func getCustomNetDialer() net.Dialer {
 	return net.Dialer{
 		Timeout:   20 * time.Second,
 		KeepAlive: 30 * time.Second,
+		Control:   bypassControl,
 		Resolver: &net.Resolver{
 			PreferGo: true,
 			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-				var d net.Dialer
+				d := bypassDialer()
 				dnsServers := []string{"77.88.8.8:53", "77.88.8.1:53", "8.8.8.8:53", "8.8.4.4:53", "1.1.1.1:53", "1.0.0.1:53"}
 				var lastErr error
 				for _, dns := range dnsServers {
@@ -351,7 +352,7 @@ func getCustomNetDialer() net.Dialer {
 var customResolver = &net.Resolver{
 	PreferGo: true,
 	Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
-		var d net.Dialer
+		d := bypassDialer()
 		dnsServers := []string{"77.88.8.8:53", "77.88.8.1:53", "8.8.8.8:53", "8.8.4.4:53", "1.1.1.1:53", "1.0.0.1:53"}
 		var lastErr error
 		for _, dns := range dnsServers {
@@ -1807,11 +1808,11 @@ func oneTurnConnection(ctx context.Context, turnParams *turnParams, peer *net.UD
 	reportTurnIP(turnServerUDPAddr.IP)
 	var cfg *turn.ClientConfig
 	var turnConn net.PacketConn
-	var d net.Dialer
+	d := bypassDialer()
 	ctx1, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if turnParams.udp {
-		conn, err2 := net.DialUDP("udp", nil, turnServerUDPAddr) // nolint: noctx
+		conn, err2 := bypassDialUDP(turnServerUDPAddr)
 		if err2 != nil {
 			err = fmt.Errorf("failed to connect to TURN server: %s", err2)
 			return
@@ -2122,7 +2123,6 @@ func main() {
 	eventsJSONFlag := flag.Bool("events-json", false, "host mode: JSON events on stdout, JSON commands on stdin (see events.go); exit when stdin closes")
 	externalCaptchaFlag := flag.Bool("external-captcha", false, "with -events-json: hand the captcha page to the host (captcha_required event) instead of the local proxy + system browser")
 	wintunPeer := flag.String("wintun", "", "Windows: own a Wintun adapter and act as the WireGuard peer at this private IPv4 (second host of a /30, e.g. 10.255.255.2:51820) instead of -listen (for WireSock, which cannot use loopback endpoints)")
-	socks5Listen := flag.String("socks5", "", "accept WireGuard traffic through a SOCKS5 UDP ASSOCIATE proxy on this loopback ip:port instead of -listen (for WireSock Socks5Proxy)")
 	credsCacheFlag := flag.String("creds-cache", "", "file to persist VK TURN credentials between runs (DPAPI-encrypted on Windows)")
 	flag.Parse()
 
@@ -2236,9 +2236,10 @@ func main() {
 
 	var listenConn net.PacketConn
 	if *wintunPeer != "" {
+		if bypassErr := initBypassInterface(); bypassErr != nil {
+			log.Printf("[BYPASS] %v; core traffic may loop into the tunnel", bypassErr)
+		}
 		listenConn, err = listenWintun(*wintunPeer)
-	} else if *socks5Listen != "" {
-		listenConn, err = listenSocks5UDP(*socks5Listen)
 	} else {
 		listenConn, err = net.ListenPacket("udp", *listen)
 	}
@@ -2538,14 +2539,14 @@ func createSmuxSession(ctx context.Context, tp *turnParams, peer *net.UDPAddr, i
 	ctx1, cancel1 := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel1()
 	if tp.udp {
-		c, err1 := net.DialUDP("udp", nil, turnServerUDPAddr)
+		c, err1 := bypassDialUDP(turnServerUDPAddr)
 		if err1 != nil {
 			return nil, nil, fmt.Errorf("dial TURN (udp): %w", err1)
 		}
 		cleanupFns = append(cleanupFns, func() { _ = c.Close() })
 		turnConn = &connectedUDPConn{c}
 	} else {
-		var d net.Dialer
+		d := bypassDialer()
 		c, err1 := d.DialContext(ctx1, "tcp", turnServerAddr)
 		if err1 != nil {
 			return nil, nil, fmt.Errorf("dial TURN (tcp): %w", err1)
