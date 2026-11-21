@@ -138,7 +138,7 @@ namespace WireSockUI.VkTurn
             {
                 "-peer", Server,
                 "-vk-link", Links[linkIndex % Links.Count],
-                "-listen", Listen,
+                "-socks5", Listen,
                 "-n", Streams.ToString(CultureInfo.InvariantCulture),
                 "-events-json"
             };
@@ -162,10 +162,12 @@ namespace WireSockUI.VkTurn
         }
 
         /// <summary>
-        ///     Produces the configuration handed to wgbooster.dll: the peer Endpoint is
-        ///     pointed at the local vkturn-core listener and, unless the profile uses an
-        ///     AllowedApps allow-list, vkturn-core is excluded from the tunnel so its
-        ///     own traffic to the VK TURN servers never loops back into WireGuard.
+        ///     Produces the configuration handed to wgbooster.dll. WireSock refuses loopback
+        ///     endpoints (it looks up the physical route to the peer first), so the peer keeps a
+        ///     routable Endpoint - the VK TURN server - while Socks5Proxy/Socks5ProxyAllTraffic
+        ///     send every WireGuard datagram to vkturn-core's local SOCKS5 UDP relay instead.
+        ///     Unless the profile uses an AllowedApps allow-list, vkturn-core is also excluded
+        ///     from the tunnel so its own traffic to the VK TURN servers never loops back.
         /// </summary>
         public string BuildEffectiveConfig(string profileText)
         {
@@ -196,10 +198,16 @@ namespace WireSockUI.VkTurn
                 if (section == "Peer" && IsKey(line, "Endpoint", out _))
                 {
                     if (!endpointWritten)
-                        output.Add("Endpoint = " + Listen);
+                        output.Add("Endpoint = " + Server);
                     endpointWritten = true;
                     continue;
                 }
+
+                if (section == "Peer" && (IsKey(line, "Socks5Proxy", out _) ||
+                                          IsKey(line, "Socks5ProxyUsername", out _) ||
+                                          IsKey(line, "Socks5ProxyPassword", out _) ||
+                                          IsKey(line, "Socks5ProxyAllTraffic", out _)))
+                    continue; // replaced by the vkturn-core relay below
 
                 if (section == "Peer" && !disallowedAppsHandled && IsKey(line, "DisallowedApps", out var existing))
                 {
@@ -224,9 +232,12 @@ namespace WireSockUI.VkTurn
         {
             if (!endpointWritten)
             {
-                output.Add("Endpoint = " + Listen);
+                output.Add("Endpoint = " + Server);
                 endpointWritten = true;
             }
+
+            output.Add("#@ws:Socks5Proxy = " + Listen);
+            output.Add("#@ws:Socks5ProxyAllTraffic = true");
 
             if (!disallowedAppsHandled)
             {

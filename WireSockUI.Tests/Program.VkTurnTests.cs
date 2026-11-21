@@ -33,6 +33,7 @@ namespace WireSockUI.Tests
             yield return new KeyValuePair<string, Action>("VK TURN runtime config points WireSock at the core", VkTurnEffectiveConfig);
             yield return new KeyValuePair<string, Action>("VK TURN runtime config adds core exclusion when missing", VkTurnEffectiveConfigAddsExclusion);
             yield return new KeyValuePair<string, Action>("VK TURN respects AllowedApps allow-lists", VkTurnEffectiveConfigAllowList);
+            yield return new KeyValuePair<string, Action>("VK TURN replaces user SOCKS5 settings", VkTurnEffectiveConfigReplacesUserSocks5);
             yield return new KeyValuePair<string, Action>("VK TURN core arguments", VkTurnCoreArguments);
             yield return new KeyValuePair<string, Action>("VK captcha token extraction", VkCaptchaTokenExtraction);
         }
@@ -73,8 +74,10 @@ namespace WireSockUI.Tests
         {
             var s = VkTurnSettings.Parse(VkProfile);
             var cfg = s.BuildEffectiveConfig(VkProfile);
-            AssertTrue(cfg.Contains("Endpoint = 127.0.0.1:9100\r\n"), "endpoint rewritten to listen address");
-            AssertTrue(!cfg.Contains("Endpoint = 127.0.0.1:9000"), "old endpoint removed");
+            AssertTrue(cfg.Contains("Endpoint = 45.196.97.204:57001\r\n"), "endpoint is the routable VK TURN server: " + cfg);
+            AssertTrue(!cfg.Contains("Endpoint = 127.0.0.1"), "loopback endpoint removed (WireSock rejects it)");
+            AssertTrue(cfg.Contains("#@ws:Socks5Proxy = 127.0.0.1:9100\r\n#@ws:Socks5ProxyAllTraffic = true\r\n"),
+                "WireGuard traffic goes through the core's SOCKS5 relay: " + cfg);
             AssertTrue(cfg.Contains("#@ws:DisallowedApps = steam, vkturn-core\r\n"), "core appended to DisallowedApps: " + cfg);
             AssertTrue(!cfg.Contains("#@vk:"), "VK secrets are not copied into the runtime config");
             AssertTrue(cfg.Contains("PrivateKey = AAAA"), "interface kept");
@@ -85,8 +88,17 @@ namespace WireSockUI.Tests
             var profile = VkProfile.Replace("#@ws:DisallowedApps = steam\r\n", string.Empty)
                 .Replace("Endpoint = 127.0.0.1:9000\r\n", string.Empty);
             var cfg = VkTurnSettings.Parse(profile).BuildEffectiveConfig(profile);
-            AssertTrue(cfg.Contains("Endpoint = 127.0.0.1:9100\r\n"), "missing endpoint added");
+            AssertTrue(cfg.Contains("Endpoint = 45.196.97.204:57001\r\n"), "missing endpoint added");
             AssertTrue(cfg.Contains("#@ws:DisallowedApps = vkturn-core\r\n"), "exclusion added: " + cfg);
+        }
+
+        private static void VkTurnEffectiveConfigReplacesUserSocks5()
+        {
+            var profile = VkProfile.Replace("#@ws:DisallowedApps = steam\r\n",
+                "#@ws:Socks5Proxy = 10.0.0.1:1080\r\n#@ws:Socks5ProxyUsername = u\r\n#@ws:Socks5ProxyAllTraffic = false\r\n");
+            var cfg = VkTurnSettings.Parse(profile).BuildEffectiveConfig(profile);
+            AssertTrue(!cfg.Contains("10.0.0.1:1080") && !cfg.Contains("Socks5ProxyUsername") &&
+                       !cfg.Contains("AllTraffic = false"), "user SOCKS5 settings replaced: " + cfg);
         }
 
         private static void VkTurnEffectiveConfigAllowList()
@@ -102,6 +114,8 @@ namespace WireSockUI.Tests
             var s = VkTurnSettings.Parse(VkProfile);
             var args = s.BuildCoreArguments(1, true, @"C:\ProgramData\Some Dir\creds.bin");
             AssertTrue(args.Contains("-peer 45.196.97.204:57001"), args);
+            AssertTrue(args.Contains("-socks5 127.0.0.1:9100") && !args.Contains("-listen"), "core uses the SOCKS5 relay: " + args);
+            AssertTrue(args.Contains("-socks5 127.0.0.1:9100") && !args.Contains("-listen"), "core uses the SOCKS5 relay: " + args);
             AssertTrue(args.Contains("-vk-link https://vk.com/call/join/IjKlMnOp456"), "second link used: " + args);
             AssertTrue(args.Contains("-n 6") && args.Contains(" -udp") && args.Contains(" -wrap -wrap-key "), args);
             AssertTrue(args.Contains("-events-json") && args.Contains("-external-captcha") &&
