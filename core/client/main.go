@@ -943,6 +943,9 @@ func getVkCredsCached(ctx context.Context, link string, streamID int, dialer *dn
 	}
 
 	cache.creds = TurnCredentials{Username: user, Password: pass, ServerAddr: addr, ExpiresAt: time.Now().Add(credentialLifetime - cacheSafetyMargin), Link: link}
+	noteVkAuthSuccess()
+	// Runs after this function releases cache.mutex (saveCredsCache takes it).
+	go saveCredsCache()
 	return user, pass, addr, nil
 }
 
@@ -1196,7 +1199,9 @@ func getTokenChain(ctx context.Context, link string, streamID int, creds VKCrede
 					go func() {
 						var t, k string
 						var e error
-						if captchaErr.RedirectURI != "" {
+						if externalCaptcha && captchaErr.RedirectURI != "" {
+							t, e = solveCaptchaExternally(manualCtx, captchaErr.RedirectURI, streamID)
+						} else if captchaErr.RedirectURI != "" {
 							t, e = solveCaptchaViaProxy(captchaErr.RedirectURI, dialer)
 						} else if captchaErr.CaptchaImg != "" {
 							k, e = solveCaptchaViaHTTP(captchaErr.CaptchaImg)
@@ -1692,6 +1697,9 @@ func oneDtlsConnection(ctx context.Context, peer *net.UDPAddr, listenConn net.Pa
 		log.Printf("[STREAM %d] Closed DTLS connection\n", streamID)
 	}()
 	log.Printf("[STREAM %d] Established DTLS connection!\n", streamID)
+	if establishedOnce.CompareAndSwap(false, true) {
+		emitEvent("established", map[string]any{"stream": streamID})
+	}
 
 	if okchan != nil {
 		go func() {
@@ -1796,7 +1804,7 @@ func oneTurnConnection(ctx context.Context, turnParams *turnParams, peer *net.UD
 		return
 	}
 	turnServerAddr = turnServerUDPAddr.String()
-	fmt.Println(turnServerUDPAddr.IP)
+	reportTurnIP(turnServerUDPAddr.IP)
 	var cfg *turn.ClientConfig
 	var turnConn net.PacketConn
 	var d net.Dialer
@@ -1873,9 +1881,9 @@ func oneTurnConnection(ctx context.Context, turnParams *turnParams, peer *net.UD
 	getStreamCache(streamID).errorCount.Store(0)
 
 	// Safely track active streams globally
-	connectedStreams.Add(1)
+	emitEvent("stream_up", map[string]any{"stream": streamID, "connected": connectedStreams.Add(1)})
 	defer func() {
-		connectedStreams.Add(-1)
+		emitEvent("stream_down", map[string]any{"stream": streamID, "connected": connectedStreams.Add(-1)})
 		if err1 := relayConn.Close(); err1 != nil {
 			err = fmt.Errorf("failed to close TURN allocated connection: %s", err1)
 		}
@@ -2025,6 +2033,7 @@ func oneTurnConnectionLoop(ctx context.Context, turnParams *turnParams, peer *ne
 			if err := <-c; err != nil {
 				if strings.Contains(err.Error(), "FATAL_CAPTCHA") {
 					log.Printf("[STREAM %d] Fatal manual captcha error. Shutting down application.", streamID)
+					emitEvent("fatal", map[string]any{"error": "captcha was not solved and no streams are connected"})
 					if globalAppCancel != nil {
 						globalAppCancel()
 					}
@@ -2049,6 +2058,17 @@ func oneTurnConnectionLoop(ctx context.Context, turnParams *turnParams, peer *ne
 							return
 						case <-time.After(sleepDuration):
 						}
+					}
+				} else if strings.Contains(err.Error(), "failed to get TURN credentials") {
+					wait, grew := noteVkAuthFailure(time.Now())
+					log.Printf("[STREAM %d] %s (backing off %v)", streamID, err, wait.Truncate(time.Second))
+					if grew {
+						emitEvent("vk_backoff", map[string]any{"seconds": int(wait.Seconds()), "error": err.Error()})
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(wait):
 					}
 				} else {
 					log.Printf("[STREAM %d] %s", streamID, err)
@@ -2099,7 +2119,28 @@ func main() {
 	wrapMode := flag.Bool("wrap", false, "WRAP mode: SRTP-mimicry AEAD wrap DTLS packets. Peer server must use matching -wrap-key.")
 	wrapKeyHex := flag.String("wrap-key", "", "32-byte hex-encoded shared key for -wrap (64 hex chars)")
 	genWrapKey := flag.Bool("gen-wrap-key", false, "print a fresh 64-character hex key for -wrap-key and exit")
+	eventsJSONFlag := flag.Bool("events-json", false, "host mode: JSON events on stdout, JSON commands on stdin (see events.go); exit when stdin closes")
+	externalCaptchaFlag := flag.Bool("external-captcha", false, "with -events-json: hand the captcha page to the host (captcha_required event) instead of the local proxy + system browser")
+	credsCacheFlag := flag.String("creds-cache", "", "file to persist VK TURN credentials between runs (DPAPI-encrypted on Windows)")
 	flag.Parse()
+
+	eventsEnabled = *eventsJSONFlag
+	if *externalCaptchaFlag && !eventsEnabled {
+		log.Panicf("-external-captcha requires -events-json")
+	}
+	externalCaptcha = *externalCaptchaFlag
+	credsCachePath = *credsCacheFlag
+	if eventsEnabled {
+		startControlReader(os.Stdin, func() {
+			cancel()
+			go func() {
+				time.Sleep(5 * time.Second)
+				emitEvent("exit", nil)
+				os.Exit(0)
+			}()
+		})
+		defer emitEvent("exit", nil)
+	}
 
 	if *genWrapKey {
 		key, err := genWrapKeyHex()
@@ -2170,6 +2211,12 @@ func main() {
 	if idx := strings.IndexAny(link, "/?#"); idx != -1 {
 		link = link[:idx]
 	}
+
+	loadCredsCache()
+	emitEvent("starting", map[string]any{
+		"version": "cronixWG-core/1", "streams": *n, "wrap": *wrapMode, "udp": *udp,
+		"external_captcha": externalCaptcha,
+	})
 
 	params := &turnParams{
 		host:     *host,
@@ -2475,7 +2522,7 @@ func createSmuxSession(ctx context.Context, tp *turnParams, peer *net.UDPAddr, i
 		return nil, nil, fmt.Errorf("resolve TURN addr: %w", err)
 	}
 	turnServerAddr = turnServerUDPAddr.String()
-	fmt.Println(turnServerUDPAddr.IP)
+	reportTurnIP(turnServerUDPAddr.IP)
 
 	// 2. Connect to TURN server
 	var turnConn net.PacketConn
