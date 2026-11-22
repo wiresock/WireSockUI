@@ -36,6 +36,7 @@ namespace WireSockUI.VkTurn
         private VkTurnSession _session;
         private CancellationTokenSource _prepareCts;
         private Task _stopTask = Task.CompletedTask;
+        private string _runtimeConfigPath;
 
         public VkTurnController(Control owner, Action<string> log)
         {
@@ -45,6 +46,9 @@ namespace WireSockUI.VkTurn
 
         /// <summary>Raised on the UI thread when the core dies while the tunnel is up.</summary>
         public event Action<string, string> UnexpectedExit;
+
+        /// <summary>Raised on the UI thread with WireGuard statistics from the core.</summary>
+        public event Action<VkTurnStats> StatsUpdated;
 
         public string ActiveProfile { get; private set; }
         public string LastError { get; private set; }
@@ -99,7 +103,7 @@ namespace WireSockUI.VkTurn
             string runtimePath;
             try
             {
-                runtimePath = WriteRuntimeConfig(profile, settings.BuildEffectiveConfig(profileText));
+                runtimePath = WriteRuntimeConfig(profile, VkTurnSettings.BuildCoreWireGuardConfig(profileText));
             }
             catch (Exception ex)
             {
@@ -112,10 +116,16 @@ namespace WireSockUI.VkTurn
             session.CaptchaRequired += OnCaptchaRequired;
             session.CaptchaClosed += OnCaptchaClosed;
             session.UnexpectedExit += error => PostToUi(() => OnUnexpectedExit(profile, error));
+            session.StatsUpdated += stats => PostToUi(() =>
+            {
+                if (ReferenceEquals(session, _session))
+                    StatsUpdated?.Invoke(stats);
+            });
 
             var cts = new CancellationTokenSource();
             _prepareCts = cts;
             _session = session;
+            _runtimeConfigPath = runtimePath;
             ActiveProfile = profile;
 
             var externalCaptcha = VkCaptchaForm.IsRuntimeAvailable();
@@ -126,7 +136,8 @@ namespace WireSockUI.VkTurn
             try
             {
                 established = await session.StartAsync(settings, externalCaptcha,
-                    Path.Combine(RuntimeFolder, "vk-creds.bin"), TimeoutPerLink, cts.Token).ConfigureAwait(true);
+                    Path.Combine(RuntimeFolder, "vk-creds.bin"), runtimePath, TimeoutPerLink,
+                    cts.Token).ConfigureAwait(true);
             }
             catch (OperationCanceledException)
             {
@@ -134,10 +145,7 @@ namespace WireSockUI.VkTurn
             }
 
             if (established && !cts.IsCancellationRequested)
-            {
-                RuntimeConfigPaths[profile] = runtimePath;
-                return VkPrepareResult.Ready;
-            }
+                return VkPrepareResult.Ready; // the core now owns the tunnel (in-process WireGuard)
 
             var cancelled = cts.IsCancellationRequested;
             LastError = cancelled ? null : session.LastError ?? "VK TURN could not connect.";
@@ -158,6 +166,11 @@ namespace WireSockUI.VkTurn
 
             if (profile != null && RuntimeConfigPaths.TryRemove(profile, out var path))
                 TryDelete(path);
+            if (_runtimeConfigPath != null)
+            {
+                TryDelete(_runtimeConfigPath);
+                _runtimeConfigPath = null;
+            }
 
             if (session == null)
                 return;

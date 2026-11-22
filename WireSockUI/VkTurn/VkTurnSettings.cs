@@ -140,13 +140,18 @@ namespace WireSockUI.VkTurn
         ///     Command line for vkturn-core.exe. Secrets (wrap key, link) are passed as
         ///     arguments of a child process that only the elevated UI can inspect.
         /// </summary>
-        public string BuildCoreArguments(int linkIndex, bool externalCaptcha, string credsCachePath)
+        public string BuildCoreArguments(int linkIndex, bool externalCaptcha, string credsCachePath,
+            string wireGuardConfigPath)
         {
+            if (string.IsNullOrEmpty(wireGuardConfigPath))
+                throw new ArgumentException("The in-process WireGuard configuration path is required.",
+                    nameof(wireGuardConfigPath));
+
             var args = new List<string>
             {
                 "-peer", Server,
                 "-vk-link", Links[linkIndex % Links.Count],
-                "-wintun", WintunPeer,
+                "-wg-config", wireGuardConfigPath,
                 "-n", Streams.ToString(CultureInfo.InvariantCulture),
                 "-events-json"
             };
@@ -170,6 +175,19 @@ namespace WireSockUI.VkTurn
         }
 
         /// <summary>
+        ///     The WireGuard configuration for vkturn-core's in-process WireGuard (-wg-config):
+        ///     the profile without the VK TURN directives (their secrets travel on the command
+        ///     line of the elevated child process instead). The core ignores Endpoint.
+        /// </summary>
+        public static string BuildCoreWireGuardConfig(string profileText)
+        {
+            var kept = SplitLines(profileText ?? string.Empty)
+                .Where(l => !l.Trim().StartsWith(DirectivePrefix, StringComparison.Ordinal));
+            return string.Join("\r\n", kept).TrimEnd() + "\r\n";
+        }
+
+        /// <summary>
+        ///     Legacy WireSock path (not used for VK TURN since the core runs WireGuard itself).
         ///     Produces the configuration handed to wgbooster.dll: the peer Endpoint is the fake
         ///     WireGuard server behind vkturn-core's Wintun adapter (<see cref="WintunPeer" />).
         ///     SOCKS5 settings are dropped (WireSock relays them through NDIS as well, so a local

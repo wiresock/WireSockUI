@@ -35,6 +35,7 @@ namespace WireSockUI.Tests
             yield return new KeyValuePair<string, Action>("VK TURN respects AllowedApps allow-lists", VkTurnEffectiveConfigAllowList);
             yield return new KeyValuePair<string, Action>("VK TURN replaces user SOCKS5 settings", VkTurnEffectiveConfigReplacesUserSocks5);
             yield return new KeyValuePair<string, Action>("VK TURN core arguments", VkTurnCoreArguments);
+            yield return new KeyValuePair<string, Action>("VK TURN core WireGuard config", VkTurnCoreWireGuardConfig);
             yield return new KeyValuePair<string, Action>("VK captcha token extraction", VkCaptchaTokenExtraction);
         }
 
@@ -108,13 +109,23 @@ namespace WireSockUI.Tests
             AssertTrue(cfg.Contains("#@ws:AllowedApps = telegram"), "allow-list kept");
         }
 
+        private static void VkTurnCoreWireGuardConfig()
+        {
+            var cfg = VkTurnSettings.BuildCoreWireGuardConfig(VkProfile);
+            AssertTrue(!cfg.Contains("#@vk:"), "VK TURN secrets stay out of the core's WireGuard config: " + cfg);
+            AssertTrue(cfg.Contains("PrivateKey = AAAA") && cfg.Contains("[Peer]") && cfg.Contains("AllowedIPs = 0.0.0.0/0"),
+                "WireGuard sections kept: " + cfg);
+        }
+
         private static void VkTurnCoreArguments()
         {
             var s = VkTurnSettings.Parse(VkProfile);
-            var args = s.BuildCoreArguments(1, true, @"C:\ProgramData\Some Dir\creds.bin");
+            var args = s.BuildCoreArguments(1, true, @"C:\ProgramData\Some Dir\creds.bin",
+                @"C:\ProgramData\WireSockUI\VkTurn\vk-test.conf");
             AssertTrue(args.Contains("-peer 45.196.97.204:57001"), args);
-            AssertTrue(args.Contains("-wintun 10.255.255.2:51820") && !args.Contains("-listen") && !args.Contains("-socks5"),
-                "core serves WireSock through its Wintun adapter: " + args);
+            AssertTrue(args.Contains(@"-wg-config C:\ProgramData\WireSockUI\VkTurn\vk-test.conf") &&
+                       !args.Contains("-wintun") && !args.Contains("-listen"),
+                "core runs WireGuard in-process: " + args);
             AssertTrue(args.Contains("-vk-link https://vk.com/call/join/IjKlMnOp456"), "second link used: " + args);
             AssertTrue(args.Contains("-n 6") && args.Contains(" -udp") && args.Contains(" -wrap -wrap-key "), args);
             AssertTrue(args.Contains("-events-json") && args.Contains("-external-captcha") &&

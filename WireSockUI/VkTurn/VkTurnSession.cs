@@ -18,6 +18,15 @@ namespace WireSockUI.VkTurn
         Failed
     }
 
+    internal sealed class VkTurnStats
+    {
+        public ulong RxBytes { get; set; }
+        public ulong TxBytes { get; set; }
+
+        /// <summary>Seconds since the last WireGuard handshake, or -1 before the first one.</summary>
+        public long HandshakeAgoSeconds { get; set; }
+    }
+
     internal sealed class VkTurnCaptchaRequest
     {
         public string Id { get; set; }
@@ -45,6 +54,7 @@ namespace WireSockUI.VkTurn
         public event Action<VkTurnCaptchaRequest> CaptchaRequired;
         public event Action<string> CaptchaClosed;
         public event Action<VkTurnPhase> PhaseChanged;
+        public event Action<VkTurnStats> StatsUpdated;
 
         /// <summary>Raised when the core exits on its own after it was established.</summary>
         public event Action<string> UnexpectedExit;
@@ -61,7 +71,7 @@ namespace WireSockUI.VkTurn
         ///     profile is tried in turn if the core gives up before establishing.
         /// </summary>
         public async Task<bool> StartAsync(VkTurnSettings settings, bool externalCaptcha, string credsCachePath,
-            TimeSpan timeoutPerLink, CancellationToken cancellationToken)
+            string wireGuardConfigPath, TimeSpan timeoutPerLink, CancellationToken cancellationToken)
         {
             if (settings == null) throw new ArgumentNullException(nameof(settings));
             if (!File.Exists(CorePath))
@@ -78,7 +88,7 @@ namespace WireSockUI.VkTurn
                     WriteLog($"Using VK call link {i + 1} of {settings.Links.Count}.");
 
                 var established = await RunUntilEstablishedAsync(settings, i, externalCaptcha, credsCachePath,
-                    timeoutPerLink, cancellationToken).ConfigureAwait(false);
+                    wireGuardConfigPath, timeoutPerLink, cancellationToken).ConfigureAwait(false);
                 if (established)
                     return true;
 
@@ -92,11 +102,12 @@ namespace WireSockUI.VkTurn
         }
 
         private async Task<bool> RunUntilEstablishedAsync(VkTurnSettings settings, int linkIndex,
-            bool externalCaptcha, string credsCachePath, TimeSpan timeout, CancellationToken cancellationToken)
+            bool externalCaptcha, string credsCachePath, string wireGuardConfigPath, TimeSpan timeout,
+            CancellationToken cancellationToken)
         {
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             var startInfo = new ProcessStartInfo(CorePath,
-                settings.BuildCoreArguments(linkIndex, externalCaptcha, credsCachePath))
+                settings.BuildCoreArguments(linkIndex, externalCaptcha, credsCachePath, wireGuardConfigPath))
             {
                 UseShellExecute = false,
                 CreateNoWindow = true,
@@ -266,6 +277,17 @@ namespace WireSockUI.VkTurn
                     SetPhase(VkTurnPhase.Established);
                     lock (_sync) _establishedTcs?.TrySetResult(true);
                     break;
+                case "wg_handshake":
+                    WriteLog("WireGuard handshake with the server completed.");
+                    break;
+                case "wg_stats":
+                    StatsUpdated?.Invoke(new VkTurnStats
+                    {
+                        RxBytes = (ulong)Math.Max(0, GetLong(ev, "rx_bytes")),
+                        TxBytes = (ulong)Math.Max(0, GetLong(ev, "tx_bytes")),
+                        HandshakeAgoSeconds = GetLong(ev, "handshake_ago")
+                    });
+                    break;
                 case "vk_backoff":
                     WriteLog($"VK is refusing requests; retrying in {GetInt(ev, "seconds")} s.");
                     break;
@@ -347,6 +369,18 @@ namespace WireSockUI.VkTurn
         private static string GetString(Dictionary<string, object> ev, string key)
         {
             return ev.TryGetValue(key, out var v) && v != null ? Convert.ToString(v) : null;
+        }
+
+        private static long GetLong(Dictionary<string, object> ev, string key)
+        {
+            try
+            {
+                return ev.TryGetValue(key, out var v) && v != null ? Convert.ToInt64(v) : 0;
+            }
+            catch
+            {
+                return 0;
+            }
         }
 
         private static int GetInt(Dictionary<string, object> ev, string key)

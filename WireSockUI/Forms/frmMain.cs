@@ -50,6 +50,9 @@ namespace WireSockUI.Forms
         private readonly TunnelLifecycleController _tunnelLifecycle;
         private readonly VkTurnController _vkTurn;
         private bool _vkTurnPreparing;
+
+        // True while vkturn-core runs the tunnel itself (in-process WireGuard); WireSock is idle.
+        private bool _vkTurnOwnsTunnel;
         private readonly TunnelMonitor _tunnelMonitor;
         private readonly TunnelSessionCoordinator _tunnelSession = new TunnelSessionCoordinator();
         private readonly SettingsUpdateCoordinator _settingsUpdateCoordinator;
@@ -101,6 +104,7 @@ namespace WireSockUI.Forms
             _vkTurn = new VkTurnController(this,
                 message => _uiLogBuffer.Enqueue(new WireSockManager.LogMessage { Message = message }));
             _vkTurn.UnexpectedExit += OnVkTurnUnexpectedExit;
+            _vkTurn.StatsUpdated += OnVkTurnStats;
             Volatile.Write(ref _configuredLogLevel, (int)_tunnelLifecycle.ConfiguredLogLevel);
             _settingsUpdateCoordinator = new SettingsUpdateCoordinator(
                 ApplyLogLevelSettingAsync,
@@ -704,7 +708,7 @@ namespace WireSockUI.Forms
 
         private async Task<bool> DisconnectCurrentTunnelAsync(bool notify = true, bool preserveNetworkLock = false)
         {
-            var profileName = _tunnelLifecycle.ProfileName;
+            var profileName = _tunnelLifecycle.ProfileName ?? (_vkTurnOwnsTunnel ? _vkTurn.ActiveProfile : null);
 
             CancelTunnelMonitoring();
 
@@ -2082,7 +2086,8 @@ namespace WireSockUI.Forms
                         }
                     }
 
-                    StartTunnelStateMonitor();
+                    if (!_vkTurnOwnsTunnel)
+                        StartTunnelStateMonitor();
 
 #if WIRESOCKUI_ENABLE_UWP
                     if (notify && Settings.Default.EnableNotifications)
@@ -2093,7 +2098,10 @@ namespace WireSockUI.Forms
                 case ConnectionState.Disconnected:
                     CancelTunnelMonitoring();
                     if (!_vkTurnPreparing)
+                    {
+                        _vkTurnOwnsTunnel = false;
                         _vkTurn?.StopInBackground();
+                    }
 
                     cmiStatus.Image = _inactiveStatusImage;
                     SetTrayIcon(Resources.ico, false);
@@ -2376,7 +2384,7 @@ namespace WireSockUI.Forms
 
         private async void OnVkTurnUnexpectedExit(string profile, string error)
         {
-            if (_shutdownComplete || !string.Equals(profile, _tunnelLifecycle.ProfileName, StringComparison.OrdinalIgnoreCase))
+            if (_shutdownComplete || !_vkTurnOwnsTunnel)
                 return;
             if (_currentState != ConnectionState.Connected && _currentState != ConnectionState.Connecting)
                 return;
@@ -2396,6 +2404,19 @@ namespace WireSockUI.Forms
 
             MessageBox.Show($"VK TURN stopped, the tunnel was disconnected.{Environment.NewLine}{Environment.NewLine}{error}",
                 Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        private void OnVkTurnStats(VkTurnStats stats)
+        {
+            if (!_vkTurnOwnsTunnel || _currentState != ConnectionState.Connected || _shutdownComplete)
+                return;
+
+            ApplyTunnelStatistics(new WgbStats
+            {
+                time_since_last_handshake = stats.HandshakeAgoSeconds,
+                rx_bytes = stats.RxBytes,
+                tx_bytes = stats.TxBytes
+            });
         }
 
         private void OnExitClick(object sender, EventArgs e)
@@ -3097,11 +3118,15 @@ namespace WireSockUI.Forms
                         return;
                     }
 
-                    // VK TURN needs virtual adapter mode: in transparent mode WireSock captures
-                    // application traffic only on the adapter that routes to the Endpoint, which
-                    // here is vkturn-core's Wintun adapter, so nothing would enter the tunnel.
+                    // VK TURN: vkturn-core runs WireGuard itself on its "cronixWG" adapter
+                    // (routes, DNS) with the TURN streams as transport, so the tunnel is up now
+                    // and WireSock is not involved. Excluded apps are handled by the core too.
                     if (vkResult == VkPrepareResult.Ready)
-                        _tunnelLifecycle.TunnelMode = WireSockManager.Mode.VirtualAdapter;
+                    {
+                        _vkTurnOwnsTunnel = true;
+                        UpdateState(ConnectionState.Connected, true, profile);
+                        return;
+                    }
 
                     var connectTask = ConnectWithTimeoutAsync(profile, connectGeneration,
                         preservedNetworkLockPending);
