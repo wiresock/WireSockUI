@@ -2122,6 +2122,7 @@ func main() {
 	genWrapKey := flag.Bool("gen-wrap-key", false, "print a fresh 64-character hex key for -wrap-key and exit")
 	eventsJSONFlag := flag.Bool("events-json", false, "host mode: JSON events on stdout, JSON commands on stdin (see events.go); exit when stdin closes")
 	externalCaptchaFlag := flag.Bool("external-captcha", false, "with -events-json: hand the captcha page to the host (captcha_required event) instead of the local proxy + system browser")
+	wgConfigPath := flag.String("wg-config", "", "Windows: run WireGuard in-process from this .conf (Wintun adapter \"cronixWG\", routes, DNS) with the TURN streams as its only transport")
 	wintunPeer := flag.String("wintun", "", "Windows: own a Wintun adapter and act as the WireGuard peer at this private IPv4 (second host of a /30, e.g. 10.255.255.2:51820) instead of -listen (for WireSock, which cannot use loopback endpoints)")
 	credsCacheFlag := flag.String("creds-cache", "", "file to persist VK TURN credentials between runs (DPAPI-encrypted on Windows)")
 	flag.Parse()
@@ -2235,7 +2236,25 @@ func main() {
 	}
 
 	var listenConn net.PacketConn
-	if *wintunPeer != "" {
+	if *wgConfigPath != "" {
+		wgCfg, cfgErr := loadWGConfig(*wgConfigPath)
+		if cfgErr != nil {
+			emitEvent("fatal", map[string]any{"error": "WireGuard config: " + cfgErr.Error()})
+			log.Panicf("WireGuard config %s: %v", *wgConfigPath, cfgErr)
+		}
+		// Pin the core's sockets to today's internet interface before routes move.
+		if bypassErr := initBypassInterface(); bypassErr != nil {
+			log.Printf("[BYPASS] %v; core traffic may loop into the tunnel", bypassErr)
+		}
+		bridge := newTurnBridge()
+		wgTun, wgErr := startWireGuard(wgCfg, bridge)
+		if wgErr != nil {
+			emitEvent("fatal", map[string]any{"error": wgErr.Error()})
+			log.Panicf("WireGuard: %v", wgErr)
+		}
+		context.AfterFunc(ctx, wgTun.Close)
+		listenConn = turnBridgePacketConn{bridge}
+	} else if *wintunPeer != "" {
 		if bypassErr := initBypassInterface(); bypassErr != nil {
 			log.Printf("[BYPASS] %v; core traffic may loop into the tunnel", bypassErr)
 		}
