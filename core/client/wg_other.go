@@ -2,11 +2,14 @@
 
 package main
 
-import "errors"
+import (
+	"errors"
+	"golang.zx2c4.com/wireguard/conn"
+)
 
-type wgTunnel struct{}
+type wgTunnel struct{ failure chan error }
 
-func startWireGuard(*wgConfig, *turnBridge) (*wgTunnel, error) {
+func startWireGuard(*wgConfig, conn.Bind) (*wgTunnel, error) {
 	return nil, errors.New("-wg-config is only implemented on Windows")
 }
 

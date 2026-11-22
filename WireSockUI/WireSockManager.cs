@@ -1241,6 +1241,7 @@ namespace WireSockUI
 
         public static bool TryResetNetworkLock(out string diagnostic)
         {
+            if (Program.UsesGoCore) { diagnostic = null; return true; }
             lock (NativeOperationSyncRoot)
             {
                 diagnostic = null;
@@ -1274,6 +1275,7 @@ namespace WireSockUI
 
         public static bool TryIsNetworkLockActive(out bool active, out string diagnostic)
         {
+            if (Program.UsesGoCore) { active = false; diagnostic = null; return true; }
             lock (NativeOperationSyncRoot)
             {
                 active = false;

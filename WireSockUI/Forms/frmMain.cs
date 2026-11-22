@@ -460,7 +460,7 @@ namespace WireSockUI.Forms
         {
             return (_currentState == ConnectionState.Connected ||
                     _currentState == ConnectionState.Connecting) &&
-                   string.Equals(_tunnelLifecycle.ProfileName, profileName, StringComparison.OrdinalIgnoreCase);
+                   string.Equals(_vkTurn.IsRunning ? _vkTurn.ActiveProfile : _tunnelLifecycle.ProfileName, profileName, StringComparison.OrdinalIgnoreCase);
         }
 
         private int CurrentTunnelGeneration()
@@ -1228,7 +1228,7 @@ namespace WireSockUI.Forms
         /// </remarks>
         internal static bool IsApplicationAlreadyRunning()
         {
-            const string eventName = "Global\\WiresockClientService";
+            const string eventName = "Global\\cronixWGClient";
 
             try
             {
@@ -2792,6 +2792,11 @@ namespace WireSockUI.Forms
 
         private async Task<bool> ApplyKillSwitchSettingAsync(bool enableKillSwitch, bool shouldApplyNativeState)
         {
+            if (Program.UsesGoCore)
+            {
+                if (enableKillSwitch) throw new InvalidOperationException("The Go core does not implement the WireSock Kill Switch.");
+                return true;
+            }
             if (!shouldApplyNativeState)
                 return true;
 
@@ -3118,9 +3123,8 @@ namespace WireSockUI.Forms
                         return;
                     }
 
-                    // VK TURN: vkturn-core runs WireGuard itself on its "cronixWG" adapter
-                    // (routes, DNS) with the TURN streams as transport, so the tunnel is up now
-                    // and WireSock is not involved. Excluded apps are handled by the core too.
+                    // Both transports use the Go core. Ready means a WireGuard handshake
+                    // completed after adapter and application-exclusion setup.
                     if (vkResult == VkPrepareResult.Ready)
                     {
                         _vkTurnOwnsTunnel = true;
@@ -3128,106 +3132,7 @@ namespace WireSockUI.Forms
                         return;
                     }
 
-                    var connectTask = ConnectWithTimeoutAsync(profile, connectGeneration,
-                        preservedNetworkLockPending);
-                    preservedNetworkLockPending = false;
-                    var connectResult = await connectTask;
-                    if (connectResult == null)
-                        return;
-
-                    var connected = connectResult.Connected;
-                    var connectionSequence = connectResult.ConnectionSequence;
-
-                    if (!_shutdownComplete && connectGeneration == CurrentTunnelGeneration() &&
-                        IsTunnelConnectionTimedOut(connectGeneration))
-                    {
-                        var cleanupSucceeded = !connected && !_tunnelLifecycle.HasTunnelHandle ||
-                                               await DisconnectNativeTunnelAsync(
-                                                   connected ? connectionSequence : (long?)null, false);
-
-                        if (!cleanupSucceeded)
-                        {
-                            if (!IsNativeCleanupInProgress())
-                                await HandleNativeCleanupFailureAsync(profile, "late connection-timeout cleanup",
-                                    _tunnelLifecycle.LastError);
-                            return;
-                        }
-
-                        UpdateState(ConnectionState.Disconnected, false, profile);
-                        MessageBox.Show(Resources.TunnelConnectTimeout, Resources.TunnelErrorTitle,
-                            MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                        return;
-                    }
-
-                    if (connectGeneration != CurrentTunnelGeneration() || _shutdownComplete)
-                    {
-                        if ((connected || _tunnelLifecycle.HasTunnelHandle) &&
-                            !await DisconnectNativeTunnelAsync(connected ? connectionSequence : (long?)null, false))
-                        {
-                            if (!IsNativeCleanupInProgress())
-                                await HandleNativeCleanupFailureAsync(profile, "stale connection cleanup",
-                                    _tunnelLifecycle.LastError);
-                        }
-
-                        return;
-                    }
-
-                    if (connected)
-                    {
-                        var queryResult = await _tunnelLifecycle.GetConnectedAsync(NativeQueryTimeoutMilliseconds);
-                        if (queryResult.Succeeded)
-                        {
-                            var verifiedState = queryResult.Value
-                                ? ConnectionState.Connected
-                                : ConnectionState.Connecting;
-                            UpdateState(verifiedState, true, profile);
-                            if (verifiedState == ConnectionState.Connecting)
-                                StartTunnelConnectionMonitor(connectTask);
-                        }
-                        else
-                        {
-                            var queryDiagnostic = queryResult.Diagnostic ??
-                                                  "Unable to query the native tunnel state.";
-                            Trace.TraceWarning($"Native tunnel state query failed after connect: {queryDiagnostic}");
-                            if (NativeOperationRecoveryPolicy.MustDeferCleanup(queryResult))
-                            {
-                                TrackTimedOutNativeOperation(queryResult, "post-connect tunnel-state query");
-                                MarkNativeRecoveryRequired(profile,
-                                    $"post-connect tunnel-state query: {queryDiagnostic}");
-                                MessageBox.Show(
-                                    $"WireSock UI could not verify the native tunnel state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
-                                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            }
-                            else if (!await DisconnectNativeTunnelAsync(connectionSequence, false))
-                            {
-                                if (!IsNativeCleanupInProgress())
-                                    await HandleNativeCleanupFailureAsync(profile,
-                                        "post-connect verification cleanup",
-                                        _tunnelLifecycle.LastError ?? queryDiagnostic);
-                            }
-                            else
-                            {
-                                UpdateState(ConnectionState.Disconnected, false, profile);
-                                MessageBox.Show(
-                                    $"WireSock UI could not verify the native tunnel state.{Environment.NewLine}{Environment.NewLine}{queryDiagnostic}",
-                                    Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                            }
-                        }
-                    }
-                    else
-                    {
-                        UpdateState(ConnectionState.Disconnected, false, profile);
-                        if (connectResult.RecoveryRequired)
-                            MarkNativeRecoveryRequired(profile,
-                                connectResult.Diagnostic ?? "preserved network-lock rollback failure");
-                        else if (_tunnelLifecycle.HasTunnelHandle)
-                            await HandleNativeCleanupFailureAsync(profile, "failed connection cleanup",
-                                _tunnelLifecycle.LastError);
-                        else
-                            MessageBox.Show(connectResult.Diagnostic ?? _tunnelLifecycle.LastError ??
-                                            Resources.TunnelErrorManager,
-                                Resources.TunnelErrorTitle, MessageBoxButtons.OK, MessageBoxIcon.Error);
-                    }
+                    throw new InvalidOperationException("The Go core did not confirm the connection.");
                 }
                 catch (Exception ex)
                 {

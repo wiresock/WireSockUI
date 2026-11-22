@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Linux cross-build of the existing WinForms UI. No native CLR host or
+       wgbooster is needed. Install.ps1 places this elevated executable in a
+       protected directory; the existing managed ACL checks remain enabled. -->
+  <PropertyGroup>
+    <TargetFramework>net472</TargetFramework>
+    <OutputType>WinExe</OutputType>
+    <AssemblyName>WireSockUI</AssemblyName>
+    <RootNamespace>WireSockUI</RootNamespace>
+    <PlatformTarget>x64</PlatformTarget>
+    <LangVersion>latest</LangVersion>
+    <EnableDefaultItems>false</EnableDefaultItems>
+    <DefineConstants>TRACE;CRONIX_PORTABLE</DefineConstants>
+    <GenerateResourceUsePreserializedResources>true</GenerateResourceUsePreserializedResources>
+    <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>
+    <GenerateBindingRedirectsOutputType>true</GenerateBindingRedirectsOutputType>
+    <ApplicationManifest>../WireSockUI.Bootstrap/bootstrap.manifest</ApplicationManifest>
+    <ApplicationIcon>../WireSockUI/Resources/wiresock.ico</ApplicationIcon>
+    <AppConfig>../WireSockUI/app.config</AppConfig>
+    <Version>0.4.0</Version>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <Product>cronixWG</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../WireSockUI/**/*.cs"
+             Exclude="../WireSockUI/obj/**;../WireSockUI/bin/**;../WireSockUI/Notifications/**;../WireSockUI/Extensions/GitHubExtensions.cs" />
+    <EmbeddedResource Include="../WireSockUI/Properties/Resources.resx"><LogicalName>WireSockUI.Properties.Resources.resources</LogicalName></EmbeddedResource>
+    <EmbeddedResource Include="../WireSockUI/Forms/*.resx"><LogicalName>WireSockUI.Forms.%(Filename).resources</LogicalName></EmbeddedResource>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <Reference Include="System.Design" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Management" />
+    <Reference Include="System.ServiceProcess" />
+    <Reference Include="System.Web.Extensions" />
+    <Reference Include="System.Runtime.InteropServices.WindowsRuntime" />
+    <Reference Include="System.IO.Compression" />
+    <Reference Include="Microsoft.CSharp" />
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies" Version="1.0.3" PrivateAssets="all" />
+    <PackageReference Include="System.Resources.Extensions" Version="10.0.10" />
+    <PackageReference Include="TaskScheduler" Version="2.12.2" />
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+  </ItemGroup>
+</Project>

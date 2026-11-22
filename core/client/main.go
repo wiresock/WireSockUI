@@ -2099,7 +2099,7 @@ func main() {
 		cancel()
 		select {
 		case <-signalChan:
-		case <-time.After(5 * time.Second):
+		case <-time.After(15 * time.Second):
 		}
 		log.Fatalf("Exit...\n")
 	}()
@@ -2123,6 +2123,7 @@ func main() {
 	eventsJSONFlag := flag.Bool("events-json", false, "host mode: JSON events on stdout, JSON commands on stdin (see events.go); exit when stdin closes")
 	externalCaptchaFlag := flag.Bool("external-captcha", false, "with -events-json: hand the captcha page to the host (captcha_required event) instead of the local proxy + system browser")
 	wgConfigPath := flag.String("wg-config", "", "Windows: run WireGuard in-process from this .conf (Wintun adapter \"cronixWG\", routes, DNS) with the TURN streams as its only transport")
+	directWG := flag.Bool("direct-wireguard", false, "use the profile Endpoint over ordinary UDP instead of TURN")
 	wintunPeer := flag.String("wintun", "", "Windows: own a Wintun adapter and act as the WireGuard peer at this private IPv4 (second host of a /30, e.g. 10.255.255.2:51820) instead of -listen (for WireSock, which cannot use loopback endpoints)")
 	credsCacheFlag := flag.String("creds-cache", "", "file to persist VK TURN credentials between runs (DPAPI-encrypted on Windows)")
 	flag.Parse()
@@ -2137,7 +2138,7 @@ func main() {
 		startControlReader(os.Stdin, func() {
 			cancel()
 			go func() {
-				time.Sleep(5 * time.Second)
+				time.Sleep(15 * time.Second)
 				emitEvent("exit", nil)
 				os.Exit(0)
 			}()
@@ -2154,6 +2155,13 @@ func main() {
 		return
 	}
 	if *peerAddr == "" {
+		if *directWG {
+			if err := runDirectWireGuard(ctx, *wgConfigPath); err != nil {
+				emitEvent("fatal", map[string]any{"error": err.Error()})
+				log.Print(err)
+			}
+			return
+		}
 		log.Panicf("Need peer address!")
 	}
 	peer, err := resolveUDPAddr("udp", *peerAddr)
@@ -2244,7 +2252,8 @@ func main() {
 		}
 		// Pin the core's sockets to today's internet interface before routes move.
 		if bypassErr := initBypassInterface(); bypassErr != nil {
-			log.Printf("[BYPASS] %v; core traffic may loop into the tunnel", bypassErr)
+			emitEvent("fatal", map[string]any{"error": bypassErr.Error()})
+			log.Panicf("cannot establish VPN transport bypass: %v", bypassErr)
 		}
 		bridge := newTurnBridge()
 		wgTun, wgErr := startWireGuard(wgCfg, bridge)
@@ -2253,6 +2262,15 @@ func main() {
 			log.Panicf("WireGuard: %v", wgErr)
 		}
 		context.AfterFunc(ctx, wgTun.Close)
+		defer wgTun.Close()
+		go func() {
+			select {
+			case err := <-wgTun.failure:
+				emitEvent("fatal", map[string]any{"error": err.Error()})
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		listenConn = turnBridgePacketConn{bridge}
 	} else if *wintunPeer != "" {
 		if bypassErr := initBypassInterface(); bypassErr != nil {

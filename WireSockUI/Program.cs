@@ -26,6 +26,12 @@ namespace WireSockUI
         internal const int MaxApplicationPayloadEntries = 4096;
         internal const int MaxWireSockSdkDirectoryEntries = 1024;
         internal const string NativeLauncherFileName = "WireSockUI.exe";
+#if CRONIX_PORTABLE
+        [STAThread]
+        public static int Main() { return HostedMain(null); }
+#endif
+        // Both ordinary WireGuard and VK TURN profiles now run in vkturn-core.
+        internal static bool UsesGoCore => true;
         internal const string NativeHostSelfTestToken = "WireSockUI.NativeHostSelfTest.v1";
         private const uint LoadLibrarySearchDllLoadDir = 0x00000100;
         private const uint LoadLibrarySearchSystem32 = 0x00000800;
@@ -340,21 +346,12 @@ namespace WireSockUI
                     Resources.AppNoWireSockTitle, MessageBoxButtons.OK, MessageBoxIcon.Warning);
             }
 
-            Trace.TraceInformation("WireSock UI startup phase started: WireSock SDK discovery.");
-            if (!IsWireSockInstalled(out var wireSockDiagnostic, out var installationCandidateFound))
+            Trace.TraceInformation("cronixWG: Go WireGuard core selected; WireSock SDK is not loaded.");
+            if (!TryEnsureRestrictedDllSearchPath(out var dllDiagnostic))
             {
-                var message = string.IsNullOrWhiteSpace(wireSockDiagnostic)
-                    ? Resources.AppNoWireSockMessage
-                    : $"{Resources.AppNoWireSockMessage}{Environment.NewLine}{Environment.NewLine}{wireSockDiagnostic}";
-                MessageBox.Show(message, Resources.AppNoWireSockTitle, MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
-                if (!installationCandidateFound)
-                    OpenBrowser(Resources.AppWireSockURL);
-
+                MessageBox.Show(dllDiagnostic, "cronixWG startup error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return 1;
             }
-
-            Trace.TraceInformation("WireSock UI startup phase completed: WireSock SDK discovery.");
             Trace.TraceInformation("WireSock UI startup phase started: main window construction.");
             using (var mainForm = new FrmMain())
             {

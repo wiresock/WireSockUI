@@ -50,6 +50,9 @@ namespace WireSockUI.Forms
         {
             Initialize();
 
+            btnAddAllowedApp.Visible = false;
+            toolStripMenuItemByDirPath.Visible = false;
+
             ShowInTaskbar = false;
             txtProfileName.MaxLength = Profile.MaxProfileNameLength;
             txtEditor.MaxLength = checked((int)Profile.MaxProfileSizeBytes);

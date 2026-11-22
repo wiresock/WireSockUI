@@ -47,6 +47,11 @@ namespace WireSockUI.VkTurn
         };
 
         public string Server { get; private set; }
+        public bool DirectWireGuard { get; private set; }
+        public static VkTurnSettings Direct() => new VkTurnSettings
+        {
+            DirectWireGuard = true, Links = new[] { "direct" }
+        };
         public IReadOnlyList<string> Links { get; private set; } = Array.Empty<string>();
         public string WrapKey { get; private set; }
         public int Streams { get; private set; } = DefaultStreams;
@@ -146,6 +151,9 @@ namespace WireSockUI.VkTurn
             if (string.IsNullOrEmpty(wireGuardConfigPath))
                 throw new ArgumentException("The in-process WireGuard configuration path is required.",
                     nameof(wireGuardConfigPath));
+
+            if (DirectWireGuard)
+                return "-direct-wireguard -events-json -wg-config " + QuoteArgument(wireGuardConfigPath);
 
             var args = new List<string>
             {

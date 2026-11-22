@@ -417,3 +417,6 @@ FodyWeavers.xsd
 
 # Wintun (signed by WireGuard LLC), local only
 /third_party/wintun/
+/third_party/mullvad/*.sys
+/third_party/mullvad/*.cat
+/third_party/mullvad/*.inf

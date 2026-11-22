@@ -63,6 +63,8 @@ namespace WireSockUI.VkTurn
         public int ConnectedStreams { get; private set; }
         public string TurnIp { get; private set; }
         public string LastError { get; private set; }
+        public string SplitConflictService { get; private set; }
+        public string SplitConflictReason { get; private set; }
 
         public static string CorePath => Path.Combine(AppDomain.CurrentDomain.BaseDirectory, CoreFileName);
 
@@ -173,7 +175,7 @@ namespace WireSockUI.VkTurn
             SendCommand(new Dictionary<string, object> { { "cmd", "captcha_cancel" }, { "id", id } });
         }
 
-        /// <summary>Asks the core to exit, then kills it if it does not leave within 3 seconds.</summary>
+        /// <summary>Allows the core time to reset and stop its kernel driver before terminating it.</summary>
         public void Stop()
         {
             Process process;
@@ -193,7 +195,7 @@ namespace WireSockUI.VkTurn
                     {
                         TryWrite(process, "{\"cmd\":\"shutdown\"}");
                         try { process.StandardInput.Close(); } catch { /* already closed */ }
-                        if (!process.WaitForExit(3000))
+                        if (!process.WaitForExit(10000))
                         {
                             WriteLog($"{CoreFileName} did not exit in time; terminating it.");
                             process.Kill();
@@ -273,12 +275,12 @@ namespace WireSockUI.VkTurn
                     ConnectedStreams = GetInt(ev, "connected");
                     break;
                 case "established":
-                    WriteLog("VK TURN tunnel to the server is established.");
-                    SetPhase(VkTurnPhase.Established);
-                    lock (_sync) _establishedTcs?.TrySetResult(true);
+                    WriteLog("TURN transport is ready; waiting for WireGuard handshake.");
                     break;
                 case "wg_handshake":
                     WriteLog("WireGuard handshake with the server completed.");
+                    SetPhase(VkTurnPhase.Established);
+                    lock (_sync) _establishedTcs?.TrySetResult(true);
                     break;
                 case "wg_stats":
                     StatsUpdated?.Invoke(new VkTurnStats
@@ -291,9 +293,14 @@ namespace WireSockUI.VkTurn
                 case "vk_backoff":
                     WriteLog($"VK is refusing requests; retrying in {GetInt(ev, "seconds")} s.");
                     break;
+                case "split_conflict":
+                    SplitConflictService = GetString(ev, "service");
+                    SplitConflictReason = GetString(ev, "reason");
+                    break;
                 case "fatal":
                     LastError = GetString(ev, "error");
                     WriteLog($"VK TURN core stopped: {LastError}");
+                    lock (_sync) _establishedTcs?.TrySetResult(false);
                     break;
             }
         }

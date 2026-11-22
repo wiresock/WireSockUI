@@ -1,159 +1,128 @@
-# WireSockUI
+# cronixWG
 
-[![Latest release](https://img.shields.io/github/v/release/wiresock/WireSockUI?display_name=release&sort=semver)](https://github.com/wiresock/WireSockUI/releases/latest)
-[![CI](https://github.com/wiresock/WireSockUI/actions/workflows/ci.yml/badge.svg)](https://github.com/wiresock/WireSockUI/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+Windows VPN client: the existing WinForms UI plus an in-process `wireguard-go`
+engine, optional VK TURN transport, and Mullvad application exclusions.
+WireSock SDK, `wgbooster.dll`, `ndiswgc` and WinpkFilter are no longer runtime
+requirements. Both ordinary WireGuard and VK profiles run in `vkturn-core.exe`.
 
-**A minimal, lightweight Windows GUI for WireSock Secure Connect.**
+This branch is a migration/test build. Windows driver/network behaviour still
+requires testing on Windows; a successful Ubuntu cross-build is not that test.
 
-WireSockUI is an additional desktop interface for the WireSock Secure Connect CLI/application-mode distribution. It provides a focused, file-based tunnel manager for users who prefer the straightforward feel of the classic WireGuard for Windows client.
+## Windows test package
 
-WireSockUI is not a replacement for the full WireSock Secure Connect application. If you want a richer interface, dark theme, and more desktop conveniences, use the full [WireSock Secure Connect](https://www.wiresock.net/) experience.
+The Ubuntu build produces `out/cronixWG-windows-x64.zip` and
+`out/windows-x64/`. Copy/extract the whole package to Windows 10/11 x64.
+Use elevated 64-bit PowerShell in that folder:
 
-## Screenshots
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
+& "$env:ProgramFiles\cronixWG\WireSockUI.exe"
+```
 
-<p align="center">
-  <img src="docs/images/wiresockui-main.png" alt="WireSockUI main window showing an active tunnel and connection statistics" width="900">
-</p>
+The installer checks payload hashes and publisher signatures, copies the files
+into protected Program Files, and registers a demand-start driver service named
+`cronixWGSplitTunnel`. It does not remove or modify another VPN's drivers. Existing
+profiles remain in the original secure WireSockUI data directory.
 
-<table>
-  <tr>
-    <td width="50%"><img src="docs/images/wiresockui-settings.png" alt="WireSockUI settings dialog"></td>
-    <td width="50%"><img src="docs/images/wiresockui-app-routing.png" alt="WireSockUI profile editor and application routing picker"></td>
-  </tr>
-  <tr>
-    <td align="center"><sub>Startup, notification, adapter, Kill Switch, and logging options</sub></td>
-    <td align="center"><sub>Profile editing and per-application routing</sub></td>
-  </tr>
-</table>
+.NET Framework 4.7.2+ is required. WebView2 Runtime enables the embedded VK captcha;
+otherwise the existing browser captcha flow is used. Starting this elevated client
+directly from an ordinary Downloads folder is not supported by its ACL checks.
 
-## What is WireSockUI?
+See [the Windows test procedure](portable/WINDOWS-TESTING.txt) before reporting
+network results. The UI reports Connected after a WireGuard handshake.
+System routes and DNS switch only after the handshake, keeping VK captcha and
+authentication reachable while the client is still connecting.
 
-WireSockUI is a compact WinForms front end for the direct WireSock SDK (`wgbooster.dll`) installed with WireSock Secure Connect CLI. It controls tunnels in-process rather than communicating with the full Secure Connect desktop application's service API.
+## Application exclusions
 
-It is intended for:
-
-- users who manage WireGuard/WireSock `.conf` profiles and want a small native Windows interface;
-- users who prefer a classic tunnel list with simple activate/deactivate controls;
-- WireSock Secure Connect CLI users who want tray, startup, status, and log controls;
-- x86/x64 systems that need the non-UWP build, including Windows 7 deployments.
-
-## Features
-
-- Create, import, edit, and manage WireGuard/WireSock profiles.
-- Activate and deactivate tunnels and view transfer, latency, loss, interface, and peer state.
-- Configure per-application routing from a searchable process picker.
-- Use transparent or virtual network adapter mode and an optional Kill Switch.
-- Run at Windows startup, minimize to the tray, and connect automatically.
-- View, filter, clear, and follow SDK logs; change the runtime log level from Settings.
-- Receive state-change notifications and update checks with the UWP-enabled build.
-- Install architecture-matched x86, x64, and ARM64 packages.
-
-## Configuration compatibility
-
-WireSockUI supports **all WireSock configuration-file features available in the latest official release of WireSock Secure Connect**. The minimal interface does not reduce configuration-file functionality: WireSock and WireGuard directives are validated and passed to the matching installed direct SDK.
-
-WireSock-specific options use the SDK's case-sensitive `#@ws:` extension syntax, for example:
+In a profile's `[Peer]` section:
 
 ```ini
-#@ws:AllowedApps = app.exe
-#@ws:DisallowedIPs = 192.168.1.0/24
-#@ws:VirtualAdapterMode = false
+#@ws:DisallowedApps = C:\Program Files\Mozilla Firefox\firefox.exe
 ```
 
-Keep WireSockUI and the official WireSock Secure Connect CLI/SDK current when adopting newly released directives. Profiles containing `PreUp`, `PostUp`, `PreDown`, or `PostDown` script hooks are treated as privileged code and require confirmation before they are saved or activated.
+Use full paths to existing local EXEs. The process picker now inserts full paths.
+The supported policy is **VPN by AllowedIPs, except selected applications**.
+Excluded sockets stay in the Windows network stack and use the internet interface;
+there is no user-space TCP proxy or mini-NAT for bypass traffic.
 
-## Windows and package variants
+The core registers process ancestry and executable device paths with the signed
+Mullvad driver, supplies VPN/internet IP addresses, watches interface changes and
+consumes driver events. Our driver is reset/stopped on normal disconnect. A borrowed driver is reset to
+its original idle state and left running. Fatal
+split-controller errors close the tunnel rather than silently ignoring exclusions.
+The bundled version accepts private WFP sublayer GUIDs, so cronixWG does not reuse
+Amnezia/Mullvad firewall sublayers. The global driver device name still prevents
+simultaneous control by multiple VPN clients. Before starting its own service,
+cronixWG attempts to reuse a running foreign driver only when its binary matches
+the audited bundled version, exclusive access succeeds, and it is in STARTED
+(unconfigured) state. Older Amnezia ABIs are not supported for reuse.
+If reuse fails, the UI offers to stop the named split-driver service and retry
+once. This requires an explicit Yes (No is the default); it does not kill other
+VPN processes, stop dependent services, change startup settings, or uninstall
+anything. A stopped foreign service is not restarted automatically; reconnect
+or restart the other VPN when needed. If `AmneziaVPN-service` is running, the confirmation names both services and
+stops the background service before the driver. If it starts later, a driver
+stop timeout can offer a second confirmation. This may disconnect Amnezia.
+Neither service is restarted automatically; start its background service or
+reboot before returning to Amnezia if needed. A failure is shown in the UI.
+The driver's provider/callout GUIDs are also shared, not just its device name.
+STOPPED service status alone does not establish that those WFP objects have
+been removed. Registered foreign callouts are never deleted automatically;
+a duplicate-GUID failure after shutdown requires diagnosis and a reboot/retest.
 
-| Package | Intended platform | Difference |
-| --- | --- | --- |
-| `win-x64-uwp` / `win-x86-uwp` | **Windows 8.1 or later** | Includes notifications and update checks through Windows Runtime integrations. |
-| `win-x64-no-uwp` / `win-x86-no-uwp` | **Windows 7 SP1 or Windows 8.1 and later** | Supports Windows 7 SP1 and omits Windows Runtime integrations. |
-| `win-arm64-uwp` / `win-arm64-no-uwp` | Windows 11 on Arm | Native ARM64 builds; the UWP variant adds notifications and update checks. |
 
-All variants use the same core tunnel and configuration functionality. Requirements:
+`AllowedApps`, directory/name/wildcard application rules, `DisallowedIPs`, SOCKS
+and script hooks are not implemented by this core. Unsupported routing directives
+are rejected. The old WireSock Kill Switch must be disabled in Settings; this
+migration does not provide an independent replacement. DNS is configured on the
+VPN adapter, not isolated per application. IPv6 leak blocking is not implemented:
+verify IPv6 separately when the server/profile has no IPv6 connectivity.
 
-- a matching-architecture WireSock Secure Connect CLI/SDK installation;
-- administrator privileges;
-- .NET Framework 4.7.2 or later on x86/x64, or .NET Framework 4.8.1 or later on ARM64;
-- installation from the official MSI into its protected Program Files location.
+## Build on Ubuntu
 
-Portable copies and loose publish directories are not supported.
+Requirements: Go matching `core/go.mod`, Python 3, and .NET SDK 8 or newer.
+The separate portable project builds .NET Framework against reference assemblies;
+Visual Studio, Wine and a Windows SDK are not needed.
 
-Windows 8 is not supported because its final compatible runtime is .NET Framework 4.6.1, while WireSockUI targets .NET Framework 4.7.2.
-
-## Installation
-
-### 1. Install WireSock Secure Connect CLI and SDK
-
-Open PowerShell or Windows Terminal and run:
-
-```powershell
-winget install --id NTKERNEL.WireSockVPNClientCLI --exact --source winget
+```bash
+bash scripts/build-windows.sh
+# Or select a privately installed Linux SDK:
+DOTNET=/path/to/dotnet bash scripts/build-windows.sh
 ```
 
-This installs the WireSock driver, CLI components, and `wgbooster.dll` used by WireSockUI. If WinGet is unavailable, download the matching installer from the [official WireSock website](https://www.wiresock.net/).
+The script downloads hash-pinned, unmodified publisher binaries, runs Go tests,
+cross-compiles the core for Windows amd64, compiles the existing C# UI, and creates
+a folder/ZIP with install scripts and licensing files. Driver signatures are never
+stripped. Network access is needed on the first build. The separate project uses
+its own NuGet lock file. The old solution/native host remains for historical code
+and regression coverage; the supported migration package is built by this script.
 
-### 2. Install WireSockUI
-
-Download the MSI matching your Windows version and architecture from [GitHub Releases](https://github.com/wiresock/WireSockUI/releases). The installer can create Start-menu and desktop shortcuts; both options are selected by default.
-
-> [!IMPORTANT]
-> WireSockUI releases are intentionally unsigned. Windows displays **Unknown publisher** during installation. Verify a downloaded MSI against its published `.sha256` file before running it.
-
-### 3. Add a tunnel
-
-1. Start **WireSockUI** and accept the administrator prompt.
-2. Select **Add Tunnel** to import a `.conf` file or create a profile.
-3. Select the profile and choose **Activate**.
-
-Do not run the WireSock CLI, service, or another direct-SDK tunnel at the same time; these clients share ownership of the WireSock driver session.
-
-## Full WireSock Secure Connect GUI
-
-WireSockUI deliberately keeps the interface small and conventional. For a modern, feature-rich desktop experience—including a dark theme and additional UI conveniences—install the full [WireSock Secure Connect](https://www.wiresock.net/) application instead.
-
-Both choices use the WireSock platform; choose WireSockUI for a minimal file-oriented workflow and the full application for the complete desktop experience.
-
-## Building from source
-
-Visual Studio Build Tools with the C++ workload, a Windows SDK, and the repository-pinned .NET SDK are required. The example below builds and tests x64; replace `x64` with `x86` or `ARM64` as needed.
-
-```powershell
-dotnet restore WireSockUI.sln -p:Platform=x64 -m:1
-$version = .\scripts\Resolve-BuildVersion.ps1
-dotnet run --project WireSockUI.Tests\WireSockUI.Tests.csproj --configuration Release --framework net472-windows -p:Version=$version
-dotnet build WireSockUI.sln --configuration Release -p:Platform=x64 -p:UseSharedCompilation=false -p:Version=$version -m:1
-dotnet build WireSockUI.sln --configuration "Release UWP" -p:Platform=x64 -p:UseSharedCompilation=false -p:Version=$version -m:1
+```bash
+cd core
+go test -race ./client ./server ./tcputil
+GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./client
 ```
 
-To build an unsigned MSI, first publish an architecture-specific payload, then run the installer builder:
+## Structure
 
-```powershell
-dotnet publish WireSockUI\WireSockUI.csproj --configuration Release --framework net472-windows --no-self-contained --no-restore -p:Platform=x64 -p:UseSharedCompilation=false -p:Version=$version -m:1
-dotnet restore WireSockUI.Installer\WireSockUI.Installer.wixproj --locked-mode
-.\scripts\Build-Msi.ps1 `
-  -Platform x64 `
-  -Version $version `
-  -Flavor no-uwp `
-  -PayloadDirectory .\bin\x64\Release\net472-windows\publish `
-  -OutputDirectory .\artifacts\msi `
-  -NoRestore
-```
+- `core/client/wg_windows.go`: Wintun, WireGuard lifecycle, routes/DNS, statistics.
+- `core/client/wg_bridge.go`: `conn.Bind` to the existing TURN streams, no fork.
+- `core/client/wg_direct.go`: direct UDP WireGuard for ordinary profiles.
+- `core/client/split_windows.go`: signed Mullvad driver and private WFP sublayers.
+- `core/client/split_config.go`: explicit 64-bit ABI serialization, tested on Linux.
+- `WireSockUI/VkTurn/`: core process lifecycle and UI events for both transports.
+- `portable/`: Linux-compatible UI project and Windows installation/test files.
 
-See [WireSockUI.Installer/README.md](WireSockUI.Installer/README.md) for installer validation and disposable-machine test guidance.
+## Provenance and licenses
 
-## Runtime and release notes
+The UI derives from WireSockUI (MIT; see [LICENSE](LICENSE)); upstream native
+integration classes remain as legacy source but the migrated connection path does
+not load them. VK TURN code retains [its original license](core/LICENSE).
+WireGuard, Wintun and Mullvad are independent upstream projects, not affiliations.
 
-- Start the native `WireSockUI.exe`; `WireSockUI.Managed.dll` is not an application entry point.
-- Profiles are normally stored under `%ProgramData%\WireSockUI\Configs` with administrator-only permissions. If that folder does not exist and the system ProgramData ACL is unsafe, WireSockUI uses an administrator-only data directory in the protected Program Files hierarchy instead of refusing to start. The fallback is shared across application architectures and remains selected on later launches; WireSockUI never copies data from an unsafe pre-existing ProgramData tree.
-- Diagnostic logs are normally written to `%ProgramData%\WireSockUI\Logs\WireSockUI.log`; they follow the selected secure data root, remain bounded and rotated, and redact credentials and private keys.
-- WireSockUI discovers the SDK from registered WireSock Secure Connect, Secure Connect Pro, and legacy CLI locations, then validates the architecture and protected installation path before loading it.
-- Official releases contain six per-machine MSIs: x86, x64, and ARM64 in `uwp` and `no-uwp` variants. The MSI and its application modules are unsigned by policy; no signing certificate or signing environment variable is required.
-- Each release includes SHA-256 sidecars, validation metadata, an SPDX SBOM, and GitHub artifact-provenance attestations.
-
-## License and affiliation
-
-WireSockUI is copyright &copy; 2023&ndash;2026 WireSock Foundation and distributed under the [MIT License](LICENSE).
-
-The interface is intentionally similar in spirit to the simple, classic workflow of WireGuard for Windows. **WireSockUI is not affiliated with, endorsed by, or maintained by Jason A. Donenfeld or the WireGuard project.** References to WireGuard describe configuration compatibility and interface inspiration only; no official association is implied.
+The driver is Mullvad split tunnel 1.3.0.0, binary repository revision
+`80c2e94d5ee8087ea80059ab24f1a81b632714f7`, source/ABI revision
+`0a0eb97f67d1dbcb3d08bda66d3b24f465d95475`, distributed under MPL-2.0.
+Wintun is version 0.14.1. Exact URLs and SHA-256 values are in
+[scripts/fetch-windows-deps.py](scripts/fetch-windows-deps.py).

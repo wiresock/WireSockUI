@@ -266,6 +266,10 @@ namespace WireSockUI.Forms
             if (process == null)
                 return null;
 
+            if (Program.UsesGoCore)
+                return !string.IsNullOrWhiteSpace(process.ImageName) && Path.IsPathRooted(process.ImageName)
+                    ? process.ImageName : null;
+
             var matchName = !string.IsNullOrWhiteSpace(process.ImageName)
                 ? Path.GetFileName(process.ImageName)
                 : Path.GetFileName(process.Name);

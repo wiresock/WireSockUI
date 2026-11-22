@@ -1,0 +1,102 @@
+cronixWG Windows x64 test package
+
+Built on Ubuntu. Requires Windows 10/11 x64 and .NET Framework 4.7.2+.
+WebView2 Runtime is needed for the embedded VK captcha (otherwise a browser opens).
+No WireSock, wgbooster.dll or Windows Packet Filter installation is required.
+
+INSTALL
+1. Extract the whole archive into a new folder on Windows.
+2. Close the old client and other VPNs before the first network test.
+3. In an elevated 64-bit PowerShell in the extracted folder:
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
+4. Run C:\Program Files\cronixWG\WireSockUI.exe.
+   Program Files is required by the existing elevated UI's file protection checks.
+   Copying into Downloads and starting the EXE directly is not supported.
+   Private profiles remain under the existing WireSockUI secure data directory.
+
+PROFILE
+Existing #@vk: settings still select TURN. Ordinary profiles use direct WireGuard.
+The UI reports Connected only after a WireGuard handshake.
+System routes and DNS switch only after that handshake, so captcha/authentication
+can finish over the ordinary internet connection while the UI says Connecting.
+For application exclusions add this in [Peer], with actual full paths:
+  #@ws:DisallowedApps = C:\Program Files\Mozilla Firefox\firefox.exe
+The process picker now inserts full paths; the EXE file picker also works.
+Remove old AllowedApps, DisallowedIPs, SOCKS and script-hook directives.
+An invalid exclusion prevents connection rather than being ignored.
+The supported mode is: VPN for all matching AllowedIPs, except excluded EXEs.
+Child processes inherit the driver's exclusions. Restart an app when changing rules.
+The old WireSock Kill Switch is unsupported: disable it in Settings to connect.
+
+CHECK ON WINDOWS (not validated by the Linux cross-build)
+1. Connect without DisallowedApps: confirm WireGuard handshake, browsing and DNS.
+2. Disconnect: confirm the cronixWG adapter/routes disappear and internet works.
+3. Add one excluded browser EXE. Connect and check logs for [SPLIT] active.
+4. Compare public IP in that browser and a non-excluded browser. Test both TCP
+   and UDP/QUIC, DNS, downloads and LAN access.
+5. Disconnect/reconnect several times; verify sc.exe query cronixWGSplitTunnel.
+   Its demand-start service should stop after disconnect.
+6. Test Wi-Fi/Ethernet switching and sleep/resume. New transport sockets follow
+   the selected default route. If no usable route/address exists, the core
+   reports a fatal error and closes the VPN; reconnect after the network returns.
+7. Test closing the UI during captcha/connection, and killing vkturn-core.exe.
+   Confirm adapter/route cleanup and recovery on the next connection.
+
+LIMITS
+This is a test build, not a validated Windows release. No independent kill switch.
+DNS is configured on the tunnel adapter; per-app DNS isolation is not implemented.
+If your VPN profile lacks IPv6 connectivity, test IPv6 explicitly: this build does
+not add an IPv6 leak-blocking firewall. Network selection currently follows IPv4.
+One WireGuard peer per profile. Split tunneling requires local full EXE paths,
+not names, directories, wildcard patterns or UWP package IDs.
+The split driver has a global device name and one controlling client.
+An idle compatible driver from Amnezia/Mullvad can be reused. Compatibility is
+currently limited to the exact bundled Mullvad 1.3.0 binary; older Amnezia versions
+will offer the stop-and-retry dialog instead. Unknown versions are never reset.
+If reuse fails, the UI offers Yes/No to stop only the named split driver and retry
+once. No is the default. Yes may interrupt the other VPN's split tunneling.
+No files or startup settings are changed and no processes are forcibly killed.
+The stopped service is not automatically restarted: reconnect/restart the other
+VPN when needed. If it is busy or restarts itself, the retry can still fail.
+
+COEXISTENCE CHECKS (Windows required)
+1. With Amnezia's split service running, activate an exclusions profile.
+   If incompatible/busy/configured, choose No: its service and rules must remain
+   unchanged; cronixWG must remain disconnected.
+2. Repeat and choose Yes: the UI must stay responsive, stop only that named
+   service and retry once. Verify excluded and included browsers' public IPs.
+3. Disconnect cronixWG, then reconnect/restart Amnezia and verify it still works.
+4. With a free foreign service using the exact bundled driver and STARTED state,
+   expect [SPLIT] using idle compatible driver. After disconnect, the foreign
+   service must still run with the driver reset to STARTED.
+5. With the foreign device held open, verify no reset occurs before approval.
+   A failed stop must show an error, never kill the other VPN or retry forever.
+6. Close cronixWG during stop/retry: it must not start a new connection.
+7. Without exclusions, none of this must affect a normal full-tunnel connection.
+
+LOGS / REMOVAL
+Save the UI log including [WG], [SPLIT], [BYPASS] messages for diagnosis.
+Use Get-NetAdapter, Get-NetRoute and sc.exe query cronixWGSplitTunnel for state.
+Close the client, then run Uninstall-Driver.ps1 as administrator to remove only
+the cronixWG service. No old WireSock/WinpkFilter drivers are removed automatically.
+
+AMNEZIA BACKGROUND SERVICE
+When AmneziaVPN-service is running, the initial confirmation explicitly names
+both services. On Yes, stop the background service BEFORE its split driver, so
+the owner has an opportunity to release the device and driver configuration.
+No is the default. If the background service appears only later, a driver stop
+timeout can offer a separate confirmation to stop it. No processes are killed.
+Neither service is automatically restarted. Start AmneziaVPN-service again or
+restart Windows before using Amnezia if its client cannot start the service.
+Verify declining leaves the services untouched; accepting stops the background
+service first without changing startup types. If WFP reports duplicate GUIDs
+even with both services stopped, preserve the WFP state dump, then restart
+Windows and retest. Do not delete registered foreign WFP callouts automatically.
+This stop ordering has not yet been validated on Windows.
+
+STOP CONTROL PIPE ERRORS
+A closed/broken control pipe (Win32 109/232) while stopping a service is followed
+by a fresh status check, not treated as immediate success or failure. Retry must
+proceed only when SCM reports Stopped (or the service has been removed). If the
+service stays Running/StopPending, the error includes its name, final state and
+original Win32 stop error. Test Amnezia shutdown with this behavior on Windows.

@@ -20,9 +20,8 @@ namespace WireSockUI.VkTurn
     }
 
     /// <summary>
-    ///     Glue between the main window and <see cref="VkTurnSession" />: starts the core
-    ///     before WireSock connects, shows captcha windows, writes the runtime config that
-    ///     wgbooster.dll loads, and tears everything down on disconnect.
+    ///     Starts the Go core for ordinary WireGuard and VK TURN profiles, shows
+    ///     captcha windows, and removes the private runtime config on disconnect.
     /// </summary>
     internal sealed class VkTurnController : IDisposable
     {
@@ -37,6 +36,8 @@ namespace WireSockUI.VkTurn
         private CancellationTokenSource _prepareCts;
         private Task _stopTask = Task.CompletedTask;
         private string _runtimeConfigPath;
+        private int _prepareGeneration;
+        private bool _disposed;
 
         public VkTurnController(Control owner, Action<string> log)
         {
@@ -76,13 +77,19 @@ namespace WireSockUI.VkTurn
         }
 
         /// <summary>
-        ///     Must be called on the UI thread before the WireSock connect. For a VK TURN
-        ///     profile it starts the core and returns once the first stream is up.
+        ///     Called on the UI thread. Starts the core for either transport and returns
+        ///     after the WireGuard handshake completes.
         /// </summary>
-        public async Task<VkPrepareResult> PrepareAsync(string profile)
+        public Task<VkPrepareResult> PrepareAsync(string profile) => PrepareAsync(profile, true);
+
+        private async Task<VkPrepareResult> PrepareAsync(string profile, bool offerDriverStop)
         {
+            if (_disposed) return VkPrepareResult.Cancelled;
             LastError = null;
+            var initialGeneration = _prepareGeneration;
             await _stopTask.ConfigureAwait(true);
+            if (_disposed || initialGeneration != _prepareGeneration || _owner.IsDisposed)
+                return VkPrepareResult.Cancelled;
 
             string profileText;
             VkTurnSettings settings;
@@ -98,7 +105,13 @@ namespace WireSockUI.VkTurn
             }
 
             if (settings == null)
-                return VkPrepareResult.NotVkProfile;
+                settings = VkTurnSettings.Direct();
+
+            if (PrivilegedSettingsStore.EnableKillSwitch)
+            {
+                LastError = "The WireSock Kill Switch is not supported by the Go core. Disable it in Settings before connecting.";
+                return VkPrepareResult.Failed;
+            }
 
             string runtimePath;
             try
@@ -128,8 +141,8 @@ namespace WireSockUI.VkTurn
             _runtimeConfigPath = runtimePath;
             ActiveProfile = profile;
 
-            var externalCaptcha = VkCaptchaForm.IsRuntimeAvailable();
-            if (!externalCaptcha)
+            var externalCaptcha = !settings.DirectWireGuard && VkCaptchaForm.IsRuntimeAvailable();
+            if (!settings.DirectWireGuard && !externalCaptcha)
                 _log("[VK TURN] Microsoft Edge WebView2 is not installed; the captcha will open in the default browser.");
 
             bool established;
@@ -149,13 +162,97 @@ namespace WireSockUI.VkTurn
 
             var cancelled = cts.IsCancellationRequested;
             LastError = cancelled ? null : session.LastError ?? "VK TURN could not connect.";
+            var conflictService = session.SplitConflictService;
+            var conflictReason = session.SplitConflictReason;
             StopInBackground();
+            var generation = _prepareGeneration;
+            if (!cancelled && offerDriverStop && SplitDriverConflict.IsSupportedService(conflictService))
+            {
+                // Release the failed core's device and adapter before offering a retry.
+                await _stopTask.ConfigureAwait(true);
+                if (_disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                    return VkPrepareResult.Cancelled;
+                var stopAmneziaFirst = conflictService == "AmneziaVPNSplitTunnel" &&
+                    SplitDriverConflict.IsAmneziaBackgroundRunning();
+                var stopDescription = stopAmneziaFirst
+                    ? "Остановить сначала фоновую службу AmneziaVPN-service, затем драйвер " +
+                      "AmneziaVPNSplitTunnel и повторить подключение через cronixWG?\n\n" +
+                      "Это может отключить VPN Amnezia. Для возврата к Amnezia потребуется " +
+                      "запустить её фоновую службу или перезагрузить Windows. "
+                    : "Остановить этот драйвер и повторить подключение с драйвером cronixWG?\n\n" +
+                      "Это может нарушить раздельное туннелирование другого VPN. " +
+                      "Для возврата к нему может потребоваться перезапуск его службы или Windows. ";
+                var answer = MessageBox.Show(_owner,
+                    $"Не удалось использовать драйвер службы {conflictService}.\n\n" +
+                    conflictReason + "\n\n" + stopDescription +
+                    "Остановленные службы автоматически не запускаются. Файлы и настройки автозапуска сохранятся.",
+                    "Драйвер раздельного туннелирования", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                    MessageBoxDefaultButton.Button2);
+                if (answer != DialogResult.Yes || _disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                    return VkPrepareResult.Cancelled;
+                try
+                {
+                    if (stopAmneziaFirst)
+                    {
+                        _log("[SPLIT] User approved stopping AmneziaVPN-service before its split driver.");
+                        await Task.Run(() => SplitDriverConflict.StopAmneziaBackground()).ConfigureAwait(true);
+                        if (_disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                            return VkPrepareResult.Cancelled;
+                    }
+                    _log($"[SPLIT] User approved stopping {conflictService}.");
+                    await Task.Run(() => SplitDriverConflict.Stop(conflictService)).ConfigureAwait(true);
+                }
+                catch (System.ServiceProcess.TimeoutException) when
+                    (!stopAmneziaFirst && conflictService == "AmneziaVPNSplitTunnel" && SplitDriverConflict.IsAmneziaBackgroundRunning())
+                {
+                    if (_disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                        return VkPrepareResult.Cancelled;
+                    var stopBackground = MessageBox.Show(_owner,
+                        "Драйвер Amnezia не остановился. Фоновая служба AmneziaVPN-service " +
+                        "продолжает работать и может удерживать драйвер.\n\n" +
+                        "Остановить эту службу, затем повторить остановку драйвера и подключение cronixWG?\n\n" +
+                        "Это может отключить VPN Amnezia. Службы автоматически не запускаются, " +
+                        "настройки автозапуска сохранятся. Для возврата к Amnezia запустите её " +
+                        "фоновую службу или перезагрузите Windows.",
+                        "Фоновая служба Amnezia", MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                        MessageBoxDefaultButton.Button2);
+                    if (stopBackground != DialogResult.Yes || _disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                        return VkPrepareResult.Cancelled;
+                    try
+                    {
+                        _log("[SPLIT] User approved stopping AmneziaVPN-service.");
+                        await Task.Run(() => SplitDriverConflict.StopAmneziaBackground()).ConfigureAwait(true);
+                        if (_disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                            return VkPrepareResult.Cancelled;
+                        _log("[SPLIT] Amnezia background service stopped; waiting for split driver shutdown.");
+                        await Task.Run(() => SplitDriverConflict.Stop(conflictService)).ConfigureAwait(true);
+                    }
+                    catch (Exception ex)
+                    {
+                        LastError = "Не удалось завершить остановку Amnezia: " + ex.Message +
+                            "\nПроцессы принудительно не завершались. Если после остановки фоновой службы " +
+                            "драйвер остаётся в STOP_PENDING, перезагрузите Windows перед повторной попыткой.";
+                        return VkPrepareResult.Failed;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    LastError = $"Не удалось завершить остановку служб VPN: {ex.Message}\n" +
+                        "Закройте другой VPN и повторите попытку. Процессы принудительно не завершались.";
+                    return VkPrepareResult.Failed;
+                }
+                if (_disposed || generation != _prepareGeneration || _owner.IsDisposed)
+                    return VkPrepareResult.Cancelled;
+                // Only one automatic retry; a service restarting itself must not cause a prompt loop.
+                return await PrepareAsync(profile, false).ConfigureAwait(true);
+            }
             return cancelled ? VkPrepareResult.Cancelled : VkPrepareResult.Failed;
         }
 
         /// <summary>Stops the core without blocking the UI thread. Safe to call repeatedly.</summary>
         public void StopInBackground()
         {
+            _prepareGeneration++;
             var session = _session;
             var profile = ActiveProfile;
             _session = null;
@@ -185,10 +282,11 @@ namespace WireSockUI.VkTurn
 
         public void Dispose()
         {
+            _disposed = true;
             StopInBackground();
             try
             {
-                _stopTask.Wait(6000);
+                _stopTask.Wait(13000);
             }
             catch
             {

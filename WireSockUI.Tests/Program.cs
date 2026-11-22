@@ -9097,10 +9097,11 @@ namespace WireSockUI.Tests
 
         private static void ProcessPickerPreservesExecutableMatchNames()
         {
-            AssertEqual("chrome.exe", TaskManager.GetProcessMatchName(
+            AssertEqual(@"C:\Program Files\Google\Chrome\chrome.exe", TaskManager.GetProcessMatchName(
                 new ProcessEntry(1, "chrome.exe", @"C:\Program Files\Google\Chrome\chrome.exe", "user")));
-            AssertEqual("wireguard.exe", TaskManager.GetProcessMatchName(
-                new ProcessEntry(2, "wireguard", null, "user")));
+            AssertTrue(TaskManager.GetProcessMatchName(
+                new ProcessEntry(2, "wireguard", null, "user")) == null,
+                "A missing executable path must not become an ambiguous exclusion rule.");
             AssertTrue(TaskManager.GetProcessMatchName(null) == null,
                 "Expected an unavailable process entry not to create an application rule.");
         }

@@ -108,6 +108,11 @@ namespace WireSockUI.Forms
             chkUseAdapter.Checked = PrivilegedSettingsStore.UseAdapter;
             chkNotify.Checked = Settings.Default.EnableNotifications;
             chkEnableKillSwitch.Checked = PrivilegedSettingsStore.EnableKillSwitch;
+            chkUseAdapter.Checked = true;
+            chkUseAdapter.Enabled = false;
+            chkUseAdapter.Text = "Wintun adapter (Go WireGuard core)";
+            chkEnableKillSwitch.Text = "WireSock Kill Switch (unsupported; disable to connect)";
+            chkEnableKillSwitch.Enabled = chkEnableKillSwitch.Checked;
             ddlLogLevel.SelectedItem = Settings.Default.LogLevel;
             if (ddlLogLevel.SelectedItem == null)
                 ddlLogLevel.SelectedItem = "Error";
